@@ -8,13 +8,12 @@ describe("buildPromptMemorySection", () => {
       buildPromptMemorySection({
         items: [],
         maxTotalChars: 12_000,
-        maxItemChars: 1_200,
         maxTitleChars: 120,
       }),
     ).toEqual([]);
   });
 
-  it("respects maxItemChars and maxTotalChars", () => {
+  it("respects per-item and total budgets", () => {
     const items = [
       {
         id: "1",
@@ -37,15 +36,19 @@ describe("buildPromptMemorySection", () => {
     const lines = buildPromptMemorySection({
       items,
       maxTotalChars: 800, // small budget to force truncation
-      maxItemChars: 200,
       maxTitleChars: 10,
+      policy: {
+        maxItemsByType: { fact: 6, note: 4 },
+        defaultMaxItemChars: 200,
+      },
     });
     const text = lines.join("\n");
+
     expect(text.length).toBeLessThanOrEqual(800);
     expect(text).toContain("## Durable Memory");
     expect(text).toContain("- (fact)");
-    // content must be truncated to maxItemChars
-    expect(text).toMatch(/x{50,}…/);
+    // body must be truncated to the policy budget
+    expect(text).toMatch(/x{50,}/);
   });
 });
 

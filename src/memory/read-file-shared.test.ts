@@ -13,12 +13,15 @@ describe("buildMemoryReadResult", () => {
       maxChars: 12_000,
     });
 
-    expect(res).toEqual({
-      text: ["b", "c"].join("\n"),
-      path: "db-memory/items/1.md",
-      from: 2,
-      lines: 2,
-    });
+    // Even when the requested excerpt fits within budgets, we mark it as truncated
+    // when the source file has more lines remaining, and provide a continuation hint.
+    expect(res.text).toContain(["b", "c"].join("\n"));
+    expect(res.path).toBe("db-memory/items/1.md");
+    expect(res.from).toBe(2);
+    expect(res.lines).toBe(2);
+    expect(res.truncated).toBe(true);
+    expect(res.nextFrom).toBe(4);
+    expect(res.text).toContain("Use from=4 to continue");
   });
 
   it("normalizes from/lines to be >= 1", () => {
@@ -33,7 +36,10 @@ describe("buildMemoryReadResult", () => {
 
     expect(res.from).toBe(1);
     expect(res.lines).toBe(1);
-    expect(res.text).toBe("a");
+    expect(res.truncated).toBe(true);
+    expect(res.nextFrom).toBe(2);
+    expect(res.text).toContain("a");
+    expect(res.text).toContain("Use from=2 to continue");
   });
 
   it("marks truncated and sets nextFrom when more lines remain", () => {
@@ -86,4 +92,3 @@ describe("buildMemoryReadResult", () => {
     );
   });
 });
-
