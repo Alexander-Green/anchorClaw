@@ -65,6 +65,13 @@ export default definePluginEntry({
       }
       pool ??= createPostgresPool({ cfg });
       migrationsApplied ??= (async () => {
+        if (cfg?.postgres?.schema) {
+          const schema = cfg.postgres.schema.trim();
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+            throw new Error("postgres.schema must be a simple identifier (letters/numbers/underscore)");
+          }
+          await pool!.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
+        }
         const migrations = await loadBundledMigrationsFromDisk();
         const result = await applyMigrations({ pool: pool!, migrations });
         if (result.applied.length > 0) {

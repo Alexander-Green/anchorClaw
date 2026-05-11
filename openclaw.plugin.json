@@ -37,6 +37,12 @@
       "placeholder": "anchorclaw",
       "help": "Postgres database name"
     },
+    "postgres.schema": {
+      "label": "Schema",
+      "placeholder": "memory",
+      "help": "Optional Postgres schema for AnchorClaw tables (recommended to avoid polluting public)",
+      "advanced": true
+    },
     "postgres.user": {
       "label": "User",
       "placeholder": "postgres",
@@ -150,6 +156,10 @@
             ]
           },
           "database": {
+            "type": "string",
+            "minLength": 1
+          },
+          "schema": {
             "type": "string",
             "minLength": 1
           },

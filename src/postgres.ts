@@ -3,6 +3,17 @@ import type { AnchorClawConfig } from "./config.js";
 
 export type PostgresPool = pg.Pool;
 
+function assertSafeIdentifier(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`${label} must be a non-empty identifier`);
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) {
+    throw new Error(`${label} must be a simple identifier (letters/numbers/underscore)`);
+  }
+  return trimmed;
+}
+
 function resolvePgSslOptions(params: {
   ssl?: boolean;
   sslMode?: "disable" | "require" | "verify-full";
@@ -33,6 +44,7 @@ export function createPostgresPool(params: { cfg: AnchorClawConfig }): pg.Pool {
     sslMode: postgres.sslMode,
     sslCa: postgres.sslCa,
   });
+  const schema = postgres.schema ? assertSafeIdentifier(postgres.schema, "postgres.schema") : undefined;
   const poolMax = postgres.pool?.max ?? 10;
   const connectionTimeoutMillis = postgres.pool?.connectionTimeoutMs ?? 5_000;
   const idleTimeoutMillis = postgres.pool?.idleTimeoutMs ?? 30_000;
@@ -47,5 +59,6 @@ export function createPostgresPool(params: { cfg: AnchorClawConfig }): pg.Pool {
     max: poolMax,
     connectionTimeoutMillis,
     idleTimeoutMillis,
+    ...(schema ? { options: `-c search_path=${schema},public` } : {}),
   });
 }

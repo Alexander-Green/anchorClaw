@@ -3,6 +3,7 @@ export type AnchorClawConfig = {
     host: string;
     port?: number;
     database: string;
+    schema?: string;
     user: string;
     password?: string;
     ssl?: boolean;
@@ -145,12 +146,13 @@ export const anchorClawConfigSchema = {
     }
     assertAllowedKeys(
       postgresObj,
-      ["host", "port", "database", "user", "password", "ssl", "sslMode", "sslCa", "pool"],
+      ["host", "port", "database", "schema", "user", "password", "ssl", "sslMode", "sslCa", "pool"],
       "postgres config",
     );
 
     const host = readRequiredString(postgresObj.host, "postgres.host");
     const database = readRequiredString(postgresObj.database, "postgres.database");
+    const schema = readOptionalString(postgresObj.schema, "postgres.schema");
     const user = readRequiredString(postgresObj.user, "postgres.user");
     const password = readOptionalString(postgresObj.password, "postgres.password");
     const port = readOptionalPort(postgresObj.port, "postgres.port");
@@ -256,6 +258,7 @@ export const anchorClawConfigSchema = {
         host,
         ...(typeof port === "number" ? { port } : {}),
         database,
+        ...(schema ? { schema } : {}),
         user,
         ...(password ? { password } : {}),
         ...(typeof ssl === "boolean" ? { ssl } : {}),
