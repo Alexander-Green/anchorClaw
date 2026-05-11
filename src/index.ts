@@ -305,38 +305,58 @@ export default definePluginEntry({
             details: { disabled: true, error: "corpus=wiki not implemented" },
           };
         }
-        let hits =
-          trimmedCorpus === "sessions"
-            ? await memorySearchSessions({ query, maxResults: effectiveMax, agentId: (api as any)?.runtime?.agentId, limits })
-            : trimmedCorpus === "memory"
-              ? await memorySearchDb({ pool: getPool(), userId: scope.userId, workspaceId: scope.workspaceId, limits, query, ...(typeof maxResults === "number" ? { maxResults } : {}) })
-              : trimmedCorpus === "all"
-                ? (() => {
-                    const merged = [
-                      ...(await memorySearchDb({ pool: getPool(), userId: scope.userId, workspaceId: scope.workspaceId, limits, query, maxResults: effectiveMax })),
-                      ...(await memorySearchSessions({ query, maxResults: effectiveMax, agentId: (api as any)?.runtime?.agentId, limits })),
-                    ];
-                    merged.sort((left: any, right: any) => {
-                      const ls = typeof left?.score === "number" ? left.score : 0;
-                      const rs = typeof right?.score === "number" ? right.score : 0;
-                      if (rs !== ls) {
-                        return rs - ls;
-                      }
-                      // Prefer durable memory over sessions when equal.
-                      const lc = left?.corpus === "sessions" ? "sessions" : "memory";
-                      const rc = right?.corpus === "sessions" ? "sessions" : "memory";
-                      if (lc !== rc) {
-                        return lc === "memory" ? -1 : 1;
-                      }
-                      const lp = typeof left?.path === "string" ? left.path : "";
-                      const rp = typeof right?.path === "string" ? right.path : "";
-                      return lp.localeCompare(rp);
-                    });
-                    return merged.slice(0, effectiveMax);
-                  })()
-                : (() => {
-                    return [] as any[];
-                  })();
+        let hits: any[] = [];
+        if (trimmedCorpus === "sessions") {
+          hits = await memorySearchSessions({
+            query,
+            maxResults: effectiveMax,
+            agentId: (api as any)?.runtime?.agentId,
+            limits,
+          });
+        } else if (trimmedCorpus === "memory") {
+          hits = await memorySearchDb({
+            pool: getPool(),
+            userId: scope.userId,
+            workspaceId: scope.workspaceId,
+            limits,
+            query,
+            ...(typeof maxResults === "number" ? { maxResults } : {}),
+          });
+        } else if (trimmedCorpus === "all") {
+          const merged = [
+            ...(await memorySearchDb({
+              pool: getPool(),
+              userId: scope.userId,
+              workspaceId: scope.workspaceId,
+              limits,
+              query,
+              maxResults: effectiveMax,
+            })),
+            ...(await memorySearchSessions({
+              query,
+              maxResults: effectiveMax,
+              agentId: (api as any)?.runtime?.agentId,
+              limits,
+            })),
+          ];
+          merged.sort((left: any, right: any) => {
+            const ls = typeof left?.score === "number" ? left.score : 0;
+            const rs = typeof right?.score === "number" ? right.score : 0;
+            if (rs !== ls) {
+              return rs - ls;
+            }
+            // Prefer durable memory over sessions when equal.
+            const lc = left?.corpus === "sessions" ? "sessions" : "memory";
+            const rc = right?.corpus === "sessions" ? "sessions" : "memory";
+            if (lc !== rc) {
+              return lc === "memory" ? -1 : 1;
+            }
+            const lp = typeof left?.path === "string" ? left.path : "";
+            const rp = typeof right?.path === "string" ? right.path : "";
+            return lp.localeCompare(rp);
+          });
+          hits = merged.slice(0, effectiveMax);
+        }
 
         if (trimmedCorpus !== "memory" && trimmedCorpus !== "sessions" && trimmedCorpus !== "all") {
           return {
