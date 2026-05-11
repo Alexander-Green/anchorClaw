@@ -1,4 +1,4 @@
-import pg from "pg";
+import pg, { type PoolConfig } from "pg";
 import type { AnchorClawConfig } from "./config.js";
 
 export type PostgresPool = pg.Pool;
@@ -7,7 +7,7 @@ function resolvePgSslOptions(params: {
   ssl?: boolean;
   sslMode?: "disable" | "require" | "verify-full";
   sslCa?: string;
-}): false | true | pg.ConnectionOptions["ssl"] {
+}): PoolConfig["ssl"] {
   if (params.sslMode === "disable") {
     return false;
   }
