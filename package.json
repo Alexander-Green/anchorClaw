@@ -1,0 +1,47 @@
+{
+  "name": "@anchorclaw/anchorclaw",
+  "version": "0.0.1",
+  "description": "OpenClaw Postgres-backed long-term memory plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Alexander-Green/anchorClaw"
+  },
+  "type": "module",
+  "files": [
+    "dist/",
+    "migrations/",
+    "openclaw.plugin.json",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"],
+    "install": {
+      "npmSpec": "@anchorclaw/anchorclaw",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.8"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

@@ -1,0 +1,228 @@
+{
+  "id": "anchorclaw",
+  "activation": {
+    "onStartup": false
+  },
+  "kind": "memory",
+  "contracts": {
+    "tools": ["memory_forget", "memory_recall", "memory_store", "memory_search", "memory_get"]
+  },
+  "uiHints": {
+    "import": {
+      "label": "Import",
+      "help": "Migration behavior when legacy memory files exist",
+      "advanced": true
+    },
+    "import.cleanupMemoryMdAfterImport": {
+      "label": "Cleanup MEMORY.md After Import",
+      "help": "When true (default), after importing legacy MEMORY.md into Postgres AnchorClaw writes a backup into .openclaw-repair/anchorclaw/ and stubs MEMORY.md to avoid duplicate prompt injection.",
+      "advanced": true
+    },
+    "postgres": {
+      "label": "Postgres",
+      "help": "Postgres connection settings for AnchorClaw memory storage"
+    },
+    "postgres.host": {
+      "label": "Host",
+      "placeholder": "localhost",
+      "help": "Postgres host"
+    },
+    "postgres.port": {
+      "label": "Port",
+      "placeholder": "5432",
+      "help": "Postgres port"
+    },
+    "postgres.database": {
+      "label": "Database",
+      "placeholder": "anchorclaw",
+      "help": "Postgres database name"
+    },
+    "postgres.user": {
+      "label": "User",
+      "placeholder": "postgres",
+      "help": "Postgres user"
+    },
+    "postgres.password": {
+      "label": "Password",
+      "sensitive": true,
+      "placeholder": "${ANCHORCLAW_DB_PASSWORD}",
+      "help": "Postgres password; supports ${ENV_VAR} values"
+    },
+    "postgres.ssl": {
+      "label": "SSL",
+      "help": "Enable SSL for Postgres connection",
+      "advanced": true
+    },
+    "postgres.sslMode": {
+      "label": "SSL Mode",
+      "placeholder": "verify-full",
+      "help": "SSL mode: disable, require (no cert verification), or verify-full (verify server certificate)",
+      "advanced": true
+    },
+    "postgres.sslCa": {
+      "label": "SSL CA",
+      "placeholder": "${ANCHORCLAW_DB_SSL_CA_PEM}",
+      "help": "Optional CA PEM bundle for verify-full; supports ${ENV_VAR} values",
+      "advanced": true
+    },
+    "postgres.pool": {
+      "label": "Pool",
+      "help": "Connection pool settings",
+      "advanced": true
+    },
+    "postgres.pool.max": {
+      "label": "Max Connections",
+      "placeholder": "10",
+      "help": "Maximum number of connections in the pool",
+      "advanced": true
+    },
+    "postgres.pool.connectionTimeoutMs": {
+      "label": "Connect Timeout (ms)",
+      "placeholder": "5000",
+      "help": "Time to wait for a connection before failing",
+      "advanced": true
+    },
+    "postgres.pool.idleTimeoutMs": {
+      "label": "Idle Timeout (ms)",
+      "placeholder": "30000",
+      "help": "Time before an idle connection is closed",
+      "advanced": true
+    },
+    "limits": {
+      "label": "Limits",
+      "help": "Safety limits for memory tools",
+      "advanced": true
+    },
+    "limits.maxResults": {
+      "label": "Max Results",
+      "placeholder": "10",
+      "help": "Maximum search results to return (cap: 10)",
+      "advanced": true
+    },
+    "limits.getMaxChars": {
+      "label": "Get Max Chars",
+      "placeholder": "12000",
+      "help": "Maximum characters returned by memory_get (cap: 12000)",
+      "advanced": true
+    },
+    "limits.getDefaultLines": {
+      "label": "Get Default Lines",
+      "placeholder": "120",
+      "help": "Default lineCount for memory_get when omitted (cap: 120)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "import": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cleanupMemoryMdAfterImport": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "postgres": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string",
+            "minLength": 1
+          },
+          "port": {
+            "oneOf": [
+              {
+                "type": "number",
+                "default": 5432,
+                "minimum": 1,
+                "maximum": 65535
+              },
+              {
+                "type": "string",
+                "default": "5432",
+                "minLength": 1
+              }
+            ]
+          },
+          "database": {
+            "type": "string",
+            "minLength": 1
+          },
+          "user": {
+            "type": "string",
+            "minLength": 1
+          },
+          "password": {
+            "type": "string"
+          },
+          "ssl": {
+            "type": "boolean"
+          },
+          "sslMode": {
+            "type": "string",
+            "enum": ["disable", "require", "verify-full"]
+          },
+          "sslCa": {
+            "type": "string"
+          },
+          "pool": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "max": {
+                "type": "number",
+                "default": 10,
+                "minimum": 1,
+                "maximum": 100
+              },
+              "connectionTimeoutMs": {
+                "type": "number",
+                "default": 5000,
+                "minimum": 100,
+                "maximum": 600000
+              },
+              "idleTimeoutMs": {
+                "type": "number",
+                "default": 30000,
+                "minimum": 100,
+                "maximum": 3600000
+              }
+            }
+          }
+        },
+        "required": ["host", "database", "user"]
+      }
+    ,
+      "limits": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxResults": {
+            "type": "number",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 10
+          },
+          "getMaxChars": {
+            "type": "number",
+            "default": 12000,
+            "minimum": 1000,
+            "maximum": 12000
+          },
+          "getDefaultLines": {
+            "type": "number",
+            "default": 120,
+            "minimum": 10,
+            "maximum": 120
+          }
+        }
+      }
+    },
+    "required": ["postgres"]
+  }
+}
