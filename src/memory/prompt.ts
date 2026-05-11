@@ -34,9 +34,9 @@ export async function queryPromptMemoryItems(params: {
     WHERE user_id = $1
       AND workspace_id = $2
       AND status = 'active'
-      AND ($4::text[] IS NULL OR type = ANY($4::text[]))
+      AND ($4::text[] IS NULL OR type::text = ANY($4::text[]))
     ORDER BY
-      CASE type
+      CASE type::text
         WHEN 'fact' THEN 1
         WHEN 'note' THEN 2
         ELSE 100
