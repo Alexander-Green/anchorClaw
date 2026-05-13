@@ -5,10 +5,9 @@ import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { resolveMemoryLimits } from "./limits.js";
 import { memoryGetFromDb } from "./get.js";
 import { memorySearchDb, type MemorySearchHit } from "./search.js";
-import { memoryGetSessionFile, memorySearchSessions } from "./sessions.js";
+import { memorySearchSessions } from "./sessions.js";
 import {
   hasSessionsIndexRows,
-  memoryGetSessionFromIndexDb,
   memorySearchSessionsIndexDb,
 } from "./sessions-index.js";
 import { syncSessionsIndexDb } from "./sessions-index-sync.js";
@@ -261,44 +260,24 @@ export function createAnchorClawMemorySearchManager(
         if (!sessionsEnabled) {
           return { text: "", path: readParams.relPath };
         }
-        const indexedRead = await memoryGetSessionFromIndexDb({
+        const got = await memoryGetFromDb({
           pool: params.getPool(),
           userId: scope.userId,
           workspaceId: scope.workspaceId,
+          agentId: params.agentId,
+          limits,
           lookup: relPath,
           fromLine,
           lineCount,
-          limits,
         });
-        if (indexedRead) {
-          return {
-            text: indexedRead.text,
-            path: indexedRead.path,
-            ...(indexedRead.truncated ? { truncated: true } : {}),
-            ...(typeof indexedRead.from === "number" ? { from: indexedRead.from } : {}),
-            ...(typeof indexedRead.lines === "number" ? { lines: indexedRead.lines } : {}),
-            ...(typeof indexedRead.nextFrom === "number" ? { nextFrom: indexedRead.nextFrom } : {}),
-          };
-        }
-        const read = await memoryGetSessionFile({
-          lookup: relPath,
-          currentAgentId: params.agentId,
-          fromLine,
-          lineCount,
-          defaultLines: limits.getDefaultLines,
-          maxChars: limits.getMaxChars,
-          limits,
-        });
-        if (!read) {
+        if (!got.ok) {
           return { text: "", path: readParams.relPath };
         }
         return {
-          text: read.text,
-          path: read.path,
-          ...(read.truncated ? { truncated: true } : {}),
-          ...(typeof read.from === "number" ? { from: read.from } : {}),
-          ...(typeof read.lines === "number" ? { lines: read.lines } : {}),
-          ...(typeof read.nextFrom === "number" ? { nextFrom: read.nextFrom } : {}),
+          text: got.content,
+          path: got.path,
+          from: got.fromLine,
+          lines: got.lineCount,
         };
       }
 
