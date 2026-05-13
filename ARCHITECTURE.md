@@ -2,86 +2,86 @@
 
 ## TL;DR
 
-AnchorClaw делает **Postgres источником правды** для долговременной памяти, но сохраняет **совместимость с OpenClaw memory интерфейсами** (tools + `MemorySearchManager`), чтобы `status/doctor/CLI` продолжали работать прозрачно.
+AnchorClaw makes **Postgres the source of truth** for durable memory while preserving **compatibility with OpenClaw memory interfaces** (tools + `MemorySearchManager`) so that `status/doctor/CLI` keep working transparently.
 
-MVP намеренно **SQL-first и детерминированный** (без embeddings). Семантика/персона/граф знаний — отдельные, опциональные слои “поверх”, которые можно подключить позже без поломки базовых путей.
+The MVP is intentionally **SQL-first and deterministic** (no embeddings). Semantics/persona/knowledge-graph features are separate, optional layers that can be added later without breaking core paths.
 
-## Почему не просто PostClaw
+## Why Not Just PostClaw
 
-PostClaw — DB+embeddings-first архитектура с более “AI-native” фичами (семантика, persona, knowledge graph).
+PostClaw is a DB+embeddings-first architecture with more AI-native features (semantics, persona, knowledge graph).
 
-AnchorClaw решает другую задачу:
+AnchorClaw solves a different problem:
 
-- сохранить OpenClaw UX и совместимость (contracts, corpuses, CLI/doctor/status)
-- сделать долговременную память **структурированной и обновляемой** (canonical upsert, стабильная сортировка, аудит)
-- обеспечить базовую надежность и предсказуемость **без обязательной модели embeddings**
+- preserve OpenClaw UX and compatibility (contracts, corpuses, CLI/doctor/status)
+- make durable memory **structured and updateable** (canonical upsert, stable ordering, audit trail)
+- provide baseline reliability and predictability **without requiring embeddings**
 
-## Источники данных (MVP)
+## Data Sources (MVP)
 
-- `corpus="memory"`: Postgres (`memory_items`) — долговременная память (MVP: `fact` + `note`)
-- `corpus="sessions"`: best-effort скан session JSONL на диске (совместимость, без индекса пока)
-- `corpus="all"`: детерминированный merge (`memory + sessions`)
-- `corpus="wiki"`: заглушка (пока); wiki-слой — future
+- `corpus="memory"`: Postgres (`memory_items`) durable memory (MVP: `fact` + `note`)
+- `corpus="sessions"`: best-effort scan of session JSONL files on disk (compatibility layer, no index yet)
+- `corpus="all"`: deterministic merge (`memory + sessions`)
+- `corpus="wiki"`: stub for now; wiki layer is future work
 
-## “Виртуальный” MEMORY.md
+## Virtual `MEMORY.md`
 
-OpenClaw core по историческим причинам ожидает, что `MEMORY.md` можно читать.
+OpenClaw core historically expects `MEMORY.md` to be readable.
 
-В AnchorClaw:
+In AnchorClaw:
 
-- `memory_get(path="MEMORY.md")` и `MemorySearchManager.readFile({relPath:"MEMORY.md"})` возвращают **snapshot из Postgres** (виртуальное представление)
-- физический файл `MEMORY.md` после миграции по умолчанию становится HTML-comment-only stub’ом, чтобы:
-  - OpenClaw bootstrap не дублировал память в prompt
-  - люди понимали, где лежит backup и что source-of-truth — Postgres
+- `memory_get(path="MEMORY.md")` and `MemorySearchManager.readFile({relPath:"MEMORY.md"})` return a **Postgres snapshot** (virtual view)
+- after migration, the physical `MEMORY.md` becomes an HTML-comment-only stub by default so that:
+  - OpenClaw bootstrap does not duplicate memory in prompts
+  - users can see where backups are and that Postgres is the source of truth
 
-## Модель данных (упрощённо)
+## Data Model (Simplified)
 
-Durable слой:
+Durable layer:
 
-- `memory_items`: активные долговременные знания
-  - canonical upsert через `(type, namespace, canonical_key)` (MVP namespace=default)
+- `memory_items`: active durable knowledge
+  - canonical upsert via `(type, namespace, canonical_key)` (MVP namespace=default)
   - `status='active'|'deleted'` (soft delete)
-- `memory_audit_log`: след изменений (before/after) — future: retention/redaction policy
+- `memory_audit_log`: change history (before/after); future: retention/redaction policy
 
-История/эпизоды (задел под PostClaw parity):
+History/episodes (foundation for PostClaw parity):
 
-- `memory_events`: append-only события (MVP: импорт `memory/*.md` как snapshot event)
+- `memory_events`: append-only events (MVP: import `memory/*.md` as snapshot events)
 
-## Identity и scope-resolve (MVP)
+## Identity and Scope Resolution (MVP)
 
-Все чтения/записи идут в scope `(user_id, workspace_id)`.
+All reads/writes run in scope `(user_id, workspace_id)`.
 
 - `workspace_id`:
-  - вычисляется из `workspaceDir` (`name = dir:<sha256(resolved workspaceDir)>`)
-  - поэтому смена workspace директории создаёт новый memory scope.
+  - derived from `workspaceDir` (`name = dir:<sha256(resolved workspaceDir)>`)
+  - changing workspace directory creates a new memory scope
 - `user_id`:
-  - приоритет: `identity.externalId` из plugin config (stable key, `channel=anchorclaw-config`)
+  - priority: `identity.externalId` from plugin config (stable key, `channel=anchorclaw-config`)
   - fallback: `sha256(normalized OS username)` (`channel=openclaw-cli`)
 
-Операционный вывод:
+Operational implications:
 
-- Для Docker/production обязательно задавать `identity.externalId`, иначе при смене OS user в контейнере scope может "прыгать".
-- Плагин всегда логирует startup warning, если `identity.externalId` не задан.
+- For Docker/production, `identity.externalId` should always be set; otherwise scope may drift when container OS user changes.
+- The plugin always logs a startup warning if `identity.externalId` is not configured.
 
-## Где появятся PostClaw-style фичи
+## Where PostClaw-Style Features Fit
 
 ### Semantic layer (optional)
 
-- отдельная таблица embeddings (vector) + “hybrid retrieval”
-- контракт надежности: если embeddings отключены/ошибка — fallback на lexical (FTS) без деградации tool API
+- separate embeddings (vector) table + hybrid retrieval
+- reliability contract: if embeddings are disabled or fail, fall back to lexical (FTS) without degrading tool APIs
 
 ### Persona context (optional)
 
-- отдельные типы/таблицы для persona/profile
-- отдельные бюджеты на инжект (не смешивать с durable facts)
+- separate types/tables for persona/profile
+- separate injection budgets (do not mix with durable facts)
 
 ### Knowledge graph (optional)
 
-- `entity_edges`-style связи
-- multi-hop добор связанных узлов при retrieval
+- `entity_edges`-style relationships
+- multi-hop expansion of related nodes during retrieval
 
-## Известные ограничения MVP
+## Known MVP Limits
 
-- sessions corpus: best-effort scan + cap + `score=1` (пока нет индекса)
-- `corpus="wiki"`: не реализован
-- типы кроме `fact/note` отложены до явной политики инжекта/записи
+- sessions corpus: best-effort scan + size cap + `score=1` (no index yet)
+- `corpus="wiki"`: not implemented
+- types beyond `fact/note` are deferred until explicit injection/write policy is defined
