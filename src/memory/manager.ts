@@ -6,6 +6,8 @@ import { resolveMemoryLimits } from "./limits.js";
 import { memoryGetFromDb } from "./get.js";
 import { memorySearchDb, type MemorySearchHit } from "./search.js";
 import { memoryGetSessionFile, memorySearchSessions } from "./sessions.js";
+import { memoryGetSessionFromIndexDb, memorySearchSessionsIndexDb } from "./sessions-index.js";
+import { syncSessionsIndexDb } from "./sessions-index-sync.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -133,6 +135,8 @@ export function createAnchorClawMemorySearchManager(
   params: AnchorClawMemorySearchManagerOptions,
 ): MemorySearchManager {
   const { api, cfg } = params;
+  const sessionsVisibility = cfg.sessions?.visibility ?? "current";
+  const sessionsEnabled = sessionsVisibility !== "off";
 
   const resolveWorkspaceDir = (): string => {
     const candidate = (api as any)?.runtime?.workspaceDir;
@@ -177,11 +181,14 @@ export function createAnchorClawMemorySearchManager(
 
       const requestedSources =
         Array.isArray(opts?.sources) && opts.sources.length > 0 ? opts.sources : ["memory", "sessions"];
+      const effectiveSources = sessionsEnabled
+        ? requestedSources
+        : requestedSources.filter((source) => source !== "sessions");
       const maxResults =
         typeof opts?.maxResults === "number" && Number.isFinite(opts.maxResults) ? Math.floor(opts.maxResults) : limits.maxResults;
 
       const results: MemorySearchResult[] = [];
-      if (requestedSources.includes("memory")) {
+      if (effectiveSources.includes("memory")) {
         const hits = await memorySearchDb({
           pool: params.getPool(),
           userId: scope.userId,
@@ -193,13 +200,24 @@ export function createAnchorClawMemorySearchManager(
         results.push(...hits.map(mapHitToManagerResult));
       }
 
-      if (requestedSources.includes("sessions")) {
-        const sessionHits = await memorySearchSessions({
+      if (effectiveSources.includes("sessions")) {
+        const indexedSessionHits = await memorySearchSessionsIndexDb({
+          pool: params.getPool(),
+          userId: scope.userId,
+          workspaceId: scope.workspaceId,
+          limits,
           query: q,
           maxResults,
-          agentId: params.agentId,
-          limits,
         });
+        const sessionHits =
+          indexedSessionHits.length > 0
+            ? indexedSessionHits
+            : await memorySearchSessions({
+                query: q,
+                maxResults,
+                agentId: params.agentId,
+                limits,
+              });
         results.push(...sessionHits.map(mapHitToManagerResult));
       }
 
@@ -229,6 +247,28 @@ export function createAnchorClawMemorySearchManager(
       const lineCount = readParams.lines ?? limits.getDefaultLines;
 
       if (relPath.startsWith("sessions/")) {
+        if (!sessionsEnabled) {
+          return { text: "", path: readParams.relPath };
+        }
+        const indexedRead = await memoryGetSessionFromIndexDb({
+          pool: params.getPool(),
+          userId: scope.userId,
+          workspaceId: scope.workspaceId,
+          lookup: relPath,
+          fromLine,
+          lineCount,
+          limits,
+        });
+        if (indexedRead) {
+          return {
+            text: indexedRead.text,
+            path: indexedRead.path,
+            ...(indexedRead.truncated ? { truncated: true } : {}),
+            ...(typeof indexedRead.from === "number" ? { from: indexedRead.from } : {}),
+            ...(typeof indexedRead.lines === "number" ? { lines: indexedRead.lines } : {}),
+            ...(typeof indexedRead.nextFrom === "number" ? { nextFrom: indexedRead.nextFrom } : {}),
+          };
+        }
         const read = await memoryGetSessionFile({
           lookup: relPath,
           currentAgentId: params.agentId,
@@ -332,23 +372,47 @@ export function createAnchorClawMemorySearchManager(
         backend: "builtin",
         provider: "anchorclaw-postgres",
         workspaceDir,
-        sources: ["memory", "sessions"],
+        sources: sessionsEnabled ? ["memory", "sessions"] : ["memory"],
         custom: {
           backend: "postgres",
           postgresHost: cfg.postgres.host,
           postgresDatabase: cfg.postgres.database,
           limits,
           sessionsMaxFileBytes: limits.sessionsMaxFileBytes,
+          sessionsVisibility,
           purpose: params.purpose ?? "default",
         },
       };
     },
 
     async sync(syncParams) {
-      // No indexing required for Postgres durable memory; sessions corpus uses best-effort file scan.
-      // Keep the API shape so `memory index --force` / status flows don't look broken.
+      if (!sessionsEnabled) {
+        if (typeof syncParams?.progress === "function") {
+          syncParams.progress({ completed: 1, total: 1, label: "sessions disabled" });
+        }
+        return;
+      }
+      await params.ensureReady();
+      const scope = await resolveUserAndWorkspaceScope({
+        api,
+        pool: params.getPool(),
+        agentId: params.agentId,
+        sessionKey: (api as any)?.runtime?.sessionKey,
+        configuredExternalId: cfg.identity?.externalId,
+      });
       if (typeof syncParams?.progress === "function") {
-        syncParams.progress({ completed: 1, total: 1, label: "noop" });
+        syncParams.progress({ completed: 0, total: 1, label: "syncing sessions index" });
+      }
+      await syncSessionsIndexDb({
+        pool: params.getPool(),
+        userId: scope.userId,
+        workspaceId: scope.workspaceId,
+        agentId: params.agentId,
+        force: syncParams?.force === true,
+        sessionFiles: syncParams?.sessionFiles,
+      });
+      if (typeof syncParams?.progress === "function") {
+        syncParams.progress({ completed: 1, total: 1, label: "done" });
       }
     },
 

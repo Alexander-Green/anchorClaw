@@ -3,6 +3,8 @@ import { parseDbMemoryPath } from "./paths.js";
 import type { MemoryLimits } from "./limits.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
 import { memoryGetSessionFile } from "./sessions.js";
+import { memoryGetSessionFromIndexDb, normalizeSessionLookupPath } from "./sessions-index.js";
+import { syncSessionsIndexDb } from "./sessions-index-sync.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -111,8 +113,54 @@ export async function memoryGetFromDb(params: {
   if (rawLookup.startsWith("sessions/")) {
     const fromLine = params.fromLine ?? 1;
     const lineCount = params.lineCount ?? params.limits.getDefaultLines;
+    const normalizedLookup = normalizeSessionLookupPath(rawLookup);
+    if (!normalizedLookup) {
+      return { ok: false, disabled: true, error: "unsupported sessions lookup path" };
+    }
+
+    // Phase 1 policy: DB-first for sessions/* reads.
+    const indexedRead = await memoryGetSessionFromIndexDb({
+      pool: params.pool,
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      lookup: normalizedLookup,
+      fromLine,
+      lineCount,
+      limits: params.limits,
+    });
+    if (indexedRead) {
+      return {
+        ok: true,
+        corpus: "sessions",
+        path: indexedRead.path,
+        kind: "session",
+        content: indexedRead.text,
+        fromLine: indexedRead.from,
+        lineCount: indexedRead.lines,
+      };
+    }
+
+    // Distinguish "index miss" (fallback allowed) from "index corruption" (fail-fast).
+    const indexedFileProbe = await params.pool.query<{ id: string }>(
+      `
+      SELECT id
+      FROM session_index_files
+      WHERE user_id = $1 AND workspace_id = $2 AND path = $3
+      LIMIT 1
+    `,
+      [params.userId, params.workspaceId, normalizedLookup],
+    );
+    if (indexedFileProbe.rows.length > 0) {
+      return {
+        ok: false,
+        disabled: true,
+        error: `sessions index corrupted for ${normalizedLookup}; run sessions index repair and retry`,
+      };
+    }
+
+    // Fallback is allowed only on index miss.
     const read = await memoryGetSessionFile({
-      lookup: rawLookup,
+      lookup: normalizedLookup,
       currentAgentId: params.agentId,
       fromLine,
       lineCount,
@@ -122,6 +170,16 @@ export async function memoryGetFromDb(params: {
     });
     if (!read) {
       return { ok: false, error: "not found" };
+    }
+    if (params.agentId) {
+      void syncSessionsIndexDb({
+        pool: params.pool,
+        userId: params.userId,
+        workspaceId: params.workspaceId,
+        agentId: params.agentId,
+      }).catch(() => {
+        // Index repair is best-effort after file fallback.
+      });
     }
     return {
       ok: true,

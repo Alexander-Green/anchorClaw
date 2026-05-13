@@ -225,6 +225,17 @@ function parseSessionLookup(lookup: string): { agentId?: string; fileName: strin
   return null;
 }
 
+function isSafeSessionFileName(fileName: string): boolean {
+  const trimmed = fileName.trim();
+  return (
+    trimmed.length > 0 &&
+    trimmed !== "." &&
+    trimmed !== ".." &&
+    !trimmed.includes("/") &&
+    !trimmed.includes("\\")
+  );
+}
+
 export async function memoryGetSessionFile(params: {
   lookup: string;
   currentAgentId?: string;
@@ -236,6 +247,9 @@ export async function memoryGetSessionFile(params: {
 }): Promise<MemoryReadResult | null> {
   const parsed = parseSessionLookup(params.lookup);
   if (!parsed) {
+    return null;
+  }
+  if (!isSafeSessionFileName(parsed.fileName)) {
     return null;
   }
   const effectiveAgentId = parsed.agentId ?? params.currentAgentId ?? "main";

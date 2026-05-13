@@ -8,6 +8,17 @@
     "tools": ["memory_forget", "memory_recall", "memory_store", "memory_search", "memory_get"]
   },
   "uiHints": {
+    "sessions": {
+      "label": "Sessions",
+      "help": "Sessions corpus indexing and visibility settings",
+      "advanced": true
+    },
+    "sessions.visibility": {
+      "label": "Sessions Visibility",
+      "placeholder": "current",
+      "help": "Visibility scope for sessions corpus: current (default), off, or visible (requires visibility guard support).",
+      "advanced": true
+    },
     "import": {
       "label": "Import",
       "help": "Migration behavior when legacy memory files exist",
@@ -133,6 +144,17 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "sessions": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "visibility": {
+            "type": "string",
+            "enum": ["current", "off", "visible"],
+            "default": "current"
+          }
+        }
+      },
       "import": {
         "type": "object",
         "additionalProperties": false,

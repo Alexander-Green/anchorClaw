@@ -39,3 +39,39 @@ describe("anchorClawConfigSchema identity.externalId", () => {
   });
 });
 
+describe("anchorClawConfigSchema sessions.visibility", () => {
+  it("defaults to sessions.visibility=current when sessions block is omitted", () => {
+    const parsed = anchorClawConfigSchema.parse(baseConfig());
+    expect(parsed.sessions?.visibility).toBe("current");
+  });
+
+  it("accepts visibility=current|off|visible", () => {
+    const currentParsed = anchorClawConfigSchema.parse({
+      ...baseConfig(),
+      sessions: { visibility: "current" },
+    });
+    expect(currentParsed.sessions?.visibility).toBe("current");
+
+    const offParsed = anchorClawConfigSchema.parse({
+      ...baseConfig(),
+      sessions: { visibility: "off" },
+    });
+    expect(offParsed.sessions?.visibility).toBe("off");
+
+    const visibleParsed = anchorClawConfigSchema.parse({
+      ...baseConfig(),
+      sessions: { visibility: "visible" },
+    });
+    expect(visibleParsed.sessions?.visibility).toBe("visible");
+  });
+
+  it("rejects unsupported sessions.visibility values", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        sessions: { visibility: "all" },
+      }),
+    ).toThrow("sessions.visibility must be one of: current, off, visible");
+  });
+});
+

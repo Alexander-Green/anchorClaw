@@ -49,5 +49,32 @@ describe("sessions corpus (MVP)", () => {
     expect(res!.text).toContain("User: Hello world");
     expect(res!.text).toContain("Assistant: Hi there");
   });
-});
 
+  it("rejects session lookups with path separators in the file name", async () => {
+    const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
+    const stateDir = `${tmp}/anchorclaw-test-state-traversal`;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const agentId = "main";
+    const escapedFileName = "outside.jsonl";
+    const escapedDir = `${stateDir}/agents/${agentId}`;
+
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(escapedDir, { recursive: true });
+    await writeFile(
+      `${escapedDir}/${escapedFileName}`,
+      JSON.stringify({ type: "message", message: { role: "user", content: "should not read" } }),
+      "utf8",
+    );
+
+    const res = await memoryGetSessionFile({
+      lookup: `sessions/${agentId}/..\\${escapedFileName}`,
+      currentAgentId: agentId,
+      defaultLines: 120,
+      maxChars: 12_000,
+      limits: { sessionsMaxFileBytes: 2_000_000, sessionsWrapChars: 800 },
+    });
+
+    expect(res).toBeNull();
+  });
+});

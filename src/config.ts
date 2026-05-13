@@ -1,4 +1,7 @@
 export type AnchorClawConfig = {
+  sessions?: {
+    visibility?: "current" | "off" | "visible";
+  };
   identity?: {
     externalId?: string;
   };
@@ -155,7 +158,25 @@ export const anchorClawConfigSchema = {
     if (!obj) {
       throw new Error("anchorclaw config required");
     }
-    assertAllowedKeys(obj, ["identity", "postgres", "import", "limits"], "anchorclaw config");
+    assertAllowedKeys(obj, ["sessions", "identity", "postgres", "import", "limits"], "anchorclaw config");
+
+    const sessionsObj = asRecord(obj.sessions);
+    if (obj.sessions !== undefined && !sessionsObj) {
+      throw new Error("sessions must be an object");
+    }
+    if (sessionsObj) {
+      assertAllowedKeys(sessionsObj, ["visibility"], "sessions");
+    }
+    const visibilityRaw = sessionsObj
+      ? readOptionalString(sessionsObj.visibility, "sessions.visibility")
+      : undefined;
+    const sessionsVisibility = visibilityRaw
+      ? visibilityRaw === "current" || visibilityRaw === "off" || visibilityRaw === "visible"
+        ? (visibilityRaw as "current" | "off" | "visible")
+        : (() => {
+            throw new Error("sessions.visibility must be one of: current, off, visible");
+          })()
+      : "current";
 
     const identityObj = asRecord(obj.identity);
     if (obj.identity !== undefined && !identityObj) {
@@ -285,6 +306,7 @@ export const anchorClawConfigSchema = {
       : undefined;
 
     return {
+      sessions: { visibility: sessionsVisibility },
       ...(identityExternalId ? { identity: { externalId: identityExternalId } } : {}),
       postgres: {
         host,

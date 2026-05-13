@@ -12,6 +12,8 @@ import { memoryForgetDb } from "./memory/forget.js";
 import { memoryRecallDb } from "./memory/recall.js";
 import { buildPromptMemorySection, queryPromptMemoryItems } from "./memory/prompt.js";
 import { memorySearchSessions } from "./memory/sessions.js";
+import { memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
+import { syncSessionsIndexDb } from "./memory/sessions-index-sync.js";
 import {
   createAnchorClawMemorySearchManager,
   type AnchorClawMemorySearchManagerOptions,
@@ -98,6 +100,7 @@ export default definePluginEntry({
     let promptCacheLines: string[] | null = null;
     let promptCacheError: string | null = null;
     let promptCacheRefreshPromise: Promise<void> | null = null;
+    let sessionsIndexBootstrapPromise: Promise<void> | null = null;
     const refreshPromptCache = () => {
       if (!cfg) {
         promptCacheLines = null;
@@ -146,6 +149,41 @@ export default definePluginEntry({
           promptCacheRefreshPromise = null;
         }
       })();
+    };
+    const ensureSessionsIndexBootstrapped = async () => {
+      if (!cfg) {
+        return;
+      }
+      if ((cfg.sessions?.visibility ?? "current") === "off") {
+        return;
+      }
+      if (sessionsIndexBootstrapPromise) {
+        await sessionsIndexBootstrapPromise;
+        return;
+      }
+      sessionsIndexBootstrapPromise = (async () => {
+        try {
+          await ensureReady();
+          const scope = await resolveUserAndWorkspaceScope({
+            api,
+            pool: getPool(),
+            agentId: (api as any)?.runtime?.agentId,
+            sessionKey: (api as any)?.runtime?.sessionKey,
+            configuredExternalId: cfg?.identity?.externalId,
+          });
+          await syncSessionsIndexDb({
+            pool: getPool(),
+            userId: scope.userId,
+            workspaceId: scope.workspaceId,
+            agentId: String((api as any)?.runtime?.agentId ?? "main"),
+          });
+        } catch (error) {
+          api.logger.warn(
+            `anchorclaw: sessions index bootstrap failed (${error instanceof Error ? error.message : String(error)})`,
+          );
+        }
+      })();
+      await sessionsIndexBootstrapPromise;
     };
 
     api.logger.info(
@@ -309,6 +347,8 @@ export default definePluginEntry({
         const minScore = typeof record.minScore === "number" ? (record.minScore as number) : undefined;
         const effectiveMax = typeof maxResults === "number" ? maxResults : limits.maxResults;
         const trimmedCorpus = corpus.trim();
+        const sessionsVisibility = cfg?.sessions?.visibility ?? "current";
+        const sessionsEnabled = sessionsVisibility !== "off";
         if (trimmedCorpus === "wiki") {
           return {
             content: [
@@ -323,12 +363,30 @@ export default definePluginEntry({
         }
         let hits: any[] = [];
         if (trimmedCorpus === "sessions") {
-          hits = await memorySearchSessions({
+          if (!sessionsEnabled) {
+            return {
+              content: [{ type: "text", text: "anchorclaw: sessions corpus is disabled by config (sessions.visibility=off)" }],
+              details: { disabled: true, error: "sessions corpus disabled", visibility: sessionsVisibility },
+            };
+          }
+          await ensureSessionsIndexBootstrapped();
+          const indexedHits = await memorySearchSessionsIndexDb({
+            pool: getPool(),
+            userId: scope.userId,
+            workspaceId: scope.workspaceId,
+            limits,
             query,
             maxResults: effectiveMax,
-            agentId: (api as any)?.runtime?.agentId,
-            limits,
           });
+          hits =
+            indexedHits.length > 0
+              ? indexedHits
+              : await memorySearchSessions({
+                  query,
+                  maxResults: effectiveMax,
+                  agentId: (api as any)?.runtime?.agentId,
+                  limits,
+                });
         } else if (trimmedCorpus === "memory") {
           hits = await memorySearchDb({
             pool: getPool(),
@@ -339,6 +397,9 @@ export default definePluginEntry({
             ...(typeof maxResults === "number" ? { maxResults } : {}),
           });
         } else if (trimmedCorpus === "all") {
+          if (sessionsEnabled) {
+            await ensureSessionsIndexBootstrapped();
+          }
           const merged = [
             ...(await memorySearchDb({
               pool: getPool(),
@@ -348,13 +409,30 @@ export default definePluginEntry({
               query,
               maxResults: effectiveMax,
             })),
-            ...(await memorySearchSessions({
-              query,
-              maxResults: effectiveMax,
-              agentId: (api as any)?.runtime?.agentId,
-              limits,
-            })),
+            ...(sessionsEnabled
+              ? await memorySearchSessionsIndexDb({
+                  pool: getPool(),
+                  userId: scope.userId,
+                  workspaceId: scope.workspaceId,
+                  limits,
+                  query,
+                  maxResults: effectiveMax,
+                })
+              : []),
           ];
+          if (sessionsEnabled) {
+            const hasSessionsHits = merged.some((item: any) => item?.corpus === "sessions");
+            if (!hasSessionsHits) {
+              merged.push(
+                ...(await memorySearchSessions({
+                  query,
+                  maxResults: effectiveMax,
+                  agentId: (api as any)?.runtime?.agentId,
+                  limits,
+                })),
+              );
+            }
+          }
           merged.sort((left: any, right: any) => {
             const ls = typeof left?.score === "number" ? left.score : 0;
             const rs = typeof right?.score === "number" ? right.score : 0;
@@ -440,6 +518,13 @@ export default definePluginEntry({
           return {
             content: [{ type: "text", text: "anchorclaw: memory_get requires lookup (or path)" }],
             details: { disabled: true, error: "lookup required" },
+          };
+        }
+        const sessionsVisibility = cfg?.sessions?.visibility ?? "current";
+        if (sessionsVisibility === "off" && lookup.trim().startsWith("sessions/")) {
+          return {
+            content: [{ type: "text", text: "anchorclaw: sessions corpus is disabled by config (sessions.visibility=off)" }],
+            details: { disabled: true, error: "sessions corpus disabled", visibility: sessionsVisibility },
           };
         }
         const got = await memoryGetFromDb({
