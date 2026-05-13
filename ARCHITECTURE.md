@@ -47,6 +47,22 @@ Durable слой:
 
 - `memory_events`: append-only события (MVP: импорт `memory/*.md` как snapshot event)
 
+## Identity и scope-resolve (MVP)
+
+Все чтения/записи идут в scope `(user_id, workspace_id)`.
+
+- `workspace_id`:
+  - вычисляется из `workspaceDir` (`name = dir:<sha256(resolved workspaceDir)>`)
+  - поэтому смена workspace директории создаёт новый memory scope.
+- `user_id`:
+  - приоритет: `identity.externalId` из plugin config (stable key, `channel=anchorclaw-config`)
+  - fallback: `sha256(normalized OS username)` (`channel=openclaw-cli`)
+
+Операционный вывод:
+
+- Для Docker/production обязательно задавать `identity.externalId`, иначе при смене OS user в контейнере scope может "прыгать".
+- Плагин всегда логирует startup warning, если `identity.externalId` не задан.
+
 ## Где появятся PostClaw-style фичи
 
 ### Semantic layer (optional)
@@ -69,4 +85,3 @@ Durable слой:
 - sessions corpus: best-effort scan + cap + `score=1` (пока нет индекса)
 - `corpus="wiki"`: не реализован
 - типы кроме `fact/note` отложены до явной политики инжекта/записи
-

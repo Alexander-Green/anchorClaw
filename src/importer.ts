@@ -176,6 +176,7 @@ async function importMemoryMd(params: {
     pool: params.pool,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    configuredExternalId: params.cfg.identity?.externalId,
   });
 
   const shouldProceed = await ensureImportRecorded({
@@ -250,6 +251,7 @@ async function importMemoryMd(params: {
 
 async function importDailyMemory(params: {
   api: OpenClawPluginApi;
+  cfg: AnchorClawConfig;
   pool: PostgresPool;
   workspaceDir: string;
   agentId?: string;
@@ -268,6 +270,7 @@ async function importDailyMemory(params: {
     pool: params.pool,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    configuredExternalId: params.cfg.identity?.externalId,
   });
 
   for (const entry of dirents) {

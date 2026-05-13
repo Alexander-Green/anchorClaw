@@ -67,6 +67,9 @@ Select the memory slot and configure Postgres:
       "anchorclaw": {
         "enabled": true,
         "config": {
+          "identity": {
+            "externalId": "family-main-01"
+          },
           "postgres": {
             "host": "localhost",
             "database": "anchorclaw",
@@ -136,9 +139,27 @@ To disable cleanup:
 
 AnchorClaw scopes all reads/writes by `(user_id, workspace_id)` derived from the current runtime identity.
 
-- Local/CLI runs: identity is derived from the OS username (`external_id = sha256(normalized username)`).
+- Preferred identity (Docker/production): set `identity.externalId` (max 20 chars). This becomes the stable `user_identities` key (`channel=anchorclaw-config`).
+- Fallback identity (dev convenience): if `identity.externalId` is not set, identity is derived from OS username (`external_id = sha256(normalized username)`, `channel=openclaw-cli`).
   - If multiple people share the same OS user account, they will share the same AnchorClaw `user_id`.
+  - AnchorClaw logs a startup warning on every start when fallback mode is active.
 - Workspace identity: workspaces are isolated per user and per workspace directory (`workspace name = dir:<sha256(resolved workspaceDir)>`).
+
+Recommended for Docker/production:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "anchorclaw": {
+        "config": {
+          "identity": { "externalId": "family-main-01" }
+        }
+      }
+    }
+  }
+}
+```
 
 ---
 

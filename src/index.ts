@@ -17,6 +17,7 @@ import {
   type AnchorClawMemorySearchManagerOptions,
 } from "./memory/manager.js";
 import { runOneTimeWorkspaceImport } from "./importer.js";
+import { getIdentityStartupWarning } from "./identity-policy.js";
 
 function resolveActor(api: OpenClawPluginApi): string {
   const agentId = (api as any)?.runtime?.agentId;
@@ -55,6 +56,12 @@ export default definePluginEntry({
     } catch (error) {
       disabledReason = error instanceof Error ? error.message : String(error);
       api.logger.warn(`anchorclaw: disabled until configured (${disabledReason})`);
+    }
+    if (cfg) {
+      const warning = getIdentityStartupWarning(cfg);
+      if (warning) {
+        api.logger.warn(warning);
+      }
     }
 
     let pool: PostgresPool | undefined;
@@ -108,6 +115,7 @@ export default definePluginEntry({
             pool: getPool(),
             agentId: (api as any)?.runtime?.agentId,
             sessionKey: (api as any)?.runtime?.sessionKey,
+            configuredExternalId: cfg?.identity?.externalId,
           });
           const items = await queryPromptMemoryItems({
             pool: getPool(),
@@ -291,6 +299,7 @@ export default definePluginEntry({
           pool: getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
+          configuredExternalId: cfg?.identity?.externalId,
         });
         const limits = resolveMemoryLimits(cfg!);
         const record = (params ?? {}) as any;
@@ -415,6 +424,7 @@ export default definePluginEntry({
           pool: getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
+          configuredExternalId: cfg?.identity?.externalId,
         });
         const limits = resolveMemoryLimits(cfg!);
         const record = (params ?? {}) as any;
@@ -502,6 +512,7 @@ export default definePluginEntry({
           pool: getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
+          configuredExternalId: cfg?.identity?.externalId,
         });
 
         const record = (params ?? {}) as any;
@@ -575,6 +586,7 @@ export default definePluginEntry({
           pool: getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
+          configuredExternalId: cfg?.identity?.externalId,
         });
         const limits = resolveMemoryLimits(cfg!);
         const recalled = await memoryRecallDb({
@@ -639,6 +651,7 @@ export default definePluginEntry({
           pool: getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
+          configuredExternalId: cfg?.identity?.externalId,
         });
 
         const record = (params ?? {}) as any;

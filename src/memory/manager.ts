@@ -171,6 +171,7 @@ export function createAnchorClawMemorySearchManager(
         pool: params.getPool(),
         agentId: params.agentId,
         sessionKey: opts?.sessionKey ?? (api as any)?.runtime?.sessionKey,
+        configuredExternalId: cfg.identity?.externalId,
       });
       const limits = resolveMemoryLimits(cfg);
 
@@ -221,6 +222,7 @@ export function createAnchorClawMemorySearchManager(
         pool: params.getPool(),
         agentId: params.agentId,
         sessionKey: (api as any)?.runtime?.sessionKey,
+        configuredExternalId: cfg.identity?.externalId,
       });
       const limits = resolveMemoryLimits(cfg);
       const fromLine = readParams.from ?? 1;

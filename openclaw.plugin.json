@@ -18,6 +18,17 @@
       "help": "When true (default), after importing legacy MEMORY.md into Postgres AnchorClaw writes a backup into .openclaw-repair/anchorclaw/ and stubs MEMORY.md to avoid duplicate prompt injection.",
       "advanced": true
     },
+    "identity": {
+      "label": "Identity",
+      "help": "Stable owner identity for memory scoping",
+      "advanced": true
+    },
+    "identity.externalId": {
+      "label": "External Identity",
+      "placeholder": "family-main-01",
+      "help": "Stable identity key (max 20 chars). Recommended for Docker/production to avoid memory scope drift.",
+      "advanced": true
+    },
     "postgres": {
       "label": "Postgres",
       "help": "Postgres connection settings for AnchorClaw memory storage"
@@ -132,6 +143,17 @@
           }
         }
       },
+      "identity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "externalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20
+          }
+        }
+      },
       "postgres": {
         "type": "object",
         "additionalProperties": false,
@@ -206,8 +228,7 @@
           }
         },
         "required": ["host", "database", "user"]
-      }
-    ,
+      },
       "limits": {
         "type": "object",
         "additionalProperties": false,

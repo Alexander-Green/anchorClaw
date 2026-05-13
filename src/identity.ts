@@ -16,20 +16,39 @@ function normalizeOsUsername(value: string): string {
   return value.trim().toLowerCase();
 }
 
+export function resolveIdentityBinding(params: {
+  configuredExternalId?: string;
+  usernameEnv?: string;
+}): { channel: string; externalId: string; displayLabel: string } {
+  const configuredExternalId = params.configuredExternalId?.trim();
+  const username = normalizeOsUsername(params.usernameEnv ?? process.env.USERNAME ?? process.env.USER ?? "unknown");
+  if (configuredExternalId) {
+    return {
+      channel: "anchorclaw-config",
+      externalId: configuredExternalId,
+      displayLabel: `configured:${configuredExternalId}`,
+    };
+  }
+  return {
+    channel: "openclaw-cli",
+    externalId: sha256Hex(username),
+    displayLabel: username,
+  };
+}
+
 export async function resolveUserAndWorkspaceScope(params: {
   api: OpenClawPluginApi;
   pool: PostgresPool;
   agentId?: string;
   sessionKey?: string;
+  configuredExternalId?: string;
 }): Promise<ResolvedScope> {
-  const username = normalizeOsUsername(process.env.USERNAME ?? process.env.USER ?? "unknown");
-  const channel = "openclaw-cli";
-  const externalId = sha256Hex(username);
+  const identity = resolveIdentityBinding({ configuredExternalId: params.configuredExternalId });
 
   const userId = await resolveOrCreateUserId(params.pool, params.api.logger, {
-    channel,
-    externalId,
-    displayLabel: username,
+    channel: identity.channel,
+    externalId: identity.externalId,
+    displayLabel: identity.displayLabel,
   });
   const workspaceId = await resolveOrCreateWorkspaceId(params.pool, {
     userId,

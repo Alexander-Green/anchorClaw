@@ -1,4 +1,7 @@
 export type AnchorClawConfig = {
+  identity?: {
+    externalId?: string;
+  };
   postgres: {
     host: string;
     port?: number;
@@ -63,6 +66,20 @@ function readOptionalString(value: unknown, label: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
+  }
+  return resolveEnvVars(trimmed);
+}
+
+function readOptionalNonEmptyString(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`${label} must be non-empty`);
   }
   return resolveEnvVars(trimmed);
 }
@@ -138,7 +155,21 @@ export const anchorClawConfigSchema = {
     if (!obj) {
       throw new Error("anchorclaw config required");
     }
-    assertAllowedKeys(obj, ["postgres", "import", "limits"], "anchorclaw config");
+    assertAllowedKeys(obj, ["identity", "postgres", "import", "limits"], "anchorclaw config");
+
+    const identityObj = asRecord(obj.identity);
+    if (obj.identity !== undefined && !identityObj) {
+      throw new Error("identity must be an object");
+    }
+    if (identityObj) {
+      assertAllowedKeys(identityObj, ["externalId"], "identity");
+    }
+    const identityExternalId = identityObj
+      ? readOptionalNonEmptyString(identityObj.externalId, "identity.externalId")
+      : undefined;
+    if (identityExternalId && identityExternalId.length > 20) {
+      throw new Error("identity.externalId must be at most 20 characters");
+    }
 
     const postgresObj = asRecord(obj.postgres);
     if (!postgresObj) {
@@ -254,6 +285,7 @@ export const anchorClawConfigSchema = {
       : undefined;
 
     return {
+      ...(identityExternalId ? { identity: { externalId: identityExternalId } } : {}),
       postgres: {
         host,
         ...(typeof port === "number" ? { port } : {}),
