@@ -19,9 +19,15 @@ AnchorClaw solves a different problem:
 ## Data Sources (MVP)
 
 - `corpus="memory"`: Postgres (`memory_items`) durable memory (MVP: `fact` + `note`)
-- `corpus="sessions"`: best-effort scan of session JSONL files on disk (compatibility layer, no index yet)
+- `corpus="sessions"`: Postgres-backed lexical sessions index (`session_index_files` + `session_index_chunks`), DB-first reads/search with file fallback only on `index_miss`
 - `corpus="all"`: deterministic merge (`memory + sessions`)
 - `corpus="wiki"`: stub for now; wiki layer is future work
+
+Current delivery state:
+
+- Sessions Phase 1 implementation is in git and green in repo tests/typecheck.
+- Before calling Sessions Phase 1 fully closed, a live runtime verification pass is still required; see `anchorClaw/PHASE1_REAL_VERIFICATION.md`.
+- Sessions Phase 2 is the next planned step after that verification pass.
 
 ## Virtual `MEMORY.md`
 
@@ -82,6 +88,7 @@ Operational implications:
 
 ## Known MVP Limits
 
-- sessions corpus: best-effort scan + size cap + `score=1` (no index yet)
+- sessions corpus: Phase 1 is lexical-only and still pending final live runtime verification before being treated as fully closed
+- sessions freshness: no live transcript listener yet; recent transcript changes still depend on bootstrap/sync behavior until Phase 2
 - `corpus="wiki"`: not implemented
 - types beyond `fact/note` are deferred until explicit injection/write policy is defined

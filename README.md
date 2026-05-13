@@ -30,10 +30,11 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
     - AnchorClaw-native: `{ lookup, fromLine, lineCount }`
     - OpenClaw aliases: `{ path, from, lines }`
   - Reading `MEMORY.md` via `memory_get`/runtime returns a **virtual snapshot generated from Postgres** (keeps legacy flows compatible while DB stays source-of-truth)
-- **Sessions corpus (Phase 1 complete)**
+- **Sessions corpus (Phase 1 implementation complete; real-runtime verification pending)**
   - `memory_search(corpus="sessions")` uses Postgres-backed sessions index (`session_index_files` + `session_index_chunks`) with FTS ranking
   - `memory_get(path="sessions/<agentId>/<file>")` is DB-first; file fallback is used only on `index_miss`
   - `sessions.visibility` modes: `off | current | visible` (default: `current`)
+  - code/test status is complete at commit `cd9dd70`; before calling Phase 1 fully closed, run the live checklist in `anchorClaw/PHASE1_REAL_VERIFICATION.md`
 - **Migration support**
   - One-time idempotent import of legacy `MEMORY.md` into Postgres (by file hash)
   - Optional (default on) cleanup of `MEMORY.md` after import to avoid duplicate prompt injection
@@ -221,3 +222,10 @@ AnchorClaw intentionally starts with deterministic SQL-first durability. Next la
 - **Knowledge graph**: `entity_edges`-style relationships and multi-hop retrieval to pull secondary context automatically
 - **Sessions indexing Phase 2**: add live/delta indexing via transcript update listener + debounce + targeted sync
 - **Wiki integration / AnchorClaw-native wiki**: either integrate OpenClaw supplements (`memory-wiki`) or build a DB-native wiki layer
+
+## Current Status
+
+- Durable memory MVP: implemented and green in repo tests.
+- Sessions Phase 1: implemented, reviewed, and green in repo tests/typecheck.
+- Remaining gate before declaring Sessions Phase 1 fully closed: run the live runtime checklist in `anchorClaw/PHASE1_REAL_VERIFICATION.md`.
+- Next planned step after that live verification: Sessions Phase 2 (`onSessionTranscriptUpdate` + debounce + targeted sync).
