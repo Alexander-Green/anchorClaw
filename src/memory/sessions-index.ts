@@ -83,6 +83,24 @@ export async function memorySearchSessionsIndexDb(params: {
   }));
 }
 
+export async function hasSessionsIndexRows(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+}): Promise<boolean> {
+  const result = await params.pool.query<{ id: string }>(
+    `
+    SELECT id
+    FROM session_index_files
+    WHERE user_id = $1
+      AND workspace_id = $2
+    LIMIT 1
+  `,
+    [params.userId, params.workspaceId],
+  );
+  return result.rows.length > 0;
+}
+
 export async function memoryGetSessionFromIndexDb(params: {
   pool: PostgresPool;
   userId: string;

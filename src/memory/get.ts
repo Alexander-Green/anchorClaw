@@ -177,6 +177,7 @@ export async function memoryGetFromDb(params: {
         userId: params.userId,
         workspaceId: params.workspaceId,
         agentId: params.agentId,
+        sessionFiles: [normalizedLookup],
       }).catch(() => {
         // Index repair is best-effort after file fallback.
       });

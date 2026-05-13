@@ -6,7 +6,11 @@ import { resolveMemoryLimits } from "./limits.js";
 import { memoryGetFromDb } from "./get.js";
 import { memorySearchDb, type MemorySearchHit } from "./search.js";
 import { memoryGetSessionFile, memorySearchSessions } from "./sessions.js";
-import { memoryGetSessionFromIndexDb, memorySearchSessionsIndexDb } from "./sessions-index.js";
+import {
+  hasSessionsIndexRows,
+  memoryGetSessionFromIndexDb,
+  memorySearchSessionsIndexDb,
+} from "./sessions-index.js";
 import { syncSessionsIndexDb } from "./sessions-index-sync.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
 import fs from "node:fs/promises";
@@ -209,15 +213,22 @@ export function createAnchorClawMemorySearchManager(
           query: q,
           maxResults,
         });
-        const sessionHits =
-          indexedSessionHits.length > 0
-            ? indexedSessionHits
-            : await memorySearchSessions({
-                query: q,
-                maxResults,
-                agentId: params.agentId,
-                limits,
-              });
+        let sessionHits = indexedSessionHits;
+        if (sessionHits.length === 0) {
+          const hasIndex = await hasSessionsIndexRows({
+            pool: params.getPool(),
+            userId: scope.userId,
+            workspaceId: scope.workspaceId,
+          });
+          if (!hasIndex) {
+            sessionHits = await memorySearchSessions({
+              query: q,
+              maxResults,
+              agentId: params.agentId,
+              limits,
+            });
+          }
+        }
         results.push(...sessionHits.map(mapHitToManagerResult));
       }
 

@@ -12,7 +12,7 @@ import { memoryForgetDb } from "./memory/forget.js";
 import { memoryRecallDb } from "./memory/recall.js";
 import { buildPromptMemorySection, queryPromptMemoryItems } from "./memory/prompt.js";
 import { memorySearchSessions } from "./memory/sessions.js";
-import { memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
+import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
 import { syncSessionsIndexDb } from "./memory/sessions-index-sync.js";
 import {
   createAnchorClawMemorySearchManager,
@@ -378,15 +378,23 @@ export default definePluginEntry({
             query,
             maxResults: effectiveMax,
           });
-          hits =
-            indexedHits.length > 0
-              ? indexedHits
+          if (indexedHits.length > 0) {
+            hits = indexedHits;
+          } else {
+            const hasIndex = await hasSessionsIndexRows({
+              pool: getPool(),
+              userId: scope.userId,
+              workspaceId: scope.workspaceId,
+            });
+            hits = hasIndex
+              ? []
               : await memorySearchSessions({
                   query,
                   maxResults: effectiveMax,
                   agentId: (api as any)?.runtime?.agentId,
                   limits,
                 });
+          }
         } else if (trimmedCorpus === "memory") {
           hits = await memorySearchDb({
             pool: getPool(),
@@ -423,6 +431,12 @@ export default definePluginEntry({
           if (sessionsEnabled) {
             const hasSessionsHits = merged.some((item: any) => item?.corpus === "sessions");
             if (!hasSessionsHits) {
+              const hasIndex = await hasSessionsIndexRows({
+                pool: getPool(),
+                userId: scope.userId,
+                workspaceId: scope.workspaceId,
+              });
+              if (!hasIndex) {
               merged.push(
                 ...(await memorySearchSessions({
                   query,
@@ -431,6 +445,7 @@ export default definePluginEntry({
                   limits,
                 })),
               );
+              }
             }
           }
           merged.sort((left: any, right: any) => {
