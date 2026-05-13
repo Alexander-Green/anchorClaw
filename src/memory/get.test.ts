@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { memoryGetFromDb } from "./get.js";
 
@@ -11,6 +11,7 @@ vi.mock("./sessions-index-sync.js", () => ({
 }));
 
 import { memoryGetSessionFile } from "./sessions.js";
+import { syncSessionsIndexDb } from "./sessions-index-sync.js";
 
 const limits = {
   maxResults: 10,
@@ -24,6 +25,10 @@ function createPool(rowsByCall: Array<unknown[]>) {
   const query = vi.fn(async () => ({ rows: rowsByCall.shift() ?? [] }));
   return { query } as any;
 }
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("memoryGetFromDb sessions visibility", () => {
   it("rejects other-agent sessions lookup in current visibility", async () => {
@@ -89,5 +94,56 @@ describe("memoryGetFromDb sessions visibility", () => {
     expect(got.content).toContain("User: hello");
     expect(got.content).toContain("Assistant: hi");
   });
-});
 
+  it("returns index_corrupt error when file row exists but indexed read is missing", async () => {
+    const pool = createPool([[], [{ id: "indexed-row" }]]);
+    const got = await memoryGetFromDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      agentId: "main",
+      sessionsVisibility: "current",
+      limits,
+      lookup: "sessions/main/s1.jsonl",
+    });
+    expect(got.ok).toBe(false);
+    if (got.ok) {
+      throw new Error("expected failed result");
+    }
+    expect(got.error).toContain("index corrupted");
+    expect(vi.mocked(memoryGetSessionFile)).not.toHaveBeenCalled();
+  });
+
+  it("on index_miss uses file fallback and enqueues targeted reindex", async () => {
+    const pool = createPool([[], []]);
+    vi.mocked(memoryGetSessionFile).mockResolvedValueOnce({
+      text: "User: fallback",
+      path: "sessions/main/s1.jsonl",
+      from: 1,
+      lines: 1,
+    });
+    const got = await memoryGetFromDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      agentId: "main",
+      sessionsVisibility: "current",
+      limits,
+      lookup: "sessions/main/s1.jsonl",
+    });
+    expect(got.ok).toBe(true);
+    if (!got.ok) {
+      throw new Error("expected successful result");
+    }
+    expect(got.content).toContain("fallback");
+    expect(vi.mocked(syncSessionsIndexDb)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(syncSessionsIndexDb)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "u1",
+        workspaceId: "w1",
+        agentId: "main",
+        sessionFiles: ["sessions/main/s1.jsonl"],
+      }),
+    );
+  });
+});
