@@ -377,6 +377,7 @@ export default definePluginEntry({
             limits,
             query,
             maxResults: effectiveMax,
+            ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
           });
           if (indexedHits.length > 0) {
             hits = indexedHits;
@@ -385,6 +386,7 @@ export default definePluginEntry({
               pool: getPool(),
               userId: scope.userId,
               workspaceId: scope.workspaceId,
+              ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
             });
             hits = hasIndex
               ? []
@@ -425,6 +427,7 @@ export default definePluginEntry({
                   limits,
                   query,
                   maxResults: effectiveMax,
+                  ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
                 })
               : []),
           ];
@@ -435,6 +438,7 @@ export default definePluginEntry({
                 pool: getPool(),
                 userId: scope.userId,
                 workspaceId: scope.workspaceId,
+                ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
               });
               if (!hasIndex) {
               merged.push(
@@ -547,6 +551,7 @@ export default definePluginEntry({
           userId: scope.userId,
           workspaceId: scope.workspaceId,
           agentId: (api as any)?.runtime?.agentId,
+          sessionsVisibility,
           workspaceDir:
             typeof (api as any)?.runtime?.workspaceDir === "string" && (api as any).runtime.workspaceDir.trim()
               ? String((api as any).runtime.workspaceDir)

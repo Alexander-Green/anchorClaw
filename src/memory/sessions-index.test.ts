@@ -56,6 +56,20 @@ describe("hasSessionsIndexRows", () => {
     });
     expect(got).toBe(false);
   });
+
+  it("applies current-agent path prefix when provided", async () => {
+    const { pool, calls } = createMockPool([[{ id: "row-1" }]]);
+    const got = await hasSessionsIndexRows({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      currentAgentId: "main",
+    });
+    expect(got).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sql).toContain("path LIKE $3");
+    expect(calls[0]?.args).toEqual(["u1", "w1", "sessions/main/%"]);
+  });
 });
 
 describe("memoryGetSessionFromIndexDb", () => {
@@ -141,5 +155,27 @@ describe("memorySearchSessionsIndexDb", () => {
       startLine: 3,
       endLine: 3,
     });
+  });
+
+  it("scopes SQL by current agent path prefix when provided", async () => {
+    const { pool, calls } = createMockPool([[]]);
+    const hits = await memorySearchSessionsIndexDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: {
+        maxResults: 10,
+        getMaxChars: 12_000,
+        getDefaultLines: 120,
+        sessionsMaxFileBytes: 2_000_000,
+        sessionsWrapChars: 800,
+      },
+      query: "hello",
+      currentAgentId: "main",
+    });
+    expect(hits).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sql).toContain("AND c.path LIKE $5");
+    expect(calls[0]?.args).toEqual(["u1", "w1", "hello", 10, "sessions/main/%"]);
   });
 });

@@ -30,6 +30,10 @@ export function normalizeSessionLookupPath(lookup: string): string | null {
   return `sessions/${agentId}/${fileName}`;
 }
 
+function buildAgentPathPrefix(agentId: string): string {
+  return `sessions/${agentId}/%`;
+}
+
 export async function memorySearchSessionsIndexDb(params: {
   pool: PostgresPool;
   userId: string;
@@ -37,12 +41,14 @@ export async function memorySearchSessionsIndexDb(params: {
   limits: MemoryLimits;
   query: string;
   maxResults?: number;
+  currentAgentId?: string;
 }): Promise<MemorySearchHit[]> {
   const q = params.query.trim();
   if (!q) {
     return [];
   }
   const limit = clampInteger(params.maxResults ?? params.limits.maxResults, 1, params.limits.maxResults);
+  const scopedByAgent = typeof params.currentAgentId === "string" && params.currentAgentId.trim().length > 0;
   const result = await params.pool.query<{
     path: string;
     snippet: string;
@@ -51,7 +57,26 @@ export async function memorySearchSessionsIndexDb(params: {
     end_line: number;
     updated_at: string;
   }>(
-    `
+    scopedByAgent
+      ? `
+    SELECT
+      c.path,
+      LEFT(c.text, 240) AS snippet,
+      ts_rank_cd(c.search_vector, plainto_tsquery('simple', $3)) AS score,
+      c.start_line,
+      c.end_line,
+      f.updated_at
+    FROM session_index_chunks c
+    JOIN session_index_files f
+      ON f.id = c.file_id
+    WHERE c.user_id = $1
+      AND c.workspace_id = $2
+      AND c.search_vector @@ plainto_tsquery('simple', $3)
+      AND c.path LIKE $5
+    ORDER BY score DESC, f.updated_at DESC, c.path ASC, c.chunk_index ASC
+    LIMIT $4
+  `
+      : `
     SELECT
       c.path,
       LEFT(c.text, 240) AS snippet,
@@ -68,10 +93,12 @@ export async function memorySearchSessionsIndexDb(params: {
     ORDER BY score DESC, f.updated_at DESC, c.path ASC, c.chunk_index ASC
     LIMIT $4
   `,
-    [params.userId, params.workspaceId, q, limit],
+    scopedByAgent
+      ? [params.userId, params.workspaceId, q, limit, buildAgentPathPrefix(params.currentAgentId!.trim())]
+      : [params.userId, params.workspaceId, q, limit],
   );
 
-  return result.rows.map((row) => ({
+  return result.rows.map((row: { path: string; snippet: string; score: number; start_line: number; end_line: number; updated_at: string }) => ({
     corpus: "sessions",
     path: row.path,
     kind: "session",
@@ -87,16 +114,29 @@ export async function hasSessionsIndexRows(params: {
   pool: PostgresPool;
   userId: string;
   workspaceId: string;
+  currentAgentId?: string;
 }): Promise<boolean> {
+  const scopedByAgent = typeof params.currentAgentId === "string" && params.currentAgentId.trim().length > 0;
   const result = await params.pool.query<{ id: string }>(
-    `
+    scopedByAgent
+      ? `
+    SELECT id
+    FROM session_index_files
+    WHERE user_id = $1
+      AND workspace_id = $2
+      AND path LIKE $3
+    LIMIT 1
+  `
+      : `
     SELECT id
     FROM session_index_files
     WHERE user_id = $1
       AND workspace_id = $2
     LIMIT 1
   `,
-    [params.userId, params.workspaceId],
+    scopedByAgent
+      ? [params.userId, params.workspaceId, buildAgentPathPrefix(params.currentAgentId!.trim())]
+      : [params.userId, params.workspaceId],
   );
   return result.rows.length > 0;
 }
@@ -144,7 +184,7 @@ export async function memoryGetSessionFromIndexDb(params: {
     return null;
   }
 
-  const content = chunks.rows.map((row) => row.text).join("\n");
+  const content = chunks.rows.map((row: { text: string }) => row.text).join("\n");
   return buildMemoryReadResult({
     content,
     relPath: normalizedPath,

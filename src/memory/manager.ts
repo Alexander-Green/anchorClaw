@@ -211,6 +211,7 @@ export function createAnchorClawMemorySearchManager(
           limits,
           query: q,
           maxResults,
+          ...(sessionsVisibility === "current" ? { currentAgentId: params.agentId } : {}),
         });
         let sessionHits = indexedSessionHits;
         if (sessionHits.length === 0) {
@@ -218,6 +219,7 @@ export function createAnchorClawMemorySearchManager(
             pool: params.getPool(),
             userId: scope.userId,
             workspaceId: scope.workspaceId,
+            ...(sessionsVisibility === "current" ? { currentAgentId: params.agentId } : {}),
           });
           if (!hasIndex) {
             sessionHits = await memorySearchSessions({
@@ -265,6 +267,7 @@ export function createAnchorClawMemorySearchManager(
           userId: scope.userId,
           workspaceId: scope.workspaceId,
           agentId: params.agentId,
+          sessionsVisibility,
           limits,
           lookup: relPath,
           fromLine,
@@ -287,6 +290,7 @@ export function createAnchorClawMemorySearchManager(
           userId: scope.userId,
           workspaceId: scope.workspaceId,
           agentId: params.agentId,
+          sessionsVisibility,
           limits,
           lookup: "db-memory/export/MEMORY.md",
           fromLine,
@@ -339,6 +343,7 @@ export function createAnchorClawMemorySearchManager(
         userId: scope.userId,
         workspaceId: scope.workspaceId,
         agentId: params.agentId,
+        sessionsVisibility,
         limits,
         lookup: readParams.relPath,
         fromLine,

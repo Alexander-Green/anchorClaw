@@ -41,6 +41,7 @@ export async function memoryGetFromDb(params: {
   lookup: string;
   agentId?: string;
   workspaceDir?: string;
+  sessionsVisibility?: "off" | "current" | "visible";
   fromLine?: number;
   lineCount?: number;
 }): Promise<MemoryGetResult> {
@@ -116,6 +117,13 @@ export async function memoryGetFromDb(params: {
     const normalizedLookup = normalizeSessionLookupPath(rawLookup);
     if (!normalizedLookup) {
       return { ok: false, disabled: true, error: "unsupported sessions lookup path" };
+    }
+    if ((params.sessionsVisibility ?? "current") === "current") {
+      const [, lookupAgentId] = normalizedLookup.split("/");
+      const currentAgentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+      if (lookupAgentId && currentAgentId && lookupAgentId !== currentAgentId) {
+        return { ok: false, disabled: true, error: "sessions lookup is restricted to current agent scope" };
+      }
     }
 
     // Phase 1 policy: DB-first for sessions/* reads.
