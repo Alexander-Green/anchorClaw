@@ -30,9 +30,10 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
     - AnchorClaw-native: `{ lookup, fromLine, lineCount }`
     - OpenClaw aliases: `{ path, from, lines }`
   - Reading `MEMORY.md` via `memory_get`/runtime returns a **virtual snapshot generated from Postgres** (keeps legacy flows compatible while DB stays source-of-truth)
-- **Sessions corpus transparency (MVP)**
-  - `memory_search(corpus="sessions")` best-effort scans session JSONL transcripts on disk (capped, no index yet)
-  - `memory_get(path="sessions/<agentId>/<file>")` reads bounded excerpts
+- **Sessions corpus (Phase 1 complete)**
+  - `memory_search(corpus="sessions")` uses Postgres-backed sessions index (`session_index_files` + `session_index_chunks`) with FTS ranking
+  - `memory_get(path="sessions/<agentId>/<file>")` is DB-first; file fallback is used only on `index_miss`
+  - `sessions.visibility` modes: `off | current | visible` (default: `current`)
 - **Migration support**
   - One-time idempotent import of legacy `MEMORY.md` into Postgres (by file hash)
   - Optional (default on) cleanup of `MEMORY.md` after import to avoid duplicate prompt injection
@@ -98,7 +99,7 @@ AnchorClaw exposes both “native” and compatibility surfaces via OpenClaw too
 - `memory_store({ content, canonicalKey?, type? })` where `type` is `fact|note` (MVP)
 - `memory_search({ query, corpus?, maxResults?, minScore? })`
   - `corpus="memory"` (default): Postgres durable memory
-  - `corpus="sessions"`: best-effort sessions scan (compat layer)
+  - `corpus="sessions"`: Postgres sessions index (DB-first)
   - `corpus="all"`: deterministic merge of `memory + sessions`
   - `corpus="wiki"`: stub for now (use `wiki_search/wiki_get` from `memory-wiki`)
 - `memory_get({ lookup|path, fromLine|from?, lineCount|lines? })`
@@ -218,5 +219,5 @@ AnchorClaw intentionally starts with deterministic SQL-first durability. Next la
 - **Semantic layer**: embeddings + semantic search (hybrid retrieval: lexical + vector; optional and non-breaking)
 - **Persona context in DB**: dynamic persona/profile retrieval and injection into the system prompt (separate budgets/policy)
 - **Knowledge graph**: `entity_edges`-style relationships and multi-hop retrieval to pull secondary context automatically
-- **Sessions indexing**: replace best-effort scan with proper indexed backend or Postgres-native session tables + ranking
+- **Sessions indexing Phase 2**: add live/delta indexing via transcript update listener + debounce + targeted sync
 - **Wiki integration / AnchorClaw-native wiki**: either integrate OpenClaw supplements (`memory-wiki`) or build a DB-native wiki layer
