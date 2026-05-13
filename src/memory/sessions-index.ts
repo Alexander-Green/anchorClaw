@@ -1,7 +1,7 @@
 import type { PostgresPool } from "../postgres.js";
 import type { MemoryLimits } from "./limits.js";
 import type { MemorySearchHit } from "./search.js";
-import { buildMemoryReadResult, type MemoryReadResult } from "./read-file-shared.js";
+import type { MemoryReadResult } from "./read-file-shared.js";
 
 function clampInteger(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
@@ -32,6 +32,111 @@ export function normalizeSessionLookupPath(lookup: string): string | null {
 
 function buildAgentPathPrefix(agentId: string): string {
   return `sessions/${agentId}/%`;
+}
+
+function clampPositiveInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function buildContinuationNotice(nextFrom: number | undefined): string {
+  const base =
+    typeof nextFrom === "number"
+      ? `[More content available. Use from=${nextFrom} to continue.]`
+      : "[More content available. Requested excerpt exceeded the default maxChars budget.]";
+  return `\n\n${base}`;
+}
+
+function buildIndexedSessionReadResult(params: {
+  chunks: Array<{ startLine: number; text: string }>;
+  relPath: string;
+  from?: number;
+  lines?: number;
+  defaultLines: number;
+  maxChars: number;
+}): MemoryReadResult {
+  const requestedFrom = clampPositiveInteger(params.from, 1);
+  const requestedLineCount = clampPositiveInteger(params.lines, params.defaultLines);
+  const maxChars = Math.max(1, Math.floor(params.maxChars));
+  const sortedChunks = params.chunks
+    .filter((chunk) => Number.isFinite(chunk.startLine) && chunk.startLine > 0)
+    .slice()
+    .sort((left, right) => left.startLine - right.startLine);
+
+  if (sortedChunks.length === 0) {
+    return {
+      text: "",
+      path: params.relPath,
+      from: requestedFrom,
+      lines: 0,
+    };
+  }
+
+  const grouped = new Map<number, string[]>();
+  for (const chunk of sortedChunks) {
+    const rendered = chunk.text ?? "";
+    const list = grouped.get(chunk.startLine) ?? [];
+    list.push(rendered);
+    grouped.set(chunk.startLine, list);
+  }
+  const sourceLines = Array.from(grouped.keys()).sort((left, right) => left - right);
+  const startIndex = sourceLines.findIndex((lineNo) => lineNo >= requestedFrom);
+  if (startIndex < 0) {
+    return {
+      text: "",
+      path: params.relPath,
+      from: requestedFrom,
+      lines: 0,
+    };
+  }
+
+  const selectedSourceLines = sourceLines.slice(startIndex, startIndex + requestedLineCount);
+  const selectedRenderedLines = selectedSourceLines.flatMap((lineNo) => grouped.get(lineNo) ?? []);
+  const moreSourceLinesRemain = startIndex + selectedSourceLines.length < sourceLines.length;
+
+  let includedRenderedCount = selectedRenderedLines.length;
+  let text = selectedRenderedLines.join("\n");
+  while (includedRenderedCount > 1 && text.length > maxChars) {
+    includedRenderedCount -= 1;
+    text = selectedRenderedLines.slice(0, includedRenderedCount).join("\n");
+  }
+
+  let hardTruncatedSingleLine = false;
+  if (text.length > maxChars) {
+    text = text.slice(0, maxChars);
+    includedRenderedCount = 1;
+    hardTruncatedSingleLine = true;
+  }
+
+  let includedSourceLines = selectedSourceLines.length;
+  if (includedRenderedCount < selectedRenderedLines.length) {
+    let renderedSeen = 0;
+    includedSourceLines = 0;
+    for (const lineNo of selectedSourceLines) {
+      renderedSeen += (grouped.get(lineNo) ?? []).length;
+      if (renderedSeen > includedRenderedCount) {
+        break;
+      }
+      includedSourceLines += 1;
+    }
+  }
+
+  const truncated = hardTruncatedSingleLine || includedRenderedCount < selectedRenderedLines.length || moreSourceLinesRemain;
+  const nextFrom =
+    !hardTruncatedSingleLine && includedSourceLines > 0
+      ? sourceLines[startIndex + includedSourceLines]
+      : undefined;
+
+  return {
+    text: truncated && text ? `${text}${buildContinuationNotice(nextFrom)}` : text,
+    path: params.relPath,
+    from: selectedSourceLines[0] ?? requestedFrom,
+    lines: includedSourceLines,
+    ...(truncated ? { truncated: true } : {}),
+    ...(typeof nextFrom === "number" ? { nextFrom } : {}),
+  };
 }
 
 export async function memorySearchSessionsIndexDb(params: {
@@ -171,9 +276,9 @@ export async function memoryGetSessionFromIndexDb(params: {
     return null;
   }
 
-  const chunks = await params.pool.query<{ text: string }>(
+  const chunks = await params.pool.query<{ text: string; start_line: number }>(
     `
-    SELECT text
+    SELECT text, start_line
     FROM session_index_chunks
     WHERE file_id = $1
     ORDER BY chunk_index ASC
@@ -184,9 +289,11 @@ export async function memoryGetSessionFromIndexDb(params: {
     return null;
   }
 
-  const content = chunks.rows.map((row: { text: string }) => row.text).join("\n");
-  return buildMemoryReadResult({
-    content,
+  return buildIndexedSessionReadResult({
+    chunks: chunks.rows.map((row: { text: string; start_line: number }) => ({
+      text: row.text,
+      startLine: row.start_line,
+    })),
     relPath: normalizedPath,
     from: params.fromLine,
     lines: params.lineCount,

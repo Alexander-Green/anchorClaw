@@ -100,6 +100,7 @@ export type AnchorClawMemorySearchManagerOptions = {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   ensureReady: () => Promise<void>;
+  ensureSessionsIndexBootstrapped?: () => Promise<void>;
   getPool: () => PostgresPool;
   agentId: string;
   purpose?: "default" | "status" | "cli";
@@ -204,6 +205,9 @@ export function createAnchorClawMemorySearchManager(
       }
 
       if (effectiveSources.includes("sessions")) {
+        if (typeof params.ensureSessionsIndexBootstrapped === "function") {
+          await params.ensureSessionsIndexBootstrapped();
+        }
         const indexedSessionHits = await memorySearchSessionsIndexDb({
           pool: params.getPool(),
           userId: scope.userId,

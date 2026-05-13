@@ -12,6 +12,18 @@ function splitIndexedLines(content: string): string[] {
   return content.split("\n");
 }
 
+function getAgentIdFromSessionPath(sessionPath: string): string | null {
+  const normalized = normalizeSessionLookupPath(sessionPath);
+  if (!normalized) {
+    return null;
+  }
+  return normalized.split("/")[1] ?? null;
+}
+
+function buildAgentPathPrefix(agentId: string): string {
+  return `sessions/${agentId}/%`;
+}
+
 async function normalizeTargetSessionFiles(params: {
   sessionFiles?: string[];
   agentId: string;
@@ -74,6 +86,7 @@ export async function syncSessionsIndexDb(params: {
       skippedFiles += 1;
       continue;
     }
+    const entryAgentId = getAgentIdFromSessionPath(entry.path) ?? params.agentId;
 
     const probe = await params.pool.query<{ id: string; hash: string }>(
       `
@@ -130,7 +143,7 @@ export async function syncSessionsIndexDb(params: {
         [
           params.userId,
           params.workspaceId,
-          params.agentId,
+          entryAgentId,
           entry.path,
           absPath,
           entry.hash,
@@ -176,7 +189,7 @@ export async function syncSessionsIndexDb(params: {
             params.userId,
             params.workspaceId,
             fileId,
-            params.agentId,
+            entryAgentId,
             entry.path,
             idx,
             mappedLine,
@@ -209,9 +222,9 @@ export async function syncSessionsIndexDb(params: {
       FROM session_index_files
       WHERE user_id = $1
         AND workspace_id = $2
-        AND agent_id = $3
+        AND path LIKE $3
     `,
-      [params.userId, params.workspaceId, params.agentId],
+      [params.userId, params.workspaceId, buildAgentPathPrefix(params.agentId)],
     );
     for (const row of existingRows.rows) {
       const pathValue = row.path;

@@ -76,7 +76,13 @@ describe("memoryGetFromDb sessions visibility", () => {
   });
 
   it("reads indexed sessions content for current agent", async () => {
-    const pool = createPool([[{ id: "f1" }], [{ text: "User: hello" }, { text: "Assistant: hi" }]]);
+    const pool = createPool([
+      [{ id: "f1" }],
+      [
+        { text: "User: hello", start_line: 3 },
+        { text: "Assistant: hi", start_line: 7 },
+      ],
+    ]);
     const got = await memoryGetFromDb({
       pool,
       userId: "u1",

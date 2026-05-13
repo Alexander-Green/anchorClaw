@@ -11,7 +11,7 @@ import { memoryStoreDb } from "./memory/store.js";
 import { memoryForgetDb } from "./memory/forget.js";
 import { memoryRecallDb } from "./memory/recall.js";
 import { buildPromptMemorySection, queryPromptMemoryItems } from "./memory/prompt.js";
-import { memorySearchSessions } from "./memory/sessions.js";
+import { listKnownAgentIds, memorySearchSessions } from "./memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
 import { syncSessionsIndexDb } from "./memory/sessions-index-sync.js";
 import {
@@ -20,6 +20,7 @@ import {
 } from "./memory/manager.js";
 import { runOneTimeWorkspaceImport } from "./importer.js";
 import { getIdentityStartupWarning } from "./identity-policy.js";
+import { listSessionFilesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 
 function resolveActor(api: OpenClawPluginApi): string {
   const agentId = (api as any)?.runtime?.agentId;
@@ -101,6 +102,18 @@ export default definePluginEntry({
     let promptCacheError: string | null = null;
     let promptCacheRefreshPromise: Promise<void> | null = null;
     let sessionsIndexBootstrapPromise: Promise<void> | null = null;
+    let sessionsIndexBootstrapped = false;
+    const buildVisibleBootstrapSessionFiles = async (): Promise<string[]> => {
+      const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
+      const agentIds = await listKnownAgentIds();
+      const orderedAgentIds = [currentAgentId, ...agentIds.filter((agentId) => agentId !== currentAgentId)];
+      const out: string[] = [];
+      for (const agentId of orderedAgentIds) {
+        const files = await listSessionFilesForAgent(agentId);
+        out.push(...files);
+      }
+      return out;
+    };
     const refreshPromptCache = () => {
       if (!cfg) {
         promptCacheLines = null;
@@ -157,6 +170,9 @@ export default definePluginEntry({
       if ((cfg.sessions?.visibility ?? "current") === "off") {
         return;
       }
+      if (sessionsIndexBootstrapped) {
+        return;
+      }
       if (sessionsIndexBootstrapPromise) {
         await sessionsIndexBootstrapPromise;
         return;
@@ -171,16 +187,25 @@ export default definePluginEntry({
             sessionKey: (api as any)?.runtime?.sessionKey,
             configuredExternalId: cfg?.identity?.externalId,
           });
+          const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
+          const sessionFiles =
+            (cfg.sessions?.visibility ?? "current") === "visible"
+              ? await buildVisibleBootstrapSessionFiles()
+              : undefined;
           await syncSessionsIndexDb({
             pool: getPool(),
             userId: scope.userId,
             workspaceId: scope.workspaceId,
-            agentId: String((api as any)?.runtime?.agentId ?? "main"),
+            agentId: currentAgentId,
+            ...(sessionFiles ? { sessionFiles } : {}),
           });
+          sessionsIndexBootstrapped = true;
         } catch (error) {
           api.logger.warn(
             `anchorclaw: sessions index bootstrap failed (${error instanceof Error ? error.message : String(error)})`,
           );
+        } finally {
+          sessionsIndexBootstrapPromise = null;
         }
       })();
       await sessionsIndexBootstrapPromise;
@@ -215,6 +240,7 @@ export default definePluginEntry({
             agentId: (api as any)?.runtime?.agentId,
             sessionKey: (api as any)?.runtime?.sessionKey,
           });
+          refreshPromptCache();
         } catch (error) {
           api.logger.warn(
             `anchorclaw: workspace import failed (${error instanceof Error ? error.message : String(error)})`,
@@ -293,6 +319,7 @@ export default definePluginEntry({
               api,
               cfg: cfg!,
               ensureReady,
+              ensureSessionsIndexBootstrapped,
               getPool,
               agentId: params.agentId,
               purpose: params.purpose,

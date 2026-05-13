@@ -42,14 +42,17 @@ export async function applyMigrations(params: {
       continue;
     }
 
-    await params.pool.query("BEGIN");
+    const client = await params.pool.connect();
     try {
-      await params.pool.query(migration.sql);
-      await params.pool.query("INSERT INTO schema_migrations (id) VALUES ($1)", [id]);
-      await params.pool.query("COMMIT");
+      await client.query("BEGIN");
+      await client.query(migration.sql);
+      await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [id]);
+      await client.query("COMMIT");
     } catch (error) {
-      await params.pool.query("ROLLBACK");
+      await client.query("ROLLBACK");
       throw error;
+    } finally {
+      client.release();
     }
     appliedNow.push(id);
   }

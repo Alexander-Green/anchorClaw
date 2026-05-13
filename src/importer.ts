@@ -142,15 +142,32 @@ async function ensureImportRecorded(params: {
   if (existing.rows[0]?.id) {
     return false;
   }
-  await params.pool.query(
+  const inserted = await params.pool.query<{ id: string }>(
     `
     INSERT INTO memory_import_files (user_id, workspace_id, rel_path, sha256, source_type, metadata)
     VALUES ($1, $2, $3, $4, $5, $6::jsonb)
     ON CONFLICT (user_id, workspace_id, rel_path, sha256) DO NOTHING
+    RETURNING id
   `,
     [params.userId, params.workspaceId, params.relPath, params.sha256, params.sourceType, JSON.stringify(params.metadata)],
   );
-  return true;
+  return inserted.rows.length > 0;
+}
+
+async function removeImportRecord(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+  relPath: string;
+  sha256: string;
+}): Promise<void> {
+  await params.pool.query(
+    `
+    DELETE FROM memory_import_files
+    WHERE user_id = $1 AND workspace_id = $2 AND rel_path = $3 AND sha256 = $4
+  `,
+    [params.userId, params.workspaceId, params.relPath, params.sha256],
+  );
 }
 
 async function importMemoryMd(params: {
@@ -193,6 +210,7 @@ async function importMemoryMd(params: {
   }
 
   const items = parseMemoryMdToItems({ content, relPath });
+  let importFailed = false;
   for (const item of items) {
     const stored = await memoryStoreDb({
       pool: params.pool,
@@ -210,8 +228,19 @@ async function importMemoryMd(params: {
       },
     });
     if (!stored.ok) {
+      importFailed = true;
       params.api.logger.warn(`anchorclaw: MEMORY.md import item failed (${stored.error})`);
     }
+  }
+  if (importFailed) {
+    await removeImportRecord({
+      pool: params.pool,
+      userId: scope.userId,
+      workspaceId: scope.workspaceId,
+      relPath,
+      sha256: digest,
+    });
+    return;
   }
 
   if (params.cfg.import?.cleanupMemoryMdAfterImport) {
@@ -303,22 +332,35 @@ async function importDailyMemory(params: {
     }
 
     // MVP: store the whole file as a single import event.
-    const inserted = await params.pool.query<{ id: string }>(
-      `
-      INSERT INTO memory_events (user_id, workspace_id, event_type, content, metadata, tags, created_by)
-      VALUES ($1, $2, 'import', $3, $4::jsonb, '{}'::text[], $5)
-      RETURNING id
-    `,
-      [
-        scope.userId,
-        scope.workspaceId,
-        content,
-        JSON.stringify({ legacy_file: relPath, legacy_sha256: digest }),
-        "anchorclaw-import",
-      ],
-    );
-    if (!inserted.rows[0]?.id) {
-      params.api.logger.warn(`anchorclaw: failed to import ${relPath} into memory_events`);
+    try {
+      const inserted = await params.pool.query<{ id: string }>(
+        `
+        INSERT INTO memory_events (user_id, workspace_id, event_type, content, metadata, tags, created_by)
+        VALUES ($1, $2, 'import', $3, $4::jsonb, '{}'::text[], $5)
+        RETURNING id
+      `,
+        [
+          scope.userId,
+          scope.workspaceId,
+          content,
+          JSON.stringify({ legacy_file: relPath, legacy_sha256: digest }),
+          "anchorclaw-import",
+        ],
+      );
+      if (!inserted.rows[0]?.id) {
+        throw new Error(`failed to import ${relPath} into memory_events`);
+      }
+    } catch (error) {
+      await removeImportRecord({
+        pool: params.pool,
+        userId: scope.userId,
+        workspaceId: scope.workspaceId,
+        relPath,
+        sha256: digest,
+      });
+      params.api.logger.warn(
+        `anchorclaw: failed to import ${relPath} into memory_events (${error instanceof Error ? error.message : String(error)})`,
+      );
     }
   }
 }

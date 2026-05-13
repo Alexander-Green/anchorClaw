@@ -44,6 +44,21 @@ async function resolveStateDir(): Promise<string> {
   return newDir;
 }
 
+export async function listKnownAgentIds(): Promise<string[]> {
+  const stateDir = await resolveStateDir();
+  const agentsDir = path.join(stateDir, "agents");
+  try {
+    const dirents = await fs.readdir(agentsDir, { withFileTypes: true });
+    return dirents
+      .filter((dirent: { isDirectory(): boolean; name: string }) => dirent.isDirectory())
+      .map((dirent: { name: string }) => dirent.name)
+      .filter((name: string) => name.trim().length > 0)
+      .sort((left: string, right: string) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
+}
+
 export async function resolveSessionsDirForAgent(agentId?: string): Promise<string> {
   const stateDir = await resolveStateDir();
   const normalized = normalizeAgentId(agentId ?? "main");

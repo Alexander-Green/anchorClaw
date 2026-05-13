@@ -94,7 +94,10 @@ describe("memoryGetSessionFromIndexDb", () => {
   it("returns bounded excerpt from indexed chunks", async () => {
     const { pool } = createMockPool([
       [{ id: "file-1" }],
-      [{ text: "User: hello" }, { text: "Assistant: hi" }],
+      [
+        { text: "User: hello", start_line: 3 },
+        { text: "Assistant: hi", start_line: 7 },
+      ],
     ]);
     const got = await memoryGetSessionFromIndexDb({
       pool,
@@ -115,6 +118,40 @@ describe("memoryGetSessionFromIndexDb", () => {
     expect(got!.path).toBe("sessions/main/a.jsonl");
     expect(got!.text).toContain("User: hello");
     expect(got!.text).toContain("Assistant: hi");
+    expect(got!.from).toBe(3);
+  });
+
+  it("uses original session line numbers for fromLine/lineCount pagination", async () => {
+    const { pool } = createMockPool([
+      [{ id: "file-1" }],
+      [
+        { text: "User: very long", start_line: 3 },
+        { text: "continued", start_line: 3 },
+        { text: "Assistant: next", start_line: 7 },
+      ],
+    ]);
+    const got = await memoryGetSessionFromIndexDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      lookup: "sessions/main/a.jsonl",
+      fromLine: 3,
+      lineCount: 1,
+      limits: {
+        maxResults: 10,
+        getMaxChars: 12_000,
+        getDefaultLines: 120,
+        sessionsMaxFileBytes: 2_000_000,
+        sessionsWrapChars: 800,
+      },
+    });
+    expect(got).not.toBeNull();
+    expect(got!.from).toBe(3);
+    expect(got!.lines).toBe(1);
+    expect(got!.text).toContain("User: very long");
+    expect(got!.text).toContain("continued");
+    expect(got!.text).not.toContain("Assistant: next");
+    expect(got!.nextFrom).toBe(7);
   });
 });
 

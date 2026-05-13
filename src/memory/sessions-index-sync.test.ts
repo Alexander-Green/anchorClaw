@@ -130,6 +130,9 @@ describe("syncSessionsIndexDb", () => {
     expect(client.query).toHaveBeenCalled();
     expect(clientCalls.some((call) => call.sql.includes("BEGIN"))).toBe(true);
     expect(clientCalls.some((call) => call.sql.includes("COMMIT"))).toBe(true);
+    const staleProbe = calls.find((call) => call.sql.includes("SELECT path") && call.sql.includes("FROM session_index_files"));
+    expect(staleProbe?.sql).toContain("path LIKE $3");
+    expect(staleProbe?.args).toEqual(["u1", "w1", "sessions/main/%"]);
     const staleDelete = calls.find(
       (call) =>
         call.sql.includes("DELETE FROM session_index_files") &&
@@ -169,5 +172,38 @@ describe("syncSessionsIndexDb", () => {
     expect(calls.some((call) => call.sql.includes("SELECT path") && call.sql.includes("FROM session_index_files"))).toBe(
       false,
     );
+  });
+
+  it("stores agent_id from session path during cross-agent targeted sync", async () => {
+    resolveSessionsDirForAgent.mockResolvedValue("/root/.openclaw/agents/main/sessions");
+    buildSessionEntry.mockResolvedValueOnce({
+      path: "sessions/other/a.jsonl",
+      hash: "h4",
+      content: "User: ping",
+      lineMap: [3],
+      messageTimestampsMs: [3],
+      mtimeMs: 3,
+      size: 30,
+    });
+    const { pool, clientCalls } = createMockPool({
+      probeRows: [],
+      existingRows: [],
+    });
+
+    await syncSessionsIndexDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      agentId: "main",
+      sessionFiles: ["sessions/other/a.jsonl"],
+    });
+
+    const fileUpsert = clientCalls.find((call) => call.sql.includes("INSERT INTO session_index_files"));
+    expect(fileUpsert).toBeDefined();
+    expect(fileUpsert?.args[2]).toBe("other");
+
+    const chunkInsert = clientCalls.find((call) => call.sql.includes("INSERT INTO session_index_chunks"));
+    expect(chunkInsert).toBeDefined();
+    expect(chunkInsert?.args[3]).toBe("other");
   });
 });
