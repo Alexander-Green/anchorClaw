@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const listSessionFilesForAgent = vi.fn();
-const buildSessionEntry = vi.fn();
-const sessionPathForFile = vi.fn();
-const resolveSessionsDirForAgent = vi.fn();
+const {
+  listSessionFilesForAgent,
+  buildSessionEntry,
+  sessionPathForFile,
+  resolveSessionsDirForAgent,
+} = vi.hoisted(() => ({
+  listSessionFilesForAgent: vi.fn(),
+  buildSessionEntry: vi.fn(),
+  sessionPathForFile: vi.fn(),
+  resolveSessionsDirForAgent: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
   listSessionFilesForAgent,
@@ -164,4 +171,3 @@ describe("syncSessionsIndexDb", () => {
     );
   });
 });
-
