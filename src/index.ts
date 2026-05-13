@@ -273,7 +273,7 @@ export default definePluginEntry({
           "- Forget items with memory_forget({ lookup }) or memory_forget({ id }).",
           "",
           "Notes:",
-          "- memory_search supports corpus=\"memory\" (Postgres durable), corpus=\"sessions\" (best-effort transcript search), and corpus=\"all\" (merge). corpus=\"wiki\" is deferred; use wiki_search/wiki_get when installed.",
+          "- memory_search supports corpus=\"memory\" (Postgres durable), corpus=\"sessions\" (Postgres sessions index, DB-first), and corpus=\"all\" (merge). corpus=\"wiki\" is deferred; use wiki_search/wiki_get when installed.",
           "",
           ...cacheNotice,
           ...cached,
@@ -309,7 +309,7 @@ export default definePluginEntry({
       name: "memory_search",
       label: "Memory Search",
       description:
-        "Search memory.\n\nMVP rules:\n- corpus defaults to \"memory\" (durable items in Postgres).\n- corpus=\"sessions\" performs a best-effort search over session transcripts on disk and returns paths like sessions/<agentId>/<session>.jsonl...\n- Results contain synthetic paths. Use memory_get to read them.",
+        "Search memory.\n\nMVP rules:\n- corpus defaults to \"memory\" (durable items in Postgres).\n- corpus=\"sessions\" uses Postgres-backed sessions index (DB-first) and returns paths like sessions/<agentId>/<session>.jsonl.\n- Results contain synthetic paths. Use memory_get to read them.",
       parameters: {
         type: "object",
         additionalProperties: false,
