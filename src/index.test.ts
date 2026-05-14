@@ -409,6 +409,23 @@ describe("phase2 session delta listener", () => {
     );
   });
 
+  it("treats append without trailing newline as one pending message", async () => {
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockResolvedValueOnce({ size: 120 });
+    openFs.mockResolvedValue({
+      read: vi.fn(async () => ({ bytesRead: 10 })),
+      close: vi.fn(async () => undefined),
+    });
+    const { api, getTranscriptListener } = buildApi();
+    (plugin as any).register(api);
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/no-trailing-newline.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+  });
+
   it("carries pending delta overflow after sync instead of resetting to zero", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockResolvedValueOnce({ size: 10_000 }).mockResolvedValueOnce({ size: 10_100 });
@@ -448,6 +465,46 @@ describe("phase2 session delta listener", () => {
     expect(syncSessionsIndexDb).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionFiles: ["/tmp/agents/main/sessions/a.jsonl.reset.2026-05-14T10-00-00Z"],
+      }),
+    );
+  });
+
+  it("counts only usage-counted JSONL message records in mixed transcript appends", async () => {
+    isSessionFileForAgent.mockResolvedValue(true);
+    const chunk1 = [
+      '{"type":"header"}',
+      '{"type":"custom","value":"ignored"}',
+      '{"type":"metadata","value":"ignored"}',
+      "",
+    ].join("\n");
+    const chunk2 = '{"type":"message","role":"assistant","content":"counted"}\n';
+    const fullContent = `${chunk1}${chunk2}`;
+    const size1 = Buffer.byteLength(chunk1, "utf8");
+    const size2 = Buffer.byteLength(fullContent, "utf8");
+    statFs.mockResolvedValueOnce({ size: size1 }).mockResolvedValueOnce({ size: size2 });
+    openFs.mockResolvedValue({
+      read: vi.fn(async (buffer: Buffer, offset: number, length: number, position: number) => {
+        const start = Math.max(0, Math.min(fullContent.length, position ?? 0));
+        const end = Math.min(fullContent.length, start + length);
+        const chunk = Buffer.from(fullContent.slice(start, end), "utf8");
+        chunk.copy(buffer, offset, 0, chunk.length);
+        return { bytesRead: chunk.length };
+      }),
+      close: vi.fn(async () => undefined),
+    });
+    const { api, getTranscriptListener } = buildApi();
+    (plugin as any).register(api);
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/mixed.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/mixed.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFiles: ["/tmp/agents/main/sessions/mixed.jsonl"],
       }),
     );
   });
