@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   resolveScope,
   syncSessionsIndexDb,
+  syncVisibleSessionsIndexDb,
   listKnownAgentIds,
-  listSessionFilesForAgent,
   filterSessionHitsByVisibility,
   canAccessSessionPathByVisibility,
   memorySearchDb,
@@ -13,8 +13,8 @@ const {
 } = vi.hoisted(() => ({
   resolveScope: vi.fn(),
   syncSessionsIndexDb: vi.fn(async () => undefined),
+  syncVisibleSessionsIndexDb: vi.fn(async () => undefined),
   listKnownAgentIds: vi.fn(async () => [] as string[]),
-  listSessionFilesForAgent: vi.fn(async (_agentId: string) => [] as string[]),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   memorySearchDb: vi.fn(async () => []),
@@ -52,6 +52,7 @@ vi.mock("./sessions-index.js", () => ({
 
 vi.mock("./sessions-index-sync.js", () => ({
   syncSessionsIndexDb,
+  syncVisibleSessionsIndexDb,
 }));
 
 vi.mock("./get.js", () => ({
@@ -61,10 +62,6 @@ vi.mock("./get.js", () => ({
 vi.mock("./sessions-visibility.js", () => ({
   filterSessionHitsByVisibility,
   canAccessSessionPathByVisibility,
-}));
-
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
-  listSessionFilesForAgent,
 }));
 
 import { createAnchorClawMemorySearchManager } from "./manager.js";
@@ -80,9 +77,6 @@ beforeEach(() => {
 describe("createAnchorClawMemorySearchManager.sync", () => {
   it("in visible visibility syncs sessions for all known agents when sessionFiles are not provided", async () => {
     listKnownAgentIds.mockResolvedValueOnce(["main", "other"]);
-    listSessionFilesForAgent.mockImplementation(async (agentId: string) =>
-      agentId === "main" ? ["/state/agents/main/sessions/a.jsonl"] : ["/state/agents/other/sessions/b.jsonl"],
-    );
 
     const manager = createAnchorClawMemorySearchManager({
       api: {
@@ -102,16 +96,17 @@ describe("createAnchorClawMemorySearchManager.sync", () => {
 
     await manager.sync?.({ force: true });
 
-    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
-    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+    expect(syncVisibleSessionsIndexDb).toHaveBeenCalledTimes(1);
+    expect(syncVisibleSessionsIndexDb).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: "u1",
         workspaceId: "w1",
         agentId: "main",
         force: true,
-        sessionFiles: ["/state/agents/main/sessions/a.jsonl", "/state/agents/other/sessions/b.jsonl"],
+        otherAgentIds: ["other"],
       }),
     );
+    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
   });
 });
 

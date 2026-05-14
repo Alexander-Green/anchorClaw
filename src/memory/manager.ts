@@ -11,12 +11,11 @@ import {
   hasSessionsIndexRows,
   memorySearchSessionsIndexDb,
 } from "./sessions-index.js";
-import { syncSessionsIndexDb } from "./sessions-index-sync.js";
+import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "./sessions-index-sync.js";
 import { canAccessSessionPathByVisibility, filterSessionHitsByVisibility } from "./sessions-visibility.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listSessionFilesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 
 type MemorySource = "memory" | "sessions";
 
@@ -170,16 +169,10 @@ export function createAnchorClawMemorySearchManager(
     return null;
   };
 
-  const buildVisibleSessionFiles = async (): Promise<string[]> => {
+  const listVisibleAgentIds = async (): Promise<string[]> => {
     const currentAgentId = params.agentId;
     const agentIds = await listKnownAgentIds();
-    const orderedAgentIds = [currentAgentId, ...agentIds.filter((agentId) => agentId !== currentAgentId)];
-    const out: string[] = [];
-    for (const agentId of orderedAgentIds) {
-      const files = await listSessionFilesForAgent(agentId);
-      out.push(...files);
-    }
-    return out;
+    return [currentAgentId, ...agentIds.filter((agentId) => agentId !== currentAgentId)];
   };
 
   return {
@@ -434,17 +427,27 @@ export function createAnchorClawMemorySearchManager(
       const sessionFiles =
         Array.isArray(syncParams?.sessionFiles) && syncParams.sessionFiles.length > 0
           ? syncParams.sessionFiles
-          : sessionsVisibility === "visible"
-            ? await buildVisibleSessionFiles()
-            : undefined;
-      await syncSessionsIndexDb({
-        pool: params.getPool(),
-        userId: scope.userId,
-        workspaceId: scope.workspaceId,
-        agentId: params.agentId,
-        force: syncParams?.force === true,
-        ...(sessionFiles ? { sessionFiles } : {}),
-      });
+          : undefined;
+      if (!sessionFiles && sessionsVisibility === "visible") {
+        const visibleAgentIds = await listVisibleAgentIds();
+        await syncVisibleSessionsIndexDb({
+          pool: params.getPool(),
+          userId: scope.userId,
+          workspaceId: scope.workspaceId,
+          agentId: params.agentId,
+          otherAgentIds: visibleAgentIds.filter((agentId) => agentId !== params.agentId),
+          force: syncParams?.force === true,
+        });
+      } else {
+        await syncSessionsIndexDb({
+          pool: params.getPool(),
+          userId: scope.userId,
+          workspaceId: scope.workspaceId,
+          agentId: params.agentId,
+          force: syncParams?.force === true,
+          ...(sessionFiles ? { sessionFiles } : {}),
+        });
+      }
       if (typeof syncParams?.progress === "function") {
         syncParams.progress({ completed: 1, total: 1, label: "done" });
       }

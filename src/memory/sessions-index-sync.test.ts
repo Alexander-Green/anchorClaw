@@ -22,13 +22,14 @@ vi.mock("./sessions.js", () => ({
   resolveSessionsDirForAgent,
 }));
 
-import { syncSessionsIndexDb } from "./sessions-index-sync.js";
+import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "./sessions-index-sync.js";
 
 type QueryCall = { sql: string; args: unknown[] };
 
 function createMockPool(options: {
   probeRows?: Array<{ id: string; hash: string }>;
   existingRows?: Array<{ path: string }>;
+  existingRowsByPrefix?: Record<string, Array<{ path: string }>>;
   upsertId?: string;
 }) {
   const calls: QueryCall[] = [];
@@ -49,6 +50,9 @@ function createMockPool(options: {
       return { rows: options.probeRows ?? [] };
     }
     if (sql.includes("SELECT path") && sql.includes("FROM session_index_files")) {
+      if (typeof args[2] === "string" && options.existingRowsByPrefix?.[args[2] as string]) {
+        return { rows: options.existingRowsByPrefix[args[2] as string] ?? [] };
+      }
       return { rows: options.existingRows ?? [] };
     }
     return { rows: [] };
@@ -244,5 +248,64 @@ describe("syncSessionsIndexDb", () => {
     const callsForOther = resolveSessionsDirForAgent.mock.calls.filter((call) => call[0] === "other");
     expect(callsForMain).toHaveLength(1);
     expect(callsForOther).toHaveLength(1);
+  });
+
+  it("removes stale indexed files for each agent during visible full sync", async () => {
+    listSessionFilesForAgent.mockImplementation(async (agentId: string) =>
+      agentId === "main" ? ["/sessions/main-a.jsonl"] : ["/sessions/other-b.jsonl"],
+    );
+    sessionPathForFile.mockImplementation((value: string) => `/sdk/${value}`);
+    buildSessionEntry.mockResolvedValueOnce({
+      path: "sessions/main/a.jsonl",
+      hash: "main-hash",
+      content: "User: main",
+      lineMap: [1],
+      messageTimestampsMs: [1],
+      mtimeMs: 1,
+      size: 10,
+    });
+    buildSessionEntry.mockResolvedValueOnce({
+      path: "sessions/other/b.jsonl",
+      hash: "other-hash",
+      content: "User: other",
+      lineMap: [2],
+      messageTimestampsMs: [2],
+      mtimeMs: 2,
+      size: 20,
+    });
+    const { pool, calls } = createMockPool({
+      probeRows: [],
+      existingRowsByPrefix: {
+        "sessions/main/%": [{ path: "sessions/main/a.jsonl" }, { path: "sessions/main/stale.jsonl" }],
+        "sessions/other/%": [{ path: "sessions/other/b.jsonl" }, { path: "sessions/other/stale.jsonl" }],
+      },
+    });
+
+    const got = await syncVisibleSessionsIndexDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      agentId: "main",
+      otherAgentIds: ["other"],
+      force: true,
+    });
+
+    expect(got).toEqual({
+      indexedFiles: 2,
+      updatedFiles: 0,
+      skippedFiles: 0,
+      removedFiles: 2,
+    });
+    expect(listSessionFilesForAgent).toHaveBeenCalledTimes(2);
+    expect(listSessionFilesForAgent).toHaveBeenNthCalledWith(1, "main");
+    expect(listSessionFilesForAgent).toHaveBeenNthCalledWith(2, "other");
+    expect(
+      calls.filter(
+        (call) =>
+          call.sql.includes("DELETE FROM session_index_files") &&
+          Array.isArray(call.args) &&
+          (call.args[2] === "sessions/main/stale.jsonl" || call.args[2] === "sessions/other/stale.jsonl"),
+      ),
+    ).toHaveLength(2);
   });
 });

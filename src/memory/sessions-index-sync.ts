@@ -262,3 +262,48 @@ export async function syncSessionsIndexDb(params: {
     removedFiles,
   };
 }
+
+export async function syncVisibleSessionsIndexDb(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+  agentId: string;
+  otherAgentIds?: string[];
+  force?: boolean;
+}): Promise<{
+  indexedFiles: number;
+  updatedFiles: number;
+  skippedFiles: number;
+  removedFiles: number;
+}> {
+  const orderedAgentIds = [
+    params.agentId,
+    ...(params.otherAgentIds ?? []).filter((agentId) => agentId !== params.agentId),
+  ];
+
+  let indexedFiles = 0;
+  let updatedFiles = 0;
+  let skippedFiles = 0;
+  let removedFiles = 0;
+
+  for (const agentId of orderedAgentIds) {
+    const result = await syncSessionsIndexDb({
+      pool: params.pool,
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      agentId,
+      force: params.force,
+    });
+    indexedFiles += result.indexedFiles;
+    updatedFiles += result.updatedFiles;
+    skippedFiles += result.skippedFiles;
+    removedFiles += result.removedFiles;
+  }
+
+  return {
+    indexedFiles,
+    updatedFiles,
+    skippedFiles,
+    removedFiles,
+  };
+}

@@ -11,6 +11,7 @@ const {
   queryPromptItems,
   buildPromptSection,
   syncSessionsIndexDb,
+  syncVisibleSessionsIndexDb,
   runImport,
   getIdentityWarning,
   isSessionFileForAgent,
@@ -18,6 +19,7 @@ const {
   memoryGetFromDb,
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
+  statFs,
 } = vi.hoisted(() => ({
   registerMemoryCapability: vi.fn(),
   definePluginEntry: vi.fn((entry: unknown) => entry),
@@ -34,6 +36,12 @@ const {
     skippedFiles: 0,
     removedFiles: 0,
   })),
+  syncVisibleSessionsIndexDb: vi.fn(async () => ({
+    indexedFiles: 0,
+    updatedFiles: 0,
+    skippedFiles: 0,
+    removedFiles: 0,
+  })),
   runImport: vi.fn(async () => undefined),
   getIdentityWarning: vi.fn(() => null),
   isSessionFileForAgent: vi.fn(async () => true),
@@ -41,6 +49,7 @@ const {
   memoryGetFromDb: vi.fn(),
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
+  statFs: vi.fn(async () => ({ size: 0 })),
 }));
 
 vi.mock("./api.js", () => ({
@@ -100,11 +109,17 @@ vi.mock("./memory/sessions-index.js", () => ({
 
 vi.mock("./memory/sessions-index-sync.js", () => ({
   syncSessionsIndexDb,
+  syncVisibleSessionsIndexDb,
 }));
 
 vi.mock("./memory/sessions-visibility.js", () => ({
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
+}));
+
+vi.mock("node:fs/promises", () => ({
+  default: { stat: statFs },
+  stat: statFs,
 }));
 
 vi.mock("./memory/manager.js", () => ({
@@ -225,6 +240,7 @@ function buildApiLegacyLifecycle() {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  statFs.mockResolvedValue({ size: 0 });
   parseCfg.mockReturnValue({
     postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
     sessions: { visibility: "current" },
@@ -274,6 +290,7 @@ describe("phase2 session delta listener", () => {
 
   it("batches transcript updates into one debounce sync", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockRejectedValue(new Error("ENOENT"));
     const { api, getTranscriptListener } = buildApi();
     (plugin as any).register(api);
 
@@ -317,6 +334,7 @@ describe("phase2 session delta listener", () => {
     });
     isSessionFileForAgent.mockResolvedValue(false);
     isSessionFileForAnyKnownAgent.mockResolvedValue(true);
+    statFs.mockRejectedValue(new Error("ENOENT"));
     const { api, getTranscriptListener } = buildApi();
     (plugin as any).register(api);
 
@@ -329,6 +347,60 @@ describe("phase2 session delta listener", () => {
     expect(syncSessionsIndexDb).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionFiles: ["/tmp/agents/other/sessions/a.jsonl"],
+      }),
+    );
+  });
+
+  it("does not sync when transcript deltas stay below thresholds", async () => {
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockResolvedValue({ size: 100 });
+    const { api, getTranscriptListener } = buildApi();
+    (plugin as any).register(api);
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+  });
+
+  it("syncs after message threshold is reached for repeated updates", async () => {
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs
+      .mockResolvedValueOnce({ size: 100 })
+      .mockResolvedValueOnce({ size: 150 });
+    const { api, getTranscriptListener } = buildApi();
+    (plugin as any).register(api);
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFiles: ["/tmp/agents/main/sessions/a.jsonl"],
+      }),
+    );
+  });
+
+  it("bypasses thresholds for reset/deleted archive artifacts", async () => {
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockRejectedValueOnce(new Error("ENOENT"));
+    const { api, getTranscriptListener } = buildApi();
+    (plugin as any).register(api);
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl.reset.2026-05-14T10-00-00Z" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFiles: ["/tmp/agents/main/sessions/a.jsonl.reset.2026-05-14T10-00-00Z"],
       }),
     );
   });
@@ -417,5 +489,133 @@ describe("phase2 session delta listener", () => {
     expect(api.logger.warn).toHaveBeenCalledWith(
       "anchorclaw: no runtime lifecycle registration API available; listener cleanup on reload/disable is unavailable",
     );
+  });
+
+  it("returns degraded details when memory_search hits sdk/runtime error", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "visible" },
+      identity: { externalId: "test" },
+    });
+    filterSessionHitsByVisibility.mockRejectedValueOnce(new Error("visibility helper failed"));
+    const { api } = buildApi();
+    (plugin as any).register(api);
+
+    const searchRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_search");
+    expect(searchRegistration).toBeDefined();
+
+    const result = await searchRegistration.execute("toolcall-search-1", {
+      query: "needle",
+      corpus: "sessions",
+    });
+    expect(result.content[0].text).toContain("memory_search degraded");
+    expect(result.details).toMatchObject({
+      degraded: true,
+      degradedReason: "sdk_error",
+    });
+    expect(result.details.sdk).toMatchObject({
+      degraded: true,
+      affectedOperation: "memory_search:sessions",
+    });
+  });
+
+  it("recovers sdk degraded state after consecutive successful operations", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "visible" },
+      identity: { externalId: "test" },
+    });
+    filterSessionHitsByVisibility.mockRejectedValueOnce(new Error("visibility helper failed"));
+    memoryGetFromDb.mockResolvedValue({
+      ok: true,
+      corpus: "sessions",
+      path: "sessions/main/a.jsonl",
+      kind: "session",
+      content: "ok",
+      fromLine: 1,
+      lineCount: 1,
+    });
+    const { api } = buildApi();
+    (plugin as any).register(api);
+
+    const searchRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_search");
+    const getRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_get");
+    expect(searchRegistration).toBeDefined();
+    expect(getRegistration).toBeDefined();
+
+    const degraded = await searchRegistration.execute("toolcall-search-2", {
+      query: "needle",
+      corpus: "sessions",
+    });
+    expect(degraded.details.degraded).toBe(true);
+
+    await getRegistration.execute("toolcall-get-1", { lookup: "sessions/main/a.jsonl" });
+    await getRegistration.execute("toolcall-get-2", { lookup: "sessions/main/a.jsonl" });
+    await getRegistration.execute("toolcall-get-3", { lookup: "sessions/main/a.jsonl" });
+
+    const healthy = await searchRegistration.execute("toolcall-search-3", {
+      query: "needle",
+      corpus: "memory",
+    });
+    expect(healthy.details.degraded).toBeUndefined();
+
+    const capability = registerMemoryCapability.mock.calls[0]?.[1];
+    const lines = capability?.promptBuilder?.({ availableTools: new Set(["memory_search", "memory_get"]) }) ?? [];
+    const hasSdkDegradedNotice = lines.some(
+      (line: string) => typeof line === "string" && line.includes("sessions SDK is degraded"),
+    );
+    expect(hasSdkDegradedNotice).toBe(false);
+  });
+
+  it("exposes sdk health via memory_status tool", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "visible" },
+      identity: { externalId: "test" },
+    });
+    filterSessionHitsByVisibility.mockRejectedValueOnce(new Error("visibility helper failed"));
+    memoryGetFromDb.mockResolvedValue({
+      ok: true,
+      corpus: "sessions",
+      path: "sessions/main/a.jsonl",
+      kind: "session",
+      content: "ok",
+      fromLine: 1,
+      lineCount: 1,
+    });
+    const { api } = buildApi();
+    (plugin as any).register(api);
+
+    const searchRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_search");
+    const getRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_get");
+    const statusRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_status");
+    expect(searchRegistration).toBeDefined();
+    expect(getRegistration).toBeDefined();
+    expect(statusRegistration).toBeDefined();
+
+    await searchRegistration.execute("toolcall-search-status-1", {
+      query: "needle",
+      corpus: "sessions",
+    });
+    const degraded = await statusRegistration.execute("toolcall-status-1", {});
+    expect(degraded.details.sdk.degraded).toBe(true);
+
+    await getRegistration.execute("toolcall-get-status-1", { lookup: "sessions/main/a.jsonl" });
+    await getRegistration.execute("toolcall-get-status-2", { lookup: "sessions/main/a.jsonl" });
+    await getRegistration.execute("toolcall-get-status-3", { lookup: "sessions/main/a.jsonl" });
+    const healthy = await statusRegistration.execute("toolcall-status-2", {});
+    expect(healthy.details.sdk.degraded).toBe(false);
   });
 });

@@ -18,7 +18,7 @@ import {
   memorySearchSessions,
 } from "./memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
-import { syncSessionsIndexDb } from "./memory/sessions-index-sync.js";
+import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "./memory/sessions-index-sync.js";
 import {
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
@@ -29,8 +29,9 @@ import {
 } from "./memory/manager.js";
 import { runOneTimeWorkspaceImport } from "./importer.js";
 import { getIdentityStartupWarning } from "./identity-policy.js";
-import { listSessionFilesForAgent, sessionPathForFile } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { sessionPathForFile } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { normalizeSessionLookupPath } from "./memory/sessions-index.js";
+import fs from "node:fs/promises";
 
 function resolveActor(api: OpenClawPluginApi): string {
   const agentId = (api as any)?.runtime?.agentId;
@@ -45,6 +46,28 @@ function resolveActor(api: OpenClawPluginApi): string {
 }
 
 const SESSION_DELTA_DEBOUNCE_MS = 5_000;
+const SESSION_DELTA_BYTES_THRESHOLD = 4_096;
+const SESSION_DELTA_MESSAGES_THRESHOLD = 2;
+const SDK_RECOVERY_SUCCESS_THRESHOLD = 3;
+
+type SessionDeltaState = {
+  lastSize: number;
+  pendingBytes: number;
+  pendingMessages: number;
+};
+
+type SdkHealthState = {
+  degraded: boolean;
+  reason?: string;
+  affectedOperation?: string;
+  lastErrorAt?: string;
+  consecutiveSuccesses: number;
+};
+
+function isSessionArchiveArtifactPath(sessionFile: string): boolean {
+  const fileName = sessionFile.replaceAll("\\", "/").split("/").pop() ?? "";
+  return /\.jsonl\.(reset|deleted)\./i.test(fileName);
+}
 
 export default definePluginEntry({
   id: "anchorclaw",
@@ -121,16 +144,36 @@ export default definePluginEntry({
     let sessionDeltaUnsubscribe: (() => void) | null = null;
     let sessionDeltaClosed = false;
     const ignoredSessionDeltaPathCounts = new Map<string, number>();
-    const buildVisibleBootstrapSessionFiles = async (): Promise<string[]> => {
+    const sessionDeltaStateByPath = new Map<string, SessionDeltaState>();
+    const sdkHealth: SdkHealthState = {
+      degraded: false,
+      consecutiveSuccesses: 0,
+    };
+    const markSdkError = (operation: string, error: unknown) => {
+      sdkHealth.degraded = true;
+      sdkHealth.consecutiveSuccesses = 0;
+      sdkHealth.affectedOperation = operation;
+      sdkHealth.reason = error instanceof Error ? error.message : String(error);
+      sdkHealth.lastErrorAt = new Date().toISOString();
+    };
+    const markSdkSuccess = () => {
+      if (!sdkHealth.degraded) {
+        return;
+      }
+      sdkHealth.consecutiveSuccesses += 1;
+      if (sdkHealth.consecutiveSuccesses < SDK_RECOVERY_SUCCESS_THRESHOLD) {
+        return;
+      }
+      sdkHealth.degraded = false;
+      sdkHealth.reason = undefined;
+      sdkHealth.affectedOperation = undefined;
+      sdkHealth.lastErrorAt = undefined;
+      sdkHealth.consecutiveSuccesses = 0;
+    };
+    const listVisibleAgentIds = async (): Promise<string[]> => {
       const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
       const agentIds = await listKnownAgentIds();
-      const orderedAgentIds = [currentAgentId, ...agentIds.filter((agentId) => agentId !== currentAgentId)];
-      const out: string[] = [];
-      for (const agentId of orderedAgentIds) {
-        const files = await listSessionFilesForAgent(agentId);
-        out.push(...files);
-      }
-      return out;
+      return [currentAgentId, ...agentIds.filter((agentId) => agentId !== currentAgentId)];
     };
     const refreshPromptCache = () => {
       if (!cfg) {
@@ -206,17 +249,23 @@ export default definePluginEntry({
             configuredExternalId: cfg?.identity?.externalId,
           });
           const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
-          const sessionFiles =
-            (cfg.sessions?.visibility ?? "current") === "visible"
-              ? await buildVisibleBootstrapSessionFiles()
-              : undefined;
-          await syncSessionsIndexDb({
-            pool: getPool(),
-            userId: scope.userId,
-            workspaceId: scope.workspaceId,
-            agentId: currentAgentId,
-            ...(sessionFiles ? { sessionFiles } : {}),
-          });
+          if ((cfg.sessions?.visibility ?? "current") === "visible") {
+            const visibleAgentIds = await listVisibleAgentIds();
+            await syncVisibleSessionsIndexDb({
+              pool: getPool(),
+              userId: scope.userId,
+              workspaceId: scope.workspaceId,
+              agentId: currentAgentId,
+              otherAgentIds: visibleAgentIds.filter((agentId) => agentId !== currentAgentId),
+            });
+          } else {
+            await syncSessionsIndexDb({
+              pool: getPool(),
+              userId: scope.userId,
+              workspaceId: scope.workspaceId,
+              agentId: currentAgentId,
+            });
+          }
           sessionsIndexBootstrapped = true;
         } catch (error) {
           api.logger.warn(
@@ -250,10 +299,51 @@ export default definePluginEntry({
 
       const batch = Array.from(pendingSessionDeltaFiles);
       pendingSessionDeltaFiles.clear();
+      const dirtyFiles: string[] = [];
+      for (const sessionFile of batch) {
+        if (isSessionArchiveArtifactPath(sessionFile)) {
+          dirtyFiles.push(sessionFile);
+          continue;
+        }
+        let statSize: number | null = null;
+        try {
+          const stat = await fs.stat(sessionFile);
+          statSize = typeof stat.size === "number" ? stat.size : null;
+        } catch {
+          // If stat is unavailable, keep previous behavior and allow targeted sync.
+          dirtyFiles.push(sessionFile);
+        }
+        if (statSize === null) {
+          continue;
+        }
+        const prev = sessionDeltaStateByPath.get(sessionFile) ?? {
+          lastSize: 0,
+          pendingBytes: 0,
+          pendingMessages: 0,
+        };
+        const deltaBytes = statSize >= prev.lastSize ? statSize - prev.lastSize : statSize;
+        const pendingBytes = prev.pendingBytes + Math.max(0, deltaBytes);
+        const pendingMessages = prev.pendingMessages + (deltaBytes > 0 ? 1 : 0);
+        sessionDeltaStateByPath.set(sessionFile, {
+          lastSize: statSize,
+          pendingBytes,
+          pendingMessages,
+        });
+        if (
+          pendingBytes >= SESSION_DELTA_BYTES_THRESHOLD ||
+          pendingMessages >= SESSION_DELTA_MESSAGES_THRESHOLD
+        ) {
+          dirtyFiles.push(sessionFile);
+        }
+      }
+      if (dirtyFiles.length === 0) {
+        return;
+      }
+
       sessionDeltaSyncInFlight = (async () => {
         try {
           api.logger.info(
-            `anchorclaw: sessions delta flush start (batch=${batch.length}, visibility=${cfg.sessions?.visibility ?? "current"})`,
+            `anchorclaw: sessions delta flush start (batch=${batch.length}, dirty=${dirtyFiles.length}, visibility=${cfg.sessions?.visibility ?? "current"})`,
           );
           await ensureReady();
           const scope = await resolveUserAndWorkspaceScope({
@@ -269,10 +359,21 @@ export default definePluginEntry({
             userId: scope.userId,
             workspaceId: scope.workspaceId,
             agentId: currentAgentId,
-            sessionFiles: batch,
+            sessionFiles: dirtyFiles,
           });
+          for (const sessionFile of dirtyFiles) {
+            const state = sessionDeltaStateByPath.get(sessionFile);
+            if (!state) {
+              continue;
+            }
+            sessionDeltaStateByPath.set(sessionFile, {
+              lastSize: state.lastSize,
+              pendingBytes: 0,
+              pendingMessages: 0,
+            });
+          }
           api.logger.info(
-            `anchorclaw: sessions delta flush done (batch=${batch.length}, agent=${currentAgentId})`,
+            `anchorclaw: sessions delta flush done (batch=${batch.length}, dirty=${dirtyFiles.length}, agent=${currentAgentId})`,
           );
         } catch (error) {
           api.logger.warn(
@@ -463,6 +564,7 @@ export default definePluginEntry({
           sessionDeltaTimer = null;
         }
         pendingSessionDeltaFiles.clear();
+        sessionDeltaStateByPath.clear();
         if (sessionDeltaUnsubscribe) {
           try {
             sessionDeltaUnsubscribe();
@@ -489,6 +591,12 @@ export default definePluginEntry({
           : cached.length === 0
             ? ["[AnchorClaw durable memory cache is warming up...]", ""]
             : [];
+        const sdkNotice = sdkHealth.degraded
+          ? [
+              `[AnchorClaw sessions SDK is degraded: ${sdkHealth.reason ?? "unknown error"}; operation=${sdkHealth.affectedOperation ?? "unknown"}]`,
+              "",
+            ]
+          : [];
 
         const hasMemorySearch = Boolean(params?.availableTools?.has?.("memory_search"));
         const hasMemoryGet = Boolean(params?.availableTools?.has?.("memory_get"));
@@ -527,6 +635,7 @@ export default definePluginEntry({
           "- memory_search supports corpus=\"memory\" (Postgres durable), corpus=\"sessions\" (Postgres sessions index, DB-first), and corpus=\"all\" (merge). corpus=\"wiki\" is deferred; use wiki_search/wiki_get when installed.",
           "",
           ...cacheNotice,
+          ...sdkNotice,
           ...cached,
         ];
       },
@@ -554,6 +663,40 @@ export default definePluginEntry({
         resolveMemoryBackendConfig(_params: { cfg: any; agentId: string }) {
           return { backend: "builtin" as const };
         },
+      },
+    });
+
+    api.registerTool({
+      name: "memory_status",
+      label: "Memory Status",
+      description:
+        "Return runtime health state for AnchorClaw memory operations.\n\nMVP rules:\n- Use this for operator diagnostics.\n- It reports SDK degraded state without exposing secrets.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      async execute(_toolCallId: string, _params: unknown) {
+        if (disabledReason) {
+          return {
+            content: [{ type: "text", text: `anchorclaw: disabled until configured (${disabledReason})` }],
+            details: { disabled: true, error: disabledReason },
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: sdkHealth.degraded
+                ? `AnchorClaw memory is degraded (${sdkHealth.reason ?? "unknown error"}).`
+                : "AnchorClaw memory is healthy.",
+            },
+          ],
+          details: {
+            ok: true,
+            sdk: { ...sdkHealth },
+          },
+        };
       },
     });
 
@@ -614,118 +757,134 @@ export default definePluginEntry({
           };
         }
         let hits: any[] = [];
-        if (trimmedCorpus === "sessions") {
-          if (!sessionsEnabled) {
-            return {
-              content: [{ type: "text", text: "anchorclaw: sessions corpus is disabled by config (sessions.visibility=off)" }],
-              details: { disabled: true, error: "sessions corpus disabled", visibility: sessionsVisibility },
-            };
-          }
-          await ensureSessionsIndexBootstrapped();
-          const indexedHits = await memorySearchSessionsIndexDb({
-            pool: getPool(),
-            userId: scope.userId,
-            workspaceId: scope.workspaceId,
-            limits,
-            query,
-            maxResults: effectiveMax,
-            ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
-          });
-          if (indexedHits.length > 0) {
-            hits = indexedHits;
-          } else {
-            const hasIndex = await hasSessionsIndexRows({
-              pool: getPool(),
-              userId: scope.userId,
-              workspaceId: scope.workspaceId,
-              ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
-            });
-            hits = hasIndex
-              ? []
-              : await memorySearchSessions({
-                  query,
-                  maxResults: effectiveMax,
-                  agentId: (api as any)?.runtime?.agentId,
-                  limits,
-                });
-          }
-          if (sessionsVisibility === "visible") {
-            hits = await filterSessionHitsByVisibility({ api, hits });
-          }
-        } else if (trimmedCorpus === "memory") {
-          hits = await memorySearchDb({
-            pool: getPool(),
-            userId: scope.userId,
-            workspaceId: scope.workspaceId,
-            limits,
-            query,
-            ...(typeof maxResults === "number" ? { maxResults } : {}),
-          });
-        } else if (trimmedCorpus === "all") {
-          if (sessionsEnabled) {
+        try {
+          if (trimmedCorpus === "sessions") {
+            if (!sessionsEnabled) {
+              return {
+                content: [{ type: "text", text: "anchorclaw: sessions corpus is disabled by config (sessions.visibility=off)" }],
+                details: { disabled: true, error: "sessions corpus disabled", visibility: sessionsVisibility },
+              };
+            }
             await ensureSessionsIndexBootstrapped();
-          }
-          const merged = [
-            ...(await memorySearchDb({
+            const indexedHits = await memorySearchSessionsIndexDb({
               pool: getPool(),
               userId: scope.userId,
               workspaceId: scope.workspaceId,
               limits,
               query,
               maxResults: effectiveMax,
-            })),
-            ...(sessionsEnabled
-              ? await memorySearchSessionsIndexDb({
-                  pool: getPool(),
-                  userId: scope.userId,
-                  workspaceId: scope.workspaceId,
-                  limits,
-                  query,
-                  maxResults: effectiveMax,
-                  ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
-                })
-              : []),
-          ];
-          if (sessionsEnabled) {
-            const hasSessionsHits = merged.some((item: any) => item?.corpus === "sessions");
-            if (!hasSessionsHits) {
+              ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
+            });
+            if (indexedHits.length > 0) {
+              hits = indexedHits;
+            } else {
               const hasIndex = await hasSessionsIndexRows({
                 pool: getPool(),
                 userId: scope.userId,
                 workspaceId: scope.workspaceId,
                 ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
               });
-              if (!hasIndex) {
-              merged.push(
-                ...(await memorySearchSessions({
-                  query,
-                  maxResults: effectiveMax,
-                  agentId: (api as any)?.runtime?.agentId,
-                  limits,
-                })),
-              );
+              hits = hasIndex
+                ? []
+                : await memorySearchSessions({
+                    query,
+                    maxResults: effectiveMax,
+                    agentId: (api as any)?.runtime?.agentId,
+                    limits,
+                  });
+            }
+            if (sessionsVisibility === "visible") {
+              hits = await filterSessionHitsByVisibility({ api, hits });
+            }
+          } else if (trimmedCorpus === "memory") {
+            hits = await memorySearchDb({
+              pool: getPool(),
+              userId: scope.userId,
+              workspaceId: scope.workspaceId,
+              limits,
+              query,
+              ...(typeof maxResults === "number" ? { maxResults } : {}),
+            });
+          } else if (trimmedCorpus === "all") {
+            if (sessionsEnabled) {
+              await ensureSessionsIndexBootstrapped();
+            }
+            const merged = [
+              ...(await memorySearchDb({
+                pool: getPool(),
+                userId: scope.userId,
+                workspaceId: scope.workspaceId,
+                limits,
+                query,
+                maxResults: effectiveMax,
+              })),
+              ...(sessionsEnabled
+                ? await memorySearchSessionsIndexDb({
+                    pool: getPool(),
+                    userId: scope.userId,
+                    workspaceId: scope.workspaceId,
+                    limits,
+                    query,
+                    maxResults: effectiveMax,
+                    ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
+                  })
+                : []),
+            ];
+            if (sessionsEnabled) {
+              const hasSessionsHits = merged.some((item: any) => item?.corpus === "sessions");
+              if (!hasSessionsHits) {
+                const hasIndex = await hasSessionsIndexRows({
+                  pool: getPool(),
+                  userId: scope.userId,
+                  workspaceId: scope.workspaceId,
+                  ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
+                });
+                if (!hasIndex) {
+                merged.push(
+                  ...(await memorySearchSessions({
+                    query,
+                    maxResults: effectiveMax,
+                    agentId: (api as any)?.runtime?.agentId,
+                    limits,
+                  })),
+                );
+                }
               }
             }
+            const mergedForOutput =
+              sessionsVisibility === "visible" ? await filterSessionHitsByVisibility({ api, hits: merged }) : merged;
+            mergedForOutput.sort((left: any, right: any) => {
+              const ls = typeof left?.score === "number" ? left.score : 0;
+              const rs = typeof right?.score === "number" ? right.score : 0;
+              if (rs !== ls) {
+                return rs - ls;
+              }
+              // Prefer durable memory over sessions when equal.
+              const lc = left?.corpus === "sessions" ? "sessions" : "memory";
+              const rc = right?.corpus === "sessions" ? "sessions" : "memory";
+              if (lc !== rc) {
+                return lc === "memory" ? -1 : 1;
+              }
+              const lp = typeof left?.path === "string" ? left.path : "";
+              const rp = typeof right?.path === "string" ? right.path : "";
+              return lp.localeCompare(rp);
+            });
+            hits = mergedForOutput.slice(0, effectiveMax);
           }
-          const mergedForOutput =
-            sessionsVisibility === "visible" ? await filterSessionHitsByVisibility({ api, hits: merged }) : merged;
-          mergedForOutput.sort((left: any, right: any) => {
-            const ls = typeof left?.score === "number" ? left.score : 0;
-            const rs = typeof right?.score === "number" ? right.score : 0;
-            if (rs !== ls) {
-              return rs - ls;
-            }
-            // Prefer durable memory over sessions when equal.
-            const lc = left?.corpus === "sessions" ? "sessions" : "memory";
-            const rc = right?.corpus === "sessions" ? "sessions" : "memory";
-            if (lc !== rc) {
-              return lc === "memory" ? -1 : 1;
-            }
-            const lp = typeof left?.path === "string" ? left.path : "";
-            const rp = typeof right?.path === "string" ? right.path : "";
-            return lp.localeCompare(rp);
-          });
-          hits = mergedForOutput.slice(0, effectiveMax);
+          markSdkSuccess();
+        } catch (error) {
+          markSdkError(`memory_search:${trimmedCorpus || "unknown"}`, error);
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: [{ type: "text", text: `anchorclaw: memory_search degraded (sdk/runtime error: ${message})` }],
+            details: {
+              disabled: true,
+              error: message,
+              degraded: true,
+              degradedReason: "sdk_error",
+              sdk: { ...sdkHealth },
+            },
+          };
         }
 
         if (trimmedCorpus !== "memory" && trimmedCorpus !== "sessions" && trimmedCorpus !== "all") {
@@ -740,7 +899,11 @@ export default definePluginEntry({
         }
         return {
           content: [{ type: "text", text: hits.length ? `Found ${hits.length} result(s).` : "No results." }],
-          details: { results: hits, count: hits.length },
+          details: {
+            results: hits,
+            count: hits.length,
+            ...(sdkHealth.degraded ? { degraded: true, degradedReason: "sdk_error", sdk: { ...sdkHealth } } : {}),
+          },
         };
       },
     });
@@ -823,30 +986,53 @@ export default definePluginEntry({
             };
           }
         }
-        const got = await memoryGetFromDb({
-          pool: getPool(),
-          userId: scope.userId,
-          workspaceId: scope.workspaceId,
-          agentId: (api as any)?.runtime?.agentId,
-          sessionsVisibility,
-          workspaceDir:
-            typeof (api as any)?.runtime?.workspaceDir === "string" && (api as any).runtime.workspaceDir.trim()
-              ? String((api as any).runtime.workspaceDir)
-              : process.cwd(),
-          limits,
-          lookup,
-          ...(typeof fromLine === "number" ? { fromLine } : {}),
-          ...(typeof lineCount === "number" ? { lineCount } : {}),
-        });
+        let got: any;
+        try {
+          got = await memoryGetFromDb({
+            pool: getPool(),
+            userId: scope.userId,
+            workspaceId: scope.workspaceId,
+            agentId: (api as any)?.runtime?.agentId,
+            sessionsVisibility,
+            workspaceDir:
+              typeof (api as any)?.runtime?.workspaceDir === "string" && (api as any).runtime.workspaceDir.trim()
+                ? String((api as any).runtime.workspaceDir)
+                : process.cwd(),
+            limits,
+            lookup,
+            ...(typeof fromLine === "number" ? { fromLine } : {}),
+            ...(typeof lineCount === "number" ? { lineCount } : {}),
+          });
+          markSdkSuccess();
+        } catch (error) {
+          markSdkError("memory_get", error);
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: [{ type: "text", text: `anchorclaw: memory_get degraded (sdk/runtime error: ${message})` }],
+            details: {
+              disabled: true,
+              error: message,
+              degraded: true,
+              degradedReason: "sdk_error",
+              sdk: { ...sdkHealth },
+            },
+          };
+        }
         if (!got.ok) {
           return {
             content: [{ type: "text", text: `anchorclaw: memory_get failed (${got.error})` }],
-            details: got,
+            details: {
+              ...got,
+              ...(sdkHealth.degraded ? { degraded: true, degradedReason: "sdk_error", sdk: { ...sdkHealth } } : {}),
+            },
           };
         }
         return {
           content: [{ type: "text", text: got.content }],
-          details: got,
+          details: {
+            ...got,
+            ...(sdkHealth.degraded ? { degraded: true, degradedReason: "sdk_error", sdk: { ...sdkHealth } } : {}),
+          },
         };
       },
     });

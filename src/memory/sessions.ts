@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  buildSessionEntry as buildSessionEntryFromSdk,
+  listSessionFilesForAgent,
+  sessionPathForFile,
+} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 
 import type { MemorySearchHit } from "./search.js";
 import { buildMemoryReadResult, type MemoryReadResult } from "./read-file-shared.js";
@@ -113,158 +118,6 @@ function clampInteger(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, rounded));
 }
 
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
-function isLowSurrogate(code: number): boolean {
-  return code >= 0xdc00 && code <= 0xdfff;
-}
-
-function normalizeSessionText(value: string): string {
-  return value.replace(/\s*\n+\s*/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function collectRawSessionText(content: unknown): string | null {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as { type?: unknown; text?: unknown };
-    if (record.type === "text" && typeof record.text === "string") {
-      parts.push(record.text);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : null;
-}
-
-function splitLongSessionLine(text: string, maxChars: number): string[] {
-  const normalized = text.trim();
-  if (!normalized) {
-    return [];
-  }
-  if (normalized.length <= maxChars) {
-    return [normalized];
-  }
-
-  const segments: string[] = [];
-  let cursor = 0;
-  while (cursor < normalized.length) {
-    const remaining = normalized.length - cursor;
-    if (remaining <= maxChars) {
-      segments.push(normalized.slice(cursor).trim());
-      break;
-    }
-
-    const limit = cursor + maxChars;
-    let splitAt = limit;
-    for (let index = limit; index > cursor; index -= 1) {
-      if (normalized[index] === " ") {
-        splitAt = index;
-        break;
-      }
-    }
-    if (
-      splitAt < normalized.length &&
-      splitAt > cursor &&
-      isHighSurrogate(normalized.charCodeAt(splitAt - 1)) &&
-      isLowSurrogate(normalized.charCodeAt(splitAt))
-    ) {
-      splitAt -= 1;
-    }
-    segments.push(normalized.slice(cursor, splitAt).trim());
-    cursor = splitAt;
-    while (cursor < normalized.length && normalized[cursor] === " ") {
-      cursor += 1;
-    }
-  }
-
-  return segments.filter(Boolean);
-}
-
-function renderSessionExportLines(params: { label: string; text: string; maxChars: number }): string[] {
-  return splitLongSessionLine(params.text, params.maxChars).map((segment) => `${params.label}: ${segment}`);
-}
-
-function sessionPathForFile(absPath: string): string {
-  const normalized = path.normalize(path.resolve(absPath));
-  const parts = normalized.split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex >= 2 && parts[sessionsIndex - 2] === "agents") {
-    const agentId = parts[sessionsIndex - 1];
-    const fileName = parts[sessionsIndex + 1];
-    if (agentId && fileName && sessionsIndex + 1 === parts.length - 1) {
-      return `sessions/${agentId}/${fileName}`;
-    }
-  }
-  return `sessions/${path.basename(absPath)}`;
-}
-
-async function buildSessionEntry(params: {
-  absPath: string;
-  limits: Pick<MemoryLimits, "sessionsMaxFileBytes" | "sessionsWrapChars">;
-}): Promise<{ content: string; lineMap: number[] } | null> {
-  try {
-    const stat = await fs.stat(params.absPath);
-    if (stat.size > params.limits.sessionsMaxFileBytes) {
-      return null;
-    }
-    const raw = await fs.readFile(params.absPath, "utf8");
-    const jsonlLines = raw.split("\n");
-    const outLines: string[] = [];
-    const lineMap: number[] = [];
-
-    for (let index = 0; index < jsonlLines.length; index += 1) {
-      const line = jsonlLines[index]?.trim();
-      if (!line) {
-        continue;
-      }
-      let record: any;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (record?.type !== "message" || !record.message) {
-        continue;
-      }
-      const role = record.message.role;
-      if (role !== "user" && role !== "assistant") {
-        continue;
-      }
-      const rawText = collectRawSessionText(record.message.content);
-      if (!rawText) {
-        continue;
-      }
-      const normalizedText = normalizeSessionText(rawText);
-      if (!normalizedText) {
-        continue;
-      }
-      const label = role === "user" ? "User" : "Assistant";
-      const rendered = renderSessionExportLines({
-        label,
-        text: normalizedText,
-        maxChars: params.limits.sessionsWrapChars,
-      });
-      for (const renderedLine of rendered) {
-        outLines.push(renderedLine);
-        lineMap.push(index + 1); // 1-based JSONL line number
-      }
-    }
-
-    return { content: outLines.join("\n"), lineMap };
-  } catch {
-    return null;
-  }
-}
-
 function parseSessionLookup(lookup: string): { agentId?: string; fileName: string } | null {
   const trimmed = lookup.trim();
   const parts = trimmed.split("/").filter(Boolean);
@@ -310,7 +163,7 @@ export async function memoryGetSessionFile(params: {
   const effectiveAgentId = parsed.agentId ?? params.currentAgentId ?? "main";
   const sessionsDir = await resolveSessionsDirForAgent(effectiveAgentId);
   const absPath = path.join(sessionsDir, parsed.fileName);
-  const entry = await buildSessionEntry({ absPath, limits: params.limits });
+  const entry = await buildSessionEntryFromSdk(absPath);
   if (!entry) {
     return null;
   }
@@ -335,27 +188,23 @@ export async function memorySearchSessions(params: {
     return [];
   }
   const limit = clampInteger(params.maxResults, 1, params.maxResults);
-  const sessionsDir = await resolveSessionsDirForAgent(params.agentId);
+  const agentId = params.agentId?.trim() ? params.agentId : "main";
+  const sessionFiles = await listSessionFilesForAgent(agentId);
 
-  let entries: Array<{ name: string; absPath: string; mtimeMs: number }> = [];
-  try {
-    const dirents = await fs.readdir(sessionsDir, { withFileTypes: true });
-    const candidates = dirents
-      .filter((dirent: { isFile(): boolean; name: string }) => dirent.isFile())
-      .map((dirent: { name: string }) => dirent.name)
-      // include live transcripts and usage-counted archives; skip other artifacts for MVP.
-      .filter((name: string) => name.includes(".jsonl"));
-    const stats = await Promise.all(
-      candidates.map(async (name: string) => {
-        const absPath = path.join(sessionsDir, name);
-        const stat = (await fs.stat(absPath)) as { mtimeMs: number };
-        return { name, absPath, mtimeMs: stat.mtimeMs };
-      }),
-    );
-    entries = stats.sort((a: { mtimeMs: number }, b: { mtimeMs: number }) => b.mtimeMs - a.mtimeMs);
-  } catch {
-    return [];
+  const entries: Array<{ absPath: string; mtimeMs: number; content: string; lineMap: number[] }> = [];
+  for (const absPath of sessionFiles) {
+    const built = await buildSessionEntryFromSdk(absPath);
+    if (!built) {
+      continue;
+    }
+    entries.push({
+      absPath,
+      mtimeMs: built.mtimeMs,
+      content: built.content,
+      lineMap: built.lineMap,
+    });
   }
+  entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
   const lowerNeedle = q.toLowerCase();
   const hits: MemorySearchHit[] = [];
@@ -365,11 +214,7 @@ export async function memorySearchSessions(params: {
       break;
     }
 
-    const built = await buildSessionEntry({ absPath: entry.absPath, limits: params.limits });
-    if (!built) {
-      continue;
-    }
-    const lines = built.content.split("\n");
+    const lines = entry.content.split("\n");
     for (let contentIndex = 0; contentIndex < lines.length; contentIndex += 1) {
       const line = lines[contentIndex] ?? "";
       if (!line) {
@@ -379,7 +224,7 @@ export async function memorySearchSessions(params: {
         continue;
       }
       const snippet = line.length > 240 ? `${line.slice(0, 240)}…` : line;
-      const startLine = contentIndex + 1;
+      const startLine = entry.lineMap[contentIndex] ?? contentIndex + 1;
       hits.push({
         corpus: "sessions",
         path: sessionPathForFile(entry.absPath),
