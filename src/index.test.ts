@@ -20,6 +20,9 @@ const {
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
   statFs,
+  openFs,
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
 } = vi.hoisted(() => ({
   registerMemoryCapability: vi.fn(),
   definePluginEntry: vi.fn((entry: unknown) => entry),
@@ -50,6 +53,14 @@ const {
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
   statFs: vi.fn(async () => ({ size: 0 })),
+  openFs: vi.fn(async () => ({
+    read: vi.fn(async () => ({ bytesRead: 0 })),
+    close: vi.fn(async () => undefined),
+  })),
+  isSessionArchiveArtifactName: vi.fn((fileName: string) => /\.jsonl\.(reset|deleted)\./i.test(fileName)),
+  isUsageCountedSessionTranscriptFileName: vi.fn((fileName: string) =>
+    /\.jsonl($|\.reset\.|\.deleted\.)/i.test(fileName),
+  ),
 }));
 
 vi.mock("./api.js", () => ({
@@ -118,8 +129,9 @@ vi.mock("./memory/sessions-visibility.js", () => ({
 }));
 
 vi.mock("node:fs/promises", () => ({
-  default: { stat: statFs },
+  default: { stat: statFs, open: openFs },
   stat: statFs,
+  open: openFs,
 }));
 
 vi.mock("./memory/manager.js", () => ({
@@ -137,6 +149,8 @@ vi.mock("./identity-policy.js", () => ({
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
   listSessionFilesForAgent: vi.fn(async () => []),
   sessionPathForFile: vi.fn((value: string) => value),
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
 }));
 
 import plugin from "./index.js";
@@ -241,6 +255,14 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   statFs.mockResolvedValue({ size: 0 });
+  openFs.mockResolvedValue({
+    read: vi.fn(async () => ({ bytesRead: 0 })),
+    close: vi.fn(async () => undefined),
+  });
+  isSessionArchiveArtifactName.mockImplementation((fileName: string) => /\.jsonl\.(reset|deleted)\./i.test(fileName));
+  isUsageCountedSessionTranscriptFileName.mockImplementation((fileName: string) =>
+    /\.jsonl($|\.reset\.|\.deleted\.)/i.test(fileName),
+  );
   parseCfg.mockReturnValue({
     postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
     sessions: { visibility: "current" },
@@ -385,6 +407,31 @@ describe("phase2 session delta listener", () => {
         sessionFiles: ["/tmp/agents/main/sessions/a.jsonl"],
       }),
     );
+  });
+
+  it("carries pending delta overflow after sync instead of resetting to zero", async () => {
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockResolvedValueOnce({ size: 10_000 }).mockResolvedValueOnce({ size: 10_100 });
+    openFs.mockResolvedValue({
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({ bytesRead: 1 })
+        .mockResolvedValueOnce({ bytesRead: 0 })
+        .mockResolvedValueOnce({ bytesRead: 1 })
+        .mockResolvedValueOnce({ bytesRead: 0 }),
+      close: vi.fn(async () => undefined),
+    });
+    const { api, getTranscriptListener } = buildApi();
+    (plugin as any).register(api);
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
+
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(2);
   });
 
   it("bypasses thresholds for reset/deleted archive artifacts", async () => {

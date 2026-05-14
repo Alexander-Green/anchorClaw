@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 
 import type { MemorySearchHit } from "./search.js";
-import { buildMemoryReadResult, type MemoryReadResult } from "./read-file-shared.js";
+import { type MemoryReadResult } from "./read-file-shared.js";
 import type { MemoryLimits } from "./limits.js";
 
 function normalizeAgentId(value: string): string {
@@ -22,6 +22,18 @@ function normalizeAgentId(value: string): string {
 
 function expandHome(input: string): string {
   return input.startsWith("~") ? path.join(os.homedir(), input.slice(1)) : input;
+}
+
+function resolveHomeDir(): string {
+  const explicit = process.env.OPENCLAW_HOME?.trim();
+  if (explicit) {
+    return path.resolve(expandHome(explicit));
+  }
+  const home = process.env.HOME?.trim() || process.env.USERPROFILE?.trim();
+  if (home) {
+    return path.resolve(expandHome(home));
+  }
+  return path.resolve(os.homedir());
 }
 
 async function pathExists(candidate: string): Promise<boolean> {
@@ -38,8 +50,9 @@ async function resolveStateDir(): Promise<string> {
   if (override) {
     return path.resolve(expandHome(override));
   }
-  const newDir = path.join(os.homedir(), ".openclaw");
-  const legacyDir = path.join(os.homedir(), ".clawdbot");
+  const homeDir = resolveHomeDir();
+  const newDir = path.join(homeDir, ".openclaw");
+  const legacyDir = path.join(homeDir, ".clawdbot");
   if (await pathExists(newDir)) {
     return newDir;
   }
@@ -118,6 +131,100 @@ function clampInteger(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, rounded));
 }
 
+function buildContinuationNotice(nextFrom: number | undefined): string {
+  const base =
+    typeof nextFrom === "number"
+      ? `[More content available. Use from=${nextFrom} to continue.]`
+      : "[More content available. Requested excerpt exceeded the default maxChars budget.]";
+  return `\n\n${base}`;
+}
+
+function buildIndexedSessionReadResult(params: {
+  lines: string[];
+  lineMap: number[];
+  relPath: string;
+  from?: number;
+  lineCount?: number;
+  defaultLines: number;
+  maxChars: number;
+}): MemoryReadResult {
+  const requestedFrom = clampInteger(params.from ?? 1, 1, Number.MAX_SAFE_INTEGER);
+  const requestedLineCount = clampInteger(
+    params.lineCount ?? params.defaultLines,
+    1,
+    Number.MAX_SAFE_INTEGER,
+  );
+  const maxChars = Math.max(1, Math.floor(params.maxChars));
+
+  const grouped = new Map<number, string[]>();
+  for (let idx = 0; idx < params.lines.length; idx += 1) {
+    const sourceLine = params.lineMap[idx] ?? idx + 1;
+    if (!Number.isFinite(sourceLine) || sourceLine <= 0) {
+      continue;
+    }
+    const bucket = grouped.get(sourceLine) ?? [];
+    bucket.push(params.lines[idx] ?? "");
+    grouped.set(sourceLine, bucket);
+  }
+  const sourceLines = Array.from(grouped.keys()).sort((left, right) => left - right);
+  const startIndex = sourceLines.findIndex((lineNo) => lineNo >= requestedFrom);
+  if (startIndex < 0) {
+    return {
+      text: "",
+      path: params.relPath,
+      from: requestedFrom,
+      lines: 0,
+    };
+  }
+
+  const selectedSourceLines = sourceLines.slice(startIndex, startIndex + requestedLineCount);
+  const selectedRenderedLines = selectedSourceLines.flatMap((lineNo) => grouped.get(lineNo) ?? []);
+  const moreSourceLinesRemain = startIndex + selectedSourceLines.length < sourceLines.length;
+
+  let includedRenderedCount = selectedRenderedLines.length;
+  let text = selectedRenderedLines.join("\n");
+  while (includedRenderedCount > 1 && text.length > maxChars) {
+    includedRenderedCount -= 1;
+    text = selectedRenderedLines.slice(0, includedRenderedCount).join("\n");
+  }
+
+  let hardTruncatedSingleLine = false;
+  if (text.length > maxChars) {
+    text = text.slice(0, maxChars);
+    includedRenderedCount = 1;
+    hardTruncatedSingleLine = true;
+  }
+
+  let includedSourceLines = selectedSourceLines.length;
+  if (includedRenderedCount < selectedRenderedLines.length) {
+    let renderedSeen = 0;
+    includedSourceLines = 0;
+    for (const lineNo of selectedSourceLines) {
+      renderedSeen += (grouped.get(lineNo) ?? []).length;
+      if (renderedSeen > includedRenderedCount) {
+        break;
+      }
+      includedSourceLines += 1;
+    }
+  }
+
+  const truncated =
+    hardTruncatedSingleLine || includedRenderedCount < selectedRenderedLines.length || moreSourceLinesRemain;
+  const nextFrom =
+    !hardTruncatedSingleLine && includedSourceLines > 0
+      ? sourceLines[startIndex + includedSourceLines]
+      : undefined;
+
+  return {
+    text: truncated && text ? `${text}${buildContinuationNotice(nextFrom)}` : text,
+    path: params.relPath,
+    from: selectedSourceLines[0] ?? requestedFrom,
+    lines: includedSourceLines,
+    ...(truncated ? { truncated: true } : {}),
+    ...(typeof nextFrom === "number" ? { nextFrom } : {}),
+  };
+}
+
 function parseSessionLookup(lookup: string): { agentId?: string; fileName: string } | null {
   const trimmed = lookup.trim();
   const parts = trimmed.split("/").filter(Boolean);
@@ -167,11 +274,13 @@ export async function memoryGetSessionFile(params: {
   if (!entry) {
     return null;
   }
-  return buildMemoryReadResult({
-    content: entry.content,
+  const renderedLines = entry.content.split("\n");
+  return buildIndexedSessionReadResult({
+    lines: renderedLines,
+    lineMap: entry.lineMap,
     relPath: sessionPathForFile(absPath),
     from: params.fromLine,
-    lines: params.lineCount,
+    lineCount: params.lineCount,
     defaultLines: params.defaultLines,
     maxChars: params.maxChars,
   });

@@ -27,6 +27,8 @@ declare module "openclaw/plugin-sdk/memory-core-host-engine-qmd" {
   export function listSessionFilesForAgent(agentId: string): Promise<string[]>;
   export function buildSessionEntry(absPath: string): Promise<SessionFileEntry | null>;
   export function sessionPathForFile(absPath: string): string;
+  export function isSessionArchiveArtifactName(fileName: string): boolean;
+  export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean;
 }
 
 declare module "openclaw/plugin-sdk/session-transcript-hit" {

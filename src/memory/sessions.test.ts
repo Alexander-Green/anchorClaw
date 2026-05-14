@@ -66,6 +66,44 @@ describe("sessions corpus (MVP)", () => {
     expect(res!.text).toContain("Assistant: Hi there");
   });
 
+  it("uses JSONL lineMap coordinates for fallback memory_get pagination", async () => {
+    const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
+    const stateDir = `${tmp}/anchorclaw-test-state-linemap`;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const agentId = "main";
+    const fileName = "session-line-map.jsonl";
+    const sessionsDir = `${stateDir}/agents/${agentId}/sessions`;
+    const absPath = `${sessionsDir}/${fileName}`;
+
+    vi.mocked(buildSessionEntry).mockResolvedValueOnce({
+      path: `sessions/${agentId}/${fileName}`,
+      absPath,
+      mtimeMs: 10,
+      size: 100,
+      hash: "hash-2",
+      content: "User: one\nAssistant: two",
+      lineMap: [3, 7],
+      messageTimestampsMs: [1000, 2000],
+    } as any);
+    vi.mocked(sessionPathForFile).mockReturnValueOnce(`sessions/${agentId}/${fileName}`);
+
+    const res = await memoryGetSessionFile({
+      lookup: `sessions/${agentId}/${fileName}`,
+      currentAgentId: agentId,
+      fromLine: 7,
+      lineCount: 1,
+      defaultLines: 120,
+      maxChars: 12_000,
+      limits: { sessionsMaxFileBytes: 2_000_000, sessionsWrapChars: 800 },
+    });
+
+    expect(res).not.toBeNull();
+    expect(res!.from).toBe(7);
+    expect(res!.lines).toBe(1);
+    expect(res!.text).toContain("Assistant: two");
+    expect(res!.text).not.toContain("User: one");
+  });
+
   it("rejects session lookups with path separators in the file name", async () => {
     const res = await memoryGetSessionFile({
       lookup: "sessions/main/..\\outside.jsonl",
@@ -151,6 +189,41 @@ describe("sessions corpus (MVP)", () => {
     });
 
     expect(isMatch).toBe(false);
+  });
+
+  it("resolves state dir from OPENCLAW_HOME when OPENCLAW_STATE_DIR is unset", async () => {
+    const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousHome = process.env.OPENCLAW_HOME;
+    try {
+      delete process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_HOME = `${tmp}/anchorclaw-openclaw-home`;
+
+      const agentId = "main";
+      const sessionsDir = `${process.env.OPENCLAW_HOME}/.openclaw/agents/${agentId}/sessions`;
+      const absPath = `${sessionsDir}/home-based.jsonl`;
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(absPath, "", "utf8");
+
+      const isMatch = await isSessionFileForAgent({
+        sessionFile: absPath,
+        agentId,
+      });
+
+      expect(isMatch).toBe(true);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousHome;
+      }
+    }
   });
 
   it("accepts lookup-style session path for the same agent", async () => {

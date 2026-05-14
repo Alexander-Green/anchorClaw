@@ -29,9 +29,13 @@ import {
 } from "./memory/manager.js";
 import { runOneTimeWorkspaceImport } from "./importer.js";
 import { getIdentityStartupWarning } from "./identity-policy.js";
-import { sessionPathForFile } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import {
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+  sessionPathForFile,
+} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { normalizeSessionLookupPath } from "./memory/sessions-index.js";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 
 function resolveActor(api: OpenClawPluginApi): string {
   const agentId = (api as any)?.runtime?.agentId;
@@ -49,6 +53,7 @@ const SESSION_DELTA_DEBOUNCE_MS = 5_000;
 const SESSION_DELTA_BYTES_THRESHOLD = 4_096;
 const SESSION_DELTA_MESSAGES_THRESHOLD = 2;
 const SDK_RECOVERY_SUCCESS_THRESHOLD = 3;
+const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 
 type SessionDeltaState = {
   lastSize: number;
@@ -66,7 +71,47 @@ type SdkHealthState = {
 
 function isSessionArchiveArtifactPath(sessionFile: string): boolean {
   const fileName = sessionFile.replaceAll("\\", "/").split("/").pop() ?? "";
-  return /\.jsonl\.(reset|deleted)\./i.test(fileName);
+  return (
+    isSessionArchiveArtifactName(fileName) &&
+    isUsageCountedSessionTranscriptFileName(fileName)
+  );
+}
+
+async function countNewlinesInRange(params: {
+  filePath: string;
+  start: number;
+  end: number;
+}): Promise<number> {
+  if (params.end <= params.start) {
+    return 0;
+  }
+  let handle: FileHandle | null = null;
+  try {
+    handle = await fs.open(params.filePath, "r");
+    const buffer = Buffer.alloc(SESSION_DELTA_READ_CHUNK_BYTES);
+    let offset = params.start;
+    let count = 0;
+    while (offset < params.end) {
+      const toRead = Math.min(buffer.length, params.end - offset);
+      const { bytesRead } = await handle.read(buffer, 0, toRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      for (let i = 0; i < bytesRead; i += 1) {
+        if (buffer[i] === 10) {
+          count += 1;
+        }
+      }
+      offset += bytesRead;
+    }
+    return count;
+  } catch {
+    return 0;
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => {});
+    }
+  }
 }
 
 export default definePluginEntry({
@@ -321,9 +366,17 @@ export default definePluginEntry({
           pendingBytes: 0,
           pendingMessages: 0,
         };
-        const deltaBytes = statSize >= prev.lastSize ? statSize - prev.lastSize : statSize;
+        const sizeReduced = statSize < prev.lastSize;
+        const deltaBytes = sizeReduced ? statSize : Math.max(0, statSize - prev.lastSize);
+        const messageSpanStart = sizeReduced ? 0 : prev.lastSize;
+        const countedNewlines = await countNewlinesInRange({
+          filePath: sessionFile,
+          start: messageSpanStart,
+          end: statSize,
+        });
+        const deltaMessages = deltaBytes > 0 && countedNewlines === 0 ? 1 : countedNewlines;
         const pendingBytes = prev.pendingBytes + Math.max(0, deltaBytes);
-        const pendingMessages = prev.pendingMessages + (deltaBytes > 0 ? 1 : 0);
+        const pendingMessages = prev.pendingMessages + Math.max(0, deltaMessages);
         sessionDeltaStateByPath.set(sessionFile, {
           lastSize: statSize,
           pendingBytes,
@@ -368,8 +421,8 @@ export default definePluginEntry({
             }
             sessionDeltaStateByPath.set(sessionFile, {
               lastSize: state.lastSize,
-              pendingBytes: 0,
-              pendingMessages: 0,
+              pendingBytes: Math.max(0, state.pendingBytes - SESSION_DELTA_BYTES_THRESHOLD),
+              pendingMessages: Math.max(0, state.pendingMessages - SESSION_DELTA_MESSAGES_THRESHOLD),
             });
           }
           api.logger.info(
