@@ -34,6 +34,24 @@ Current delivery state:
 - Runtime lifecycle compatibility fallback is enabled:
   - preferred: `api.lifecycle.registerRuntimeLifecycle`
   - fallback: `api.registerRuntimeLifecycle` (legacy hosts)
+- State/session path resolution follows OpenClaw-compatible order:
+  - `OPENCLAW_STATE_DIR`
+  - `OPENCLAW_HOME/.openclaw` (or `HOME/.openclaw` when `OPENCLAW_HOME` is unset)
+  - legacy `HOME/.clawdbot` when present
+
+## `memory_status` Semantics
+
+`memory_status` is operator-focused diagnostics with two modes:
+
+- default (`check` omitted / `false`): cached runtime degraded-state (`sdkHealth`)
+- active (`check: true`): lightweight runtime checks for:
+  - DB connectivity (`SELECT 1`)
+  - required schema objects (`memory_items`, `session_index_files`, `session_index_chunks`, `schema_migrations`)
+  - latest applied migration id
+  - current-agent sessions directory accessibility
+  - in-memory pending sessions delta counters
+
+This keeps default calls cheap, while allowing explicit active checks when health validation is needed.
 
 ## Virtual `MEMORY.md`
 

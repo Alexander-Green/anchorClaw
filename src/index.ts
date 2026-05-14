@@ -16,6 +16,7 @@ import {
   isSessionFileForAnyKnownAgent,
   listKnownAgentIds,
   memorySearchSessions,
+  resolveSessionsDirForAgent,
 } from "./memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
 import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "./memory/sessions-index-sync.js";
@@ -36,6 +37,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { normalizeSessionLookupPath } from "./memory/sessions-index.js";
 import fs, { type FileHandle } from "node:fs/promises";
+import path from "node:path";
 
 function resolveActor(api: OpenClawPluginApi): string {
   const agentId = (api as any)?.runtime?.agentId;
@@ -67,6 +69,33 @@ type SdkHealthState = {
   affectedOperation?: string;
   lastErrorAt?: string;
   consecutiveSuccesses: number;
+};
+
+type MemoryStatusCheckResult = {
+  ok: boolean;
+  mode: "cached" | "active";
+  sdk: SdkHealthState;
+  database?: {
+    ok: boolean;
+    latencyMs?: number;
+    schemaOk?: boolean;
+    migrationVersion?: string | null;
+    error?: string;
+  };
+  sessions?: {
+    enabled: boolean;
+    visibility: "off" | "current" | "visible";
+    stateDir?: string;
+    agentSessionsDir?: string;
+    exists?: boolean;
+    readable?: boolean;
+    error?: string;
+  };
+  index?: {
+    trackedFiles: number;
+    pendingBytes: number;
+    pendingMessages: number;
+  };
 };
 
 function isSessionArchiveArtifactPath(sessionFile: string): boolean {
@@ -756,13 +785,112 @@ export default definePluginEntry({
       parameters: {
         type: "object",
         additionalProperties: false,
-        properties: {},
+        properties: {
+          check: {
+            type: "boolean",
+            description:
+              "When true, performs active health checks (database connectivity/schema + sessions dir accessibility).",
+          },
+        },
       },
-      async execute(_toolCallId: string, _params: unknown) {
+      async execute(_toolCallId: string, params: unknown) {
         if (disabledReason) {
           return {
             content: [{ type: "text", text: `anchorclaw: disabled until configured (${disabledReason})` }],
             details: { disabled: true, error: disabledReason },
+          };
+        }
+        const record = (params ?? {}) as { check?: unknown };
+        const activeCheck = record.check === true;
+        const base: MemoryStatusCheckResult = {
+          ok: true,
+          mode: activeCheck ? "active" : "cached",
+          sdk: { ...sdkHealth },
+        };
+        if (activeCheck) {
+          const startedAt = Date.now();
+          let dbError: string | undefined;
+          try {
+            await ensureReady();
+            await getPool().query("SELECT 1");
+            const schemaRows = await getPool().query<{
+              memory_items: string | null;
+              session_index_files: string | null;
+              session_index_chunks: string | null;
+              schema_migrations: string | null;
+            }>(
+              "SELECT to_regclass('memory_items') AS memory_items, to_regclass('session_index_files') AS session_index_files, to_regclass('session_index_chunks') AS session_index_chunks, to_regclass('schema_migrations') AS schema_migrations",
+            );
+            const schema = schemaRows.rows[0];
+            const schemaOk = Boolean(
+              schema?.memory_items &&
+                schema?.session_index_files &&
+                schema?.session_index_chunks &&
+                schema?.schema_migrations,
+            );
+            const migrationRows = await getPool().query<{ id: string }>(
+              "SELECT id FROM schema_migrations ORDER BY id DESC LIMIT 1",
+            );
+            base.database = {
+              ok: schemaOk,
+              latencyMs: Math.max(0, Date.now() - startedAt),
+              schemaOk,
+              migrationVersion: migrationRows.rows[0]?.id ?? null,
+            };
+            if (!schemaOk) {
+              base.ok = false;
+            }
+          } catch (error) {
+            dbError = error instanceof Error ? error.message : String(error);
+            base.ok = false;
+            base.database = {
+              ok: false,
+              error: dbError,
+            };
+          }
+
+          const sessionsVisibility = cfg?.sessions?.visibility ?? "current";
+          const sessionsEnabled = sessionsVisibility !== "off";
+          try {
+            const agentId = String((api as any)?.runtime?.agentId ?? "main");
+            const agentSessionsDir = await resolveSessionsDirForAgent(agentId);
+            const stateDir = path.dirname(path.dirname(path.dirname(agentSessionsDir)));
+            let exists = false;
+            try {
+              await fs.stat(agentSessionsDir);
+              exists = true;
+            } catch {
+              exists = false;
+            }
+            base.sessions = {
+              enabled: sessionsEnabled,
+              visibility: sessionsVisibility,
+              stateDir,
+              agentSessionsDir,
+              exists,
+              readable: exists,
+            };
+          } catch (error) {
+            base.ok = false;
+            base.sessions = {
+              enabled: sessionsEnabled,
+              visibility: sessionsVisibility,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+
+          const pending = Array.from(sessionDeltaStateByPath.values()).reduce(
+            (acc, item) => {
+              acc.pendingBytes += item.pendingBytes;
+              acc.pendingMessages += item.pendingMessages;
+              return acc;
+            },
+            { pendingBytes: 0, pendingMessages: 0 },
+          );
+          base.index = {
+            trackedFiles: sessionDeltaStateByPath.size,
+            pendingBytes: pending.pendingBytes,
+            pendingMessages: pending.pendingMessages,
           };
         }
         return {
@@ -771,13 +899,12 @@ export default definePluginEntry({
               type: "text",
               text: sdkHealth.degraded
                 ? `AnchorClaw memory is degraded (${sdkHealth.reason ?? "unknown error"}).`
-                : "AnchorClaw memory is healthy.",
+                : activeCheck && !base.ok
+                  ? "AnchorClaw memory active check failed."
+                  : "AnchorClaw memory is healthy.",
             },
           ],
-          details: {
-            ok: true,
-            sdk: { ...sdkHealth },
-          },
+          details: base,
         };
       },
     });

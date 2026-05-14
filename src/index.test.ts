@@ -16,6 +16,7 @@ const {
   getIdentityWarning,
   isSessionFileForAgent,
   isSessionFileForAnyKnownAgent,
+  resolveSessionsDirForAgent,
   memoryGetFromDb,
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
@@ -49,6 +50,7 @@ const {
   getIdentityWarning: vi.fn(() => null),
   isSessionFileForAgent: vi.fn(async () => true),
   isSessionFileForAnyKnownAgent: vi.fn(async () => true),
+  resolveSessionsDirForAgent: vi.fn(async () => "/tmp/.openclaw/agents/main/sessions"),
   memoryGetFromDb: vi.fn(),
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
@@ -110,6 +112,7 @@ vi.mock("./memory/sessions.js", () => ({
   memorySearchSessions: vi.fn(async () => []),
   isSessionFileForAgent,
   isSessionFileForAnyKnownAgent,
+  resolveSessionsDirForAgent,
 }));
 
 vi.mock("./memory/sessions-index.js", () => ({
@@ -721,5 +724,55 @@ describe("phase2 session delta listener", () => {
     await getRegistration.execute("toolcall-get-status-3", { lookup: "sessions/main/a.jsonl" });
     const healthy = await statusRegistration.execute("toolcall-status-2", {});
     expect(healthy.details.sdk.degraded).toBe(false);
+  });
+
+  it("runs active checks via memory_status when check=true", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn(async () => ({
+        query: vi.fn(async () => ({ rows: [] })),
+        release: vi.fn(),
+      })),
+    };
+    createPool.mockReturnValue(pool);
+    (pool.query as any)
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            memory_items: "memory_items",
+            session_index_files: "session_index_files",
+            session_index_chunks: "session_index_chunks",
+            schema_migrations: "schema_migrations",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: "0002" }] });
+    statFs.mockResolvedValueOnce({ size: 1 });
+
+    const { api } = buildApi();
+    (plugin as any).register(api);
+    const statusRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_status");
+    expect(statusRegistration).toBeDefined();
+
+    const result = await statusRegistration.execute("toolcall-status-active-1", { check: true });
+    expect(result.details).toMatchObject({
+      ok: true,
+      mode: "active",
+      database: {
+        ok: true,
+        schemaOk: true,
+        migrationVersion: "0002",
+      },
+      sessions: {
+        enabled: true,
+        visibility: "current",
+        exists: true,
+        readable: true,
+      },
+    });
+    expect(typeof result.details.database.latencyMs).toBe("number");
   });
 });

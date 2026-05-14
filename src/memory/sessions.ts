@@ -45,6 +45,17 @@ async function pathExists(candidate: string): Promise<boolean> {
   }
 }
 
+/**
+ * Compatibility shim for OpenClaw state directory resolution.
+ *
+ * Keep this order aligned with OpenClaw core semantics:
+ * 1) OPENCLAW_STATE_DIR
+ * 2) OPENCLAW_HOME/.openclaw (or HOME/.openclaw when OPENCLAW_HOME is unset)
+ * 3) legacy HOME/.clawdbot when present
+ *
+ * If OpenClaw core starts exporting a public resolver helper, prefer using it
+ * directly instead of maintaining this local copy.
+ */
 async function resolveStateDir(): Promise<string> {
   const override = process.env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
@@ -154,6 +165,7 @@ function buildIndexedSessionReadResult(params: {
     1,
     Number.MAX_SAFE_INTEGER,
   );
+  const requestedEndExclusive = requestedFrom + requestedLineCount;
   const maxChars = Math.max(1, Math.floor(params.maxChars));
 
   const grouped = new Map<number, string[]>();
@@ -167,8 +179,10 @@ function buildIndexedSessionReadResult(params: {
     grouped.set(sourceLine, bucket);
   }
   const sourceLines = Array.from(grouped.keys()).sort((left, right) => left - right);
-  const startIndex = sourceLines.findIndex((lineNo) => lineNo >= requestedFrom);
-  if (startIndex < 0) {
+  const selectedSourceLines = sourceLines.filter(
+    (lineNo) => lineNo >= requestedFrom && lineNo < requestedEndExclusive,
+  );
+  if (selectedSourceLines.length === 0) {
     return {
       text: "",
       path: params.relPath,
@@ -176,10 +190,8 @@ function buildIndexedSessionReadResult(params: {
       lines: 0,
     };
   }
-
-  const selectedSourceLines = sourceLines.slice(startIndex, startIndex + requestedLineCount);
   const selectedRenderedLines = selectedSourceLines.flatMap((lineNo) => grouped.get(lineNo) ?? []);
-  const moreSourceLinesRemain = startIndex + selectedSourceLines.length < sourceLines.length;
+  const moreSourceLinesRemain = sourceLines.some((lineNo) => lineNo >= requestedEndExclusive);
 
   let includedRenderedCount = selectedRenderedLines.length;
   let text = selectedRenderedLines.join("\n");
@@ -210,9 +222,11 @@ function buildIndexedSessionReadResult(params: {
 
   const truncated =
     hardTruncatedSingleLine || includedRenderedCount < selectedRenderedLines.length || moreSourceLinesRemain;
+  const nextLineAfterRange = sourceLines.find((lineNo) => lineNo >= requestedEndExclusive);
+  const nextLineWithinRange = selectedSourceLines[includedSourceLines];
   const nextFrom =
     !hardTruncatedSingleLine && includedSourceLines > 0
-      ? sourceLines[startIndex + includedSourceLines]
+      ? nextLineWithinRange ?? nextLineAfterRange
       : undefined;
 
   return {

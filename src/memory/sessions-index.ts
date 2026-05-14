@@ -59,6 +59,7 @@ function buildIndexedSessionReadResult(params: {
 }): MemoryReadResult {
   const requestedFrom = clampPositiveInteger(params.from, 1);
   const requestedLineCount = clampPositiveInteger(params.lines, params.defaultLines);
+  const requestedEndExclusive = requestedFrom + requestedLineCount;
   const maxChars = Math.max(1, Math.floor(params.maxChars));
   const sortedChunks = params.chunks
     .filter((chunk) => Number.isFinite(chunk.startLine) && chunk.startLine > 0)
@@ -82,8 +83,10 @@ function buildIndexedSessionReadResult(params: {
     grouped.set(chunk.startLine, list);
   }
   const sourceLines = Array.from(grouped.keys()).sort((left, right) => left - right);
-  const startIndex = sourceLines.findIndex((lineNo) => lineNo >= requestedFrom);
-  if (startIndex < 0) {
+  const selectedSourceLines = sourceLines.filter(
+    (lineNo) => lineNo >= requestedFrom && lineNo < requestedEndExclusive,
+  );
+  if (selectedSourceLines.length === 0) {
     return {
       text: "",
       path: params.relPath,
@@ -91,10 +94,8 @@ function buildIndexedSessionReadResult(params: {
       lines: 0,
     };
   }
-
-  const selectedSourceLines = sourceLines.slice(startIndex, startIndex + requestedLineCount);
   const selectedRenderedLines = selectedSourceLines.flatMap((lineNo) => grouped.get(lineNo) ?? []);
-  const moreSourceLinesRemain = startIndex + selectedSourceLines.length < sourceLines.length;
+  const moreSourceLinesRemain = sourceLines.some((lineNo) => lineNo >= requestedEndExclusive);
 
   let includedRenderedCount = selectedRenderedLines.length;
   let text = selectedRenderedLines.join("\n");
@@ -124,9 +125,11 @@ function buildIndexedSessionReadResult(params: {
   }
 
   const truncated = hardTruncatedSingleLine || includedRenderedCount < selectedRenderedLines.length || moreSourceLinesRemain;
+  const nextLineAfterRange = sourceLines.find((lineNo) => lineNo >= requestedEndExclusive);
+  const nextLineWithinRange = selectedSourceLines[includedSourceLines];
   const nextFrom =
     !hardTruncatedSingleLine && includedSourceLines > 0
-      ? sourceLines[startIndex + includedSourceLines]
+      ? nextLineWithinRange ?? nextLineAfterRange
       : undefined;
 
   return {

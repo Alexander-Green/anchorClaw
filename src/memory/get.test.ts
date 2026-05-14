@@ -50,6 +50,24 @@ describe("memoryGetFromDb sessions visibility", () => {
     expect(pool.query).not.toHaveBeenCalled();
   });
 
+  it("rejects other-agent sessions lookup in current visibility when runtime agentId is missing", async () => {
+    const pool = createPool([]);
+    const got = await memoryGetFromDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      sessionsVisibility: "current",
+      limits,
+      lookup: "sessions/other/s1.jsonl",
+    });
+    expect(got.ok).toBe(false);
+    if (got.ok) {
+      throw new Error("expected failed result");
+    }
+    expect(got.error).toContain("restricted to current agent scope");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
   it("allows other-agent lookup in visible visibility and can fallback to file", async () => {
     const pool = createPool([[], []]);
     vi.mocked(memoryGetSessionFile).mockResolvedValueOnce({

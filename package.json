@@ -1,6 +1,6 @@
 {
   "name": "@anchorclaw/anchorclaw",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "OpenClaw Postgres-backed long-term memory plugin",
   "repository": {
     "type": "git",
@@ -42,10 +42,10 @@
     "install": {
       "npmSpec": "@anchorclaw/anchorclaw",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
+      "minHostVersion": ">=2026.5.7"
     },
     "compat": {
-      "pluginApi": ">=2026.5.8"
+      "pluginApi": ">=2026.5.7"
     },
     "release": {
       "publishToClawHub": true,

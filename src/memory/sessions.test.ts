@@ -104,6 +104,45 @@ describe("sessions corpus (MVP)", () => {
     expect(res!.text).not.toContain("User: one");
   });
 
+  it("uses strict numeric from/lineCount range for sparse lineMap values", async () => {
+    const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
+    const stateDir = `${tmp}/anchorclaw-test-state-linemap-sparse`;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const agentId = "main";
+    const fileName = "session-line-map-sparse.jsonl";
+    const sessionsDir = `${stateDir}/agents/${agentId}/sessions`;
+    const absPath = `${sessionsDir}/${fileName}`;
+
+    vi.mocked(buildSessionEntry).mockResolvedValueOnce({
+      path: `sessions/${agentId}/${fileName}`,
+      absPath,
+      mtimeMs: 10,
+      size: 100,
+      hash: "hash-3",
+      content: "line 10\nline 20\nline 30",
+      lineMap: [10, 20, 30],
+      messageTimestampsMs: [1000, 2000, 3000],
+    } as any);
+    vi.mocked(sessionPathForFile).mockReturnValueOnce(`sessions/${agentId}/${fileName}`);
+
+    const res = await memoryGetSessionFile({
+      lookup: `sessions/${agentId}/${fileName}`,
+      currentAgentId: agentId,
+      fromLine: 10,
+      lineCount: 5,
+      defaultLines: 120,
+      maxChars: 12_000,
+      limits: { sessionsMaxFileBytes: 2_000_000, sessionsWrapChars: 800 },
+    });
+
+    expect(res).not.toBeNull();
+    expect(res!.from).toBe(10);
+    expect(res!.lines).toBe(1);
+    expect(res!.text).toContain("line 10");
+    expect(res!.text).not.toContain("line 20");
+    expect(res!.nextFrom).toBe(20);
+  });
+
   it("rejects session lookups with path separators in the file name", async () => {
     const res = await memoryGetSessionFile({
       lookup: "sessions/main/..\\outside.jsonl",

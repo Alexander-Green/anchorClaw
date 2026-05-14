@@ -153,6 +153,38 @@ describe("memoryGetSessionFromIndexDb", () => {
     expect(got!.text).not.toContain("Assistant: next");
     expect(got!.nextFrom).toBe(7);
   });
+
+  it("applies strict numeric line range for sparse mapped lines", async () => {
+    const { pool } = createMockPool([
+      [{ id: "file-1" }],
+      [
+        { text: "line 10", start_line: 10 },
+        { text: "line 20", start_line: 20 },
+        { text: "line 30", start_line: 30 },
+      ],
+    ]);
+    const got = await memoryGetSessionFromIndexDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      lookup: "sessions/main/a.jsonl",
+      fromLine: 10,
+      lineCount: 5,
+      limits: {
+        maxResults: 10,
+        getMaxChars: 12_000,
+        getDefaultLines: 120,
+        sessionsMaxFileBytes: 2_000_000,
+        sessionsWrapChars: 800,
+      },
+    });
+    expect(got).not.toBeNull();
+    expect(got!.from).toBe(10);
+    expect(got!.lines).toBe(1);
+    expect(got!.text).toContain("line 10");
+    expect(got!.text).not.toContain("line 20");
+    expect(got!.nextFrom).toBe(20);
+  });
 });
 
 describe("memorySearchSessionsIndexDb", () => {

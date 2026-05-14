@@ -34,6 +34,7 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
   - `memory_search(corpus="sessions")` uses Postgres-backed sessions index (`session_index_files` + `session_index_chunks`) with FTS ranking
   - `memory_get(path="sessions/<agentId>/<file>")` is DB-first; file fallback is used only on `index_miss`
   - `sessions.visibility` modes: `off | current | visible` (default: `current`)
+  - state/session path resolution follows OpenClaw-compatible order: `OPENCLAW_STATE_DIR` -> `OPENCLAW_HOME/.openclaw` (or `HOME/.openclaw`) -> legacy `HOME/.clawdbot`
   - Phase 2 live/delta indexing is enabled (`onSessionTranscriptUpdate` + debounce + targeted sync)
   - visibility behavior is runtime-verified:
     - `current`: cross-agent delta updates are ignored
@@ -111,6 +112,9 @@ AnchorClaw exposes both “native” and compatibility surfaces via OpenClaw too
   - `MEMORY.md` is a virtual DB snapshot (source-of-truth is Postgres)
 - `memory_forget({ lookup|path? , id? })`
 - `memory_recall({ query? })`
+- `memory_status({ check? })`
+  - default (`check` omitted / `false`): cached runtime degraded-state report
+  - active mode (`check: true`): lightweight healthcheck for DB connectivity/schema + sessions dir accessibility
 
 ---
 
