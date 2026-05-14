@@ -14,6 +14,9 @@ const {
   runImport,
   getIdentityWarning,
   isSessionFileForAgent,
+  memoryGetFromDb,
+  canAccessSessionPathByVisibility,
+  filterSessionHitsByVisibility,
 } = vi.hoisted(() => ({
   registerMemoryCapability: vi.fn(),
   definePluginEntry: vi.fn((entry: unknown) => entry),
@@ -33,6 +36,9 @@ const {
   runImport: vi.fn(async () => undefined),
   getIdentityWarning: vi.fn(() => null),
   isSessionFileForAgent: vi.fn(async () => true),
+  memoryGetFromDb: vi.fn(),
+  canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true })),
+  filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
 }));
 
 vi.mock("./api.js", () => ({
@@ -66,7 +72,7 @@ vi.mock("./memory/limits.js", () => ({
   resolveMemoryLimits: () => ({ maxResults: 10, getDefaultLines: 120, getMaxChars: 12_000 }),
 }));
 
-vi.mock("./memory/get.js", () => ({ memoryGetFromDb: vi.fn() }));
+vi.mock("./memory/get.js", () => ({ memoryGetFromDb }));
 vi.mock("./memory/search.js", () => ({ memorySearchDb: vi.fn(async () => []) }));
 vi.mock("./memory/store.js", () => ({ memoryStoreDb: vi.fn() }));
 vi.mock("./memory/forget.js", () => ({ memoryForgetDb: vi.fn() }));
@@ -91,6 +97,11 @@ vi.mock("./memory/sessions-index.js", () => ({
 
 vi.mock("./memory/sessions-index-sync.js", () => ({
   syncSessionsIndexDb,
+}));
+
+vi.mock("./memory/sessions-visibility.js", () => ({
+  canAccessSessionPathByVisibility,
+  filterSessionHitsByVisibility,
 }));
 
 vi.mock("./memory/manager.js", () => ({
@@ -216,6 +227,15 @@ beforeEach(() => {
     sessions: { visibility: "current" },
     identity: { externalId: "test" },
   });
+  memoryGetFromDb.mockResolvedValue({
+    ok: true,
+    corpus: "sessions",
+    path: "sessions/main/a.jsonl",
+    kind: "session",
+    content: "ok",
+    fromLine: 1,
+    lineCount: 1,
+  });
   const pool = {
     query: vi.fn(async () => ({ rows: [] })),
     connect: vi.fn(async () => ({
@@ -307,6 +327,50 @@ describe("phase2 session delta listener", () => {
         sessionFiles: ["/tmp/agents/other/sessions/a.jsonl"],
       }),
     );
+  });
+
+  it("rejects unrecognized transcript path updates in visible visibility", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "visible" },
+      identity: { externalId: "test" },
+    });
+    const { api, getTranscriptListener } = buildApi();
+    (plugin as any).register(api);
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/not-a-session-file.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("ignored session delta update due to unrecognized path"),
+    );
+  });
+
+  it("blocks memory_get sessions lookup in visible mode when session visibility guard denies access", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "visible" },
+      identity: { externalId: "test" },
+    });
+    canAccessSessionPathByVisibility.mockResolvedValueOnce({
+      allowed: false,
+      reason: "blocked by visibility policy",
+    });
+    const { api } = buildApi();
+    (plugin as any).register(api);
+
+    const getRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_get");
+    expect(getRegistration).toBeDefined();
+
+    const result = await getRegistration.execute("toolcall-1", {
+      lookup: "sessions/other/a.jsonl",
+    });
+    expect(result.content[0].text).toContain("blocked by visibility policy");
+    expect(memoryGetFromDb).not.toHaveBeenCalled();
   });
 
   it("registers lifecycle cleanup through legacy api.registerRuntimeLifecycle when grouped lifecycle API is unavailable", async () => {

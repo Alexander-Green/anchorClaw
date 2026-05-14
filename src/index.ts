@@ -15,6 +15,10 @@ import { isSessionFileForAgent, listKnownAgentIds, memorySearchSessions } from "
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
 import { syncSessionsIndexDb } from "./memory/sessions-index-sync.js";
 import {
+  canAccessSessionPathByVisibility,
+  filterSessionHitsByVisibility,
+} from "./memory/sessions-visibility.js";
+import {
   createAnchorClawMemorySearchManager,
   type AnchorClawMemorySearchManagerOptions,
 } from "./memory/manager.js";
@@ -311,6 +315,17 @@ export default definePluginEntry({
       const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
       const isRelevantSessionDeltaPath = async (sessionFile: string): Promise<boolean> => {
         if ((cfg?.sessions?.visibility ?? "current") === "visible") {
+          const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
+          if (!lookup) {
+            const next = (ignoredSessionDeltaPathCounts.get(sessionFile) ?? 0) + 1;
+            ignoredSessionDeltaPathCounts.set(sessionFile, next);
+            if (next === 1 || next === 5 || next % 20 === 0) {
+              api.logger.warn(
+                `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
+              );
+            }
+            return false;
+          }
           return true;
         }
         const inCurrentAgentDir = await isSessionFileForAgent({
@@ -618,6 +633,9 @@ export default definePluginEntry({
                   limits,
                 });
           }
+          if (sessionsVisibility === "visible") {
+            hits = await filterSessionHitsByVisibility({ api, hits });
+          }
         } else if (trimmedCorpus === "memory") {
           hits = await memorySearchDb({
             pool: getPool(),
@@ -673,7 +691,9 @@ export default definePluginEntry({
               }
             }
           }
-          merged.sort((left: any, right: any) => {
+          const mergedForOutput =
+            sessionsVisibility === "visible" ? await filterSessionHitsByVisibility({ api, hits: merged }) : merged;
+          mergedForOutput.sort((left: any, right: any) => {
             const ls = typeof left?.score === "number" ? left.score : 0;
             const rs = typeof right?.score === "number" ? right.score : 0;
             if (rs !== ls) {
@@ -689,7 +709,7 @@ export default definePluginEntry({
             const rp = typeof right?.path === "string" ? right.path : "";
             return lp.localeCompare(rp);
           });
-          hits = merged.slice(0, effectiveMax);
+          hits = mergedForOutput.slice(0, effectiveMax);
         }
 
         if (trimmedCorpus !== "memory" && trimmedCorpus !== "sessions" && trimmedCorpus !== "all") {
@@ -766,6 +786,26 @@ export default definePluginEntry({
             content: [{ type: "text", text: "anchorclaw: sessions corpus is disabled by config (sessions.visibility=off)" }],
             details: { disabled: true, error: "sessions corpus disabled", visibility: sessionsVisibility },
           };
+        }
+        if (sessionsVisibility === "visible" && lookup.trim().startsWith("sessions/")) {
+          const verdict = await canAccessSessionPathByVisibility({
+            api,
+            path: lookup.trim(),
+          });
+          if (!verdict.allowed) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `anchorclaw: memory_get failed (${verdict.reason ?? "sessions lookup visibility denied"})`,
+                },
+              ],
+              details: {
+                disabled: true,
+                error: verdict.reason ?? "sessions lookup visibility denied",
+              },
+            };
+          }
         }
         const got = await memoryGetFromDb({
           pool: getPool(),

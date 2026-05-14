@@ -6,14 +6,17 @@ import { resolveMemoryLimits } from "./limits.js";
 import { memoryGetFromDb } from "./get.js";
 import { memorySearchDb, type MemorySearchHit } from "./search.js";
 import { memorySearchSessions } from "./sessions.js";
+import { listKnownAgentIds } from "./sessions.js";
 import {
   hasSessionsIndexRows,
   memorySearchSessionsIndexDb,
 } from "./sessions-index.js";
 import { syncSessionsIndexDb } from "./sessions-index-sync.js";
+import { canAccessSessionPathByVisibility, filterSessionHitsByVisibility } from "./sessions-visibility.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { listSessionFilesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 
 type MemorySource = "memory" | "sessions";
 
@@ -167,6 +170,18 @@ export function createAnchorClawMemorySearchManager(
     return null;
   };
 
+  const buildVisibleSessionFiles = async (): Promise<string[]> => {
+    const currentAgentId = params.agentId;
+    const agentIds = await listKnownAgentIds();
+    const orderedAgentIds = [currentAgentId, ...agentIds.filter((agentId) => agentId !== currentAgentId)];
+    const out: string[] = [];
+    for (const agentId of orderedAgentIds) {
+      const files = await listSessionFilesForAgent(agentId);
+      out.push(...files);
+    }
+    return out;
+  };
+
   return {
     async search(query, opts) {
       const q = query.trim();
@@ -234,7 +249,12 @@ export function createAnchorClawMemorySearchManager(
             });
           }
         }
-        results.push(...sessionHits.map(mapHitToManagerResult));
+        const mappedSessionHits = sessionHits.map(mapHitToManagerResult);
+        const filteredSessionHits =
+          sessionsVisibility === "visible"
+            ? await filterSessionHitsByVisibility({ api, hits: mappedSessionHits })
+            : mappedSessionHits;
+        results.push(...filteredSessionHits);
       }
 
       // No semantic/vector layer yet.
@@ -265,6 +285,15 @@ export function createAnchorClawMemorySearchManager(
       if (relPath.startsWith("sessions/")) {
         if (!sessionsEnabled) {
           return { text: "", path: readParams.relPath };
+        }
+        if (sessionsVisibility === "visible") {
+          const verdict = await canAccessSessionPathByVisibility({
+            api,
+            path: relPath,
+          });
+          if (!verdict.allowed) {
+            return { text: "", path: readParams.relPath };
+          }
         }
         const got = await memoryGetFromDb({
           pool: params.getPool(),
@@ -403,6 +432,9 @@ export function createAnchorClawMemorySearchManager(
         syncParams.progress({ completed: 0, total: 1, label: "syncing sessions index" });
       }
       await syncSessionsIndexDb({
+        ...(sessionsVisibility === "visible" && (!syncParams?.sessionFiles || syncParams.sessionFiles.length === 0)
+          ? { sessionFiles: await buildVisibleSessionFiles() }
+          : {}),
         pool: params.getPool(),
         userId: scope.userId,
         workspaceId: scope.workspaceId,
