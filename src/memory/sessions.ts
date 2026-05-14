@@ -65,6 +65,29 @@ export async function resolveSessionsDirForAgent(agentId?: string): Promise<stri
   return path.join(stateDir, "agents", normalized, "sessions");
 }
 
+export async function isSessionFileForAgent(params: {
+  sessionFile: string;
+  agentId?: string;
+}): Promise<boolean> {
+  const candidate = params.sessionFile.trim();
+  if (!candidate) {
+    return false;
+  }
+  const normalizedLookup = candidate.replaceAll("\\", "/");
+  if (normalizedLookup.startsWith("sessions/")) {
+    const parts = normalizedLookup.split("/").filter(Boolean);
+    if (parts.length === 3 && parts[0] === "sessions") {
+      const lookupAgentId = normalizeAgentId(parts[1] ?? "");
+      const expectedAgentId = normalizeAgentId(params.agentId ?? "main");
+      return lookupAgentId === expectedAgentId;
+    }
+  }
+  const sessionsDir = path.resolve(await resolveSessionsDirForAgent(params.agentId));
+  const absPath = path.resolve(candidate);
+  const rel = path.relative(sessionsDir, absPath);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 function clampInteger(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
     return min;

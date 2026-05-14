@@ -31,7 +31,18 @@ async function normalizeTargetSessionFiles(params: {
   if (!Array.isArray(params.sessionFiles) || params.sessionFiles.length === 0) {
     return null;
   }
-  const sessionsDir = await resolveSessionsDirForAgent(params.agentId);
+  const sessionsDirByAgent = new Map<string, string>();
+  async function getSessionsDir(agentId: string): Promise<string> {
+    const cached = sessionsDirByAgent.get(agentId);
+    if (cached) {
+      return cached;
+    }
+    const resolved = await resolveSessionsDirForAgent(agentId);
+    sessionsDirByAgent.set(agentId, resolved);
+    return resolved;
+  }
+
+  const sessionsDir = await getSessionsDir(params.agentId);
   const normalized: string[] = [];
   for (const raw of params.sessionFiles) {
     const trimmed = raw.trim();
@@ -44,7 +55,7 @@ async function normalizeTargetSessionFiles(params: {
       const lookupAgentId = parts[1];
       const fileName = parts[2];
       if (lookupAgentId && fileName) {
-        const lookupSessionsDir = await resolveSessionsDirForAgent(lookupAgentId);
+        const lookupSessionsDir = await getSessionsDir(lookupAgentId);
         normalized.push(path.join(lookupSessionsDir, fileName));
       } else if (fileName) {
         normalized.push(path.join(sessionsDir, fileName));

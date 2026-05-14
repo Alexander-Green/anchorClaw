@@ -11,7 +11,7 @@ import { memoryStoreDb } from "./memory/store.js";
 import { memoryForgetDb } from "./memory/forget.js";
 import { memoryRecallDb } from "./memory/recall.js";
 import { buildPromptMemorySection, queryPromptMemoryItems } from "./memory/prompt.js";
-import { listKnownAgentIds, memorySearchSessions } from "./memory/sessions.js";
+import { isSessionFileForAgent, listKnownAgentIds, memorySearchSessions } from "./memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
 import { syncSessionsIndexDb } from "./memory/sessions-index-sync.js";
 import {
@@ -20,7 +20,8 @@ import {
 } from "./memory/manager.js";
 import { runOneTimeWorkspaceImport } from "./importer.js";
 import { getIdentityStartupWarning } from "./identity-policy.js";
-import { listSessionFilesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { listSessionFilesForAgent, sessionPathForFile } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { normalizeSessionLookupPath } from "./memory/sessions-index.js";
 
 function resolveActor(api: OpenClawPluginApi): string {
   const agentId = (api as any)?.runtime?.agentId;
@@ -33,6 +34,8 @@ function resolveActor(api: OpenClawPluginApi): string {
   }
   return "openclaw";
 }
+
+const SESSION_DELTA_DEBOUNCE_MS = 5_000;
 
 export default definePluginEntry({
   id: "anchorclaw",
@@ -103,6 +106,12 @@ export default definePluginEntry({
     let promptCacheRefreshPromise: Promise<void> | null = null;
     let sessionsIndexBootstrapPromise: Promise<void> | null = null;
     let sessionsIndexBootstrapped = false;
+    const pendingSessionDeltaFiles = new Set<string>();
+    let sessionDeltaTimer: ReturnType<typeof setTimeout> | null = null;
+    let sessionDeltaSyncInFlight: Promise<void> | null = null;
+    let sessionDeltaUnsubscribe: (() => void) | null = null;
+    let sessionDeltaClosed = false;
+    const ignoredSessionDeltaPathCounts = new Map<string, number>();
     const buildVisibleBootstrapSessionFiles = async (): Promise<string[]> => {
       const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
       const agentIds = await listKnownAgentIds();
@@ -210,6 +219,147 @@ export default definePluginEntry({
       })();
       await sessionsIndexBootstrapPromise;
     };
+    const flushSessionDeltaSync = async () => {
+      if (sessionDeltaClosed) {
+        pendingSessionDeltaFiles.clear();
+        return;
+      }
+      if (!cfg) {
+        pendingSessionDeltaFiles.clear();
+        return;
+      }
+      if ((cfg.sessions?.visibility ?? "current") === "off") {
+        pendingSessionDeltaFiles.clear();
+        return;
+      }
+      if (pendingSessionDeltaFiles.size === 0) {
+        return;
+      }
+      if (sessionDeltaSyncInFlight) {
+        return;
+      }
+
+      const batch = Array.from(pendingSessionDeltaFiles);
+      pendingSessionDeltaFiles.clear();
+      sessionDeltaSyncInFlight = (async () => {
+        try {
+          api.logger.info(
+            `anchorclaw: sessions delta flush start (batch=${batch.length}, visibility=${cfg.sessions?.visibility ?? "current"})`,
+          );
+          await ensureReady();
+          const scope = await resolveUserAndWorkspaceScope({
+            api,
+            pool: getPool(),
+            agentId: (api as any)?.runtime?.agentId,
+            sessionKey: (api as any)?.runtime?.sessionKey,
+            configuredExternalId: cfg?.identity?.externalId,
+          });
+          const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
+          await syncSessionsIndexDb({
+            pool: getPool(),
+            userId: scope.userId,
+            workspaceId: scope.workspaceId,
+            agentId: currentAgentId,
+            sessionFiles: batch,
+          });
+          api.logger.info(
+            `anchorclaw: sessions delta flush done (batch=${batch.length}, agent=${currentAgentId})`,
+          );
+        } catch (error) {
+          api.logger.warn(
+            `anchorclaw: sessions delta sync failed (${error instanceof Error ? error.message : String(error)})`,
+          );
+        } finally {
+          sessionDeltaSyncInFlight = null;
+          if (pendingSessionDeltaFiles.size > 0 && !sessionDeltaClosed && !sessionDeltaTimer) {
+            sessionDeltaTimer = setTimeout(() => {
+              sessionDeltaTimer = null;
+              void flushSessionDeltaSync();
+            }, SESSION_DELTA_DEBOUNCE_MS);
+          }
+        }
+      })();
+
+      await sessionDeltaSyncInFlight;
+    };
+    const scheduleSessionDeltaSync = (sessionFile: string) => {
+      const filePath = sessionFile.trim();
+      if (!filePath || sessionDeltaClosed) {
+        return;
+      }
+      pendingSessionDeltaFiles.add(filePath);
+      if (sessionDeltaTimer) {
+        return;
+      }
+      sessionDeltaTimer = setTimeout(() => {
+        sessionDeltaTimer = null;
+        void flushSessionDeltaSync();
+      }, SESSION_DELTA_DEBOUNCE_MS);
+    };
+    const ensureSessionDeltaListener = () => {
+      if (!cfg || sessionDeltaClosed || sessionDeltaUnsubscribe) {
+        return;
+      }
+      if ((cfg.sessions?.visibility ?? "current") === "off") {
+        return;
+      }
+      const subscribe = (api as any)?.runtime?.events?.onSessionTranscriptUpdate;
+      if (typeof subscribe !== "function") {
+        api.logger.warn("anchorclaw: runtime.events.onSessionTranscriptUpdate unavailable; sessions delta sync disabled");
+        return;
+      }
+      const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
+      const isRelevantSessionDeltaPath = async (sessionFile: string): Promise<boolean> => {
+        if ((cfg?.sessions?.visibility ?? "current") === "visible") {
+          return true;
+        }
+        const inCurrentAgentDir = await isSessionFileForAgent({
+          sessionFile,
+          agentId: currentAgentId,
+        });
+        if (!inCurrentAgentDir) {
+          const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
+          const logKey = lookup || sessionFile;
+          const next = (ignoredSessionDeltaPathCounts.get(logKey) ?? 0) + 1;
+          ignoredSessionDeltaPathCounts.set(logKey, next);
+          if (next === 1 || next === 5 || next % 20 === 0) {
+            api.logger.warn(
+              `anchorclaw: ignored session delta update outside current visibility (${logKey}) [count=${next}]`,
+            );
+          }
+          return false;
+        }
+        const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
+        if (!lookup) {
+          const next = (ignoredSessionDeltaPathCounts.get(sessionFile) ?? 0) + 1;
+          ignoredSessionDeltaPathCounts.set(sessionFile, next);
+          if (next === 1 || next === 5 || next % 20 === 0) {
+            api.logger.warn(
+              `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
+            );
+          }
+          return false;
+        }
+        return true;
+      };
+      sessionDeltaUnsubscribe = subscribe((update: { sessionFile?: unknown }) => {
+        if (sessionDeltaClosed) {
+          return;
+        }
+        const sessionFile = typeof update?.sessionFile === "string" ? update.sessionFile : "";
+        if (!sessionFile) {
+          return;
+        }
+        api.logger.info(`anchorclaw: transcript update event received (${sessionFile})`);
+        void (async () => {
+          if (!(await isRelevantSessionDeltaPath(sessionFile))) {
+            return;
+          }
+          api.logger.info(`anchorclaw: transcript update accepted for delta sync (${sessionFile})`);
+          scheduleSessionDeltaSync(sessionFile);
+        })();
+      });
+    };
 
     api.logger.info(
       cfg
@@ -220,6 +370,7 @@ export default definePluginEntry({
     // Best-effort warm-up so the very first prompt often has durable memory available.
     if (cfg) {
       refreshPromptCache();
+      ensureSessionDeltaListener();
     }
 
     // Best-effort one-time import of legacy memory files from the workspace into Postgres.
@@ -247,6 +398,49 @@ export default definePluginEntry({
           );
         }
       })();
+    }
+    const registerRuntimeLifecycle = (api as any)?.lifecycle?.registerRuntimeLifecycle;
+    const registerRuntimeLifecycleCompat =
+      typeof registerRuntimeLifecycle === "function"
+        ? registerRuntimeLifecycle.bind((api as any).lifecycle)
+        : typeof (api as any)?.registerRuntimeLifecycle === "function"
+          ? (api as any).registerRuntimeLifecycle.bind(api)
+          : null;
+    if (typeof registerRuntimeLifecycle === "function") {
+      api.logger.info("anchorclaw: runtime lifecycle API detected (api.lifecycle.registerRuntimeLifecycle)");
+    } else if (typeof (api as any)?.registerRuntimeLifecycle === "function") {
+      api.logger.warn(
+        "anchorclaw: using legacy runtime lifecycle API (api.registerRuntimeLifecycle); host SDK appears older than grouped lifecycle surface",
+      );
+    } else if (!registerRuntimeLifecycleCompat) {
+      const logError =
+        typeof (api.logger as any)?.error === "function"
+          ? (api.logger as any).error.bind(api.logger)
+          : api.logger.warn.bind(api.logger);
+      logError(
+        "anchorclaw: no runtime lifecycle registration API available; listener cleanup on reload/disable is unavailable",
+      );
+    }
+    if (registerRuntimeLifecycleCompat) {
+      registerRuntimeLifecycleCompat({
+      id: "anchorclaw-sessions-delta-listener",
+      description: "Cleans up transcript update listener and pending debounce timer.",
+      cleanup: async () => {
+        sessionDeltaClosed = true;
+        if (sessionDeltaTimer) {
+          clearTimeout(sessionDeltaTimer);
+          sessionDeltaTimer = null;
+        }
+        pendingSessionDeltaFiles.clear();
+        if (sessionDeltaUnsubscribe) {
+          try {
+            sessionDeltaUnsubscribe();
+          } finally {
+            sessionDeltaUnsubscribe = null;
+          }
+        }
+      },
+    });
     }
 
     registerMemoryCapability("anchorclaw", {

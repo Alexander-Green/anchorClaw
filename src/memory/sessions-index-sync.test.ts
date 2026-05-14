@@ -206,4 +206,43 @@ describe("syncSessionsIndexDb", () => {
     expect(chunkInsert).toBeDefined();
     expect(chunkInsert?.args[3]).toBe("other");
   });
+
+  it("resolves sessions directory once per agent during targeted sync normalization", async () => {
+    resolveSessionsDirForAgent.mockImplementation(async (agentId: string) => `/root/.openclaw/agents/${agentId}/sessions`);
+    buildSessionEntry.mockResolvedValueOnce({
+      path: "sessions/other/a.jsonl",
+      hash: "h5",
+      content: "User: one",
+      lineMap: [1],
+      messageTimestampsMs: [1],
+      mtimeMs: 1,
+      size: 10,
+    });
+    buildSessionEntry.mockResolvedValueOnce({
+      path: "sessions/other/b.jsonl",
+      hash: "h6",
+      content: "User: two",
+      lineMap: [2],
+      messageTimestampsMs: [2],
+      mtimeMs: 2,
+      size: 20,
+    });
+    const { pool } = createMockPool({
+      probeRows: [],
+      existingRows: [],
+    });
+
+    await syncSessionsIndexDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      agentId: "main",
+      sessionFiles: ["sessions/other/a.jsonl", "sessions/other/b.jsonl"],
+    });
+
+    const callsForMain = resolveSessionsDirForAgent.mock.calls.filter((call) => call[0] === "main");
+    const callsForOther = resolveSessionsDirForAgent.mock.calls.filter((call) => call[0] === "other");
+    expect(callsForMain).toHaveLength(1);
+    expect(callsForOther).toHaveLength(1);
+  });
 });

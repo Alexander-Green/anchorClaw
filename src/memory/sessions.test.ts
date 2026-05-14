@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { memoryGetSessionFile } from "./sessions.js";
+import { isSessionFileForAgent, memoryGetSessionFile } from "./sessions.js";
 
 describe("sessions corpus (MVP)", () => {
   it("returns null for non-sessions lookups", async () => {
@@ -76,5 +76,67 @@ describe("sessions corpus (MVP)", () => {
     });
 
     expect(res).toBeNull();
+  });
+
+  it("detects that a transcript file belongs to the current agent sessions dir", async () => {
+    const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
+    const stateDir = `${tmp}/anchorclaw-test-state-agent-match`;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const agentId = "main";
+    const fileName = "match.jsonl";
+    const sessionsDir = `${stateDir}/agents/${agentId}/sessions`;
+    const absPath = `${sessionsDir}/${fileName}`;
+
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(absPath, "", "utf8");
+
+    const isMatch = await isSessionFileForAgent({
+      sessionFile: absPath,
+      agentId,
+    });
+
+    expect(isMatch).toBe(true);
+  });
+
+  it("rejects transcript files outside the current agent sessions dir", async () => {
+    const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
+    const stateDir = `${tmp}/anchorclaw-test-state-agent-mismatch`;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const currentAgentId = "main";
+    const otherAgentId = "other";
+    const otherSessionsDir = `${stateDir}/agents/${otherAgentId}/sessions`;
+    const absPath = `${otherSessionsDir}/foreign.jsonl`;
+
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(otherSessionsDir, { recursive: true });
+    await writeFile(absPath, "", "utf8");
+
+    const isMatch = await isSessionFileForAgent({
+      sessionFile: absPath,
+      agentId: currentAgentId,
+    });
+
+    expect(isMatch).toBe(false);
+  });
+
+  it("accepts lookup-style session path for the same agent", async () => {
+    const isMatch = await isSessionFileForAgent({
+      sessionFile: "sessions/main/a.jsonl",
+      agentId: "main",
+    });
+
+    expect(isMatch).toBe(true);
+  });
+
+  it("rejects lookup-style session path for a different agent", async () => {
+    const isMatch = await isSessionFileForAgent({
+      sessionFile: "sessions/other/a.jsonl",
+      agentId: "main",
+    });
+
+    expect(isMatch).toBe(false);
   });
 });
