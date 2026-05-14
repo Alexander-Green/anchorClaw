@@ -30,11 +30,15 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
     - AnchorClaw-native: `{ lookup, fromLine, lineCount }`
     - OpenClaw aliases: `{ path, from, lines }`
   - Reading `MEMORY.md` via `memory_get`/runtime returns a **virtual snapshot generated from Postgres** (keeps legacy flows compatible while DB stays source-of-truth)
-- **Sessions corpus (Phase 1 implementation complete; real-runtime verification pending)**
+- **Sessions corpus (Phase 1 + Phase 2 live-pass complete)**
   - `memory_search(corpus="sessions")` uses Postgres-backed sessions index (`session_index_files` + `session_index_chunks`) with FTS ranking
   - `memory_get(path="sessions/<agentId>/<file>")` is DB-first; file fallback is used only on `index_miss`
   - `sessions.visibility` modes: `off | current | visible` (default: `current`)
-  - code/test status is complete at commit `cd9dd70`; before calling Phase 1 fully closed, run the live checklist in `anchorClaw/PHASE1_REAL_VERIFICATION.md`
+  - Phase 2 live/delta indexing is enabled (`onSessionTranscriptUpdate` + debounce + targeted sync)
+  - visibility behavior is runtime-verified:
+    - `current`: cross-agent delta updates are ignored
+    - `visible`: cross-agent delta updates are accepted and indexed
+    - `off`: sessions delta listener is disabled
 - **Migration support**
   - One-time idempotent import of legacy `MEMORY.md` into Postgres (by file hash)
   - Optional (default on) cleanup of `MEMORY.md` after import to avoid duplicate prompt injection
@@ -220,12 +224,10 @@ AnchorClaw intentionally starts with deterministic SQL-first durability. Next la
 - **Semantic layer**: embeddings + semantic search (hybrid retrieval: lexical + vector; optional and non-breaking)
 - **Persona context in DB**: dynamic persona/profile retrieval and injection into the system prompt (separate budgets/policy)
 - **Knowledge graph**: `entity_edges`-style relationships and multi-hop retrieval to pull secondary context automatically
-- **Sessions indexing Phase 2**: add live/delta indexing via transcript update listener + debounce + targeted sync
 - **Wiki integration / AnchorClaw-native wiki**: either integrate OpenClaw supplements (`memory-wiki`) or build a DB-native wiki layer
 
 ## Current Status
 
 - Durable memory MVP: implemented and green in repo tests.
-- Sessions Phase 1: implemented, reviewed, and green in repo tests/typecheck.
-- Remaining gate before declaring Sessions Phase 1 fully closed: run the live runtime checklist in `anchorClaw/PHASE1_REAL_VERIFICATION.md`.
-- Next planned step after that live verification: Sessions Phase 2 (`onSessionTranscriptUpdate` + debounce + targeted sync).
+- Sessions Phase 1 and Phase 2: implemented, reviewed, and runtime-verified on VPS `server-166`.
+- Session delta indexing parity path is active in runtime (listener + debounce + targeted sync + lifecycle cleanup compatibility fallback).

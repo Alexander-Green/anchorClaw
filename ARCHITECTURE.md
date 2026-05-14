@@ -25,9 +25,15 @@ AnchorClaw solves a different problem:
 
 Current delivery state:
 
-- Sessions Phase 1 implementation is in git and green in repo tests/typecheck.
-- Before calling Sessions Phase 1 fully closed, a live runtime verification pass is still required; see `anchorClaw/PHASE1_REAL_VERIFICATION.md`.
-- Sessions Phase 2 is the next planned step after that verification pass.
+- Sessions Phase 1 and Phase 2 are implemented, green in repo tests/typecheck, and runtime-verified on VPS (`server-166`).
+- Live/delta freshness loop is active: `onSessionTranscriptUpdate` listener + debounce + targeted sync.
+- `sessions.visibility` behavior is runtime-verified:
+  - `current`: cross-agent delta updates are ignored
+  - `visible`: cross-agent delta updates are accepted and indexed
+  - `off`: sessions delta listener is disabled
+- Runtime lifecycle compatibility fallback is enabled:
+  - preferred: `api.lifecycle.registerRuntimeLifecycle`
+  - fallback: `api.registerRuntimeLifecycle` (legacy hosts)
 
 ## Virtual `MEMORY.md`
 
@@ -88,7 +94,6 @@ Operational implications:
 
 ## Known MVP Limits
 
-- sessions corpus: Phase 1 is lexical-only and still pending final live runtime verification before being treated as fully closed
-- sessions freshness: no live transcript listener yet; recent transcript changes still depend on bootstrap/sync behavior until Phase 2
+- sessions corpus remains lexical-only (FTS). Semantic/vector layer is still future work.
 - `corpus="wiki"`: not implemented
 - types beyond `fact/note` are deferred until explicit injection/write policy is defined
