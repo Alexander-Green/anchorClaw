@@ -14,6 +14,7 @@ const {
   runImport,
   getIdentityWarning,
   isSessionFileForAgent,
+  isSessionFileForAnyKnownAgent,
   memoryGetFromDb,
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
@@ -36,6 +37,7 @@ const {
   runImport: vi.fn(async () => undefined),
   getIdentityWarning: vi.fn(() => null),
   isSessionFileForAgent: vi.fn(async () => true),
+  isSessionFileForAnyKnownAgent: vi.fn(async () => true),
   memoryGetFromDb: vi.fn(),
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true })),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
@@ -87,6 +89,7 @@ vi.mock("./memory/sessions.js", () => ({
   listKnownAgentIds: vi.fn(async () => []),
   memorySearchSessions: vi.fn(async () => []),
   isSessionFileForAgent,
+  isSessionFileForAnyKnownAgent,
 }));
 
 vi.mock("./memory/sessions-index.js", () => ({
@@ -313,6 +316,7 @@ describe("phase2 session delta listener", () => {
       identity: { externalId: "test" },
     });
     isSessionFileForAgent.mockResolvedValue(false);
+    isSessionFileForAnyKnownAgent.mockResolvedValue(true);
     const { api, getTranscriptListener } = buildApi();
     (plugin as any).register(api);
 
@@ -335,6 +339,7 @@ describe("phase2 session delta listener", () => {
       sessions: { visibility: "visible" },
       identity: { externalId: "test" },
     });
+    isSessionFileForAnyKnownAgent.mockResolvedValue(false);
     const { api, getTranscriptListener } = buildApi();
     (plugin as any).register(api);
 
