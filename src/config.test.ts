@@ -43,6 +43,8 @@ describe("anchorClawConfigSchema sessions.visibility", () => {
   it("defaults to sessions.visibility=current when sessions block is omitted", () => {
     const parsed = anchorClawConfigSchema.parse(baseConfig());
     expect(parsed.sessions?.visibility).toBe("current");
+    expect(parsed.sessions?.sync?.deltaBytes).toBe(100_000);
+    expect(parsed.sessions?.sync?.deltaMessages).toBe(50);
   });
 
   it("accepts visibility=current|off|visible", () => {
@@ -72,6 +74,49 @@ describe("anchorClawConfigSchema sessions.visibility", () => {
         sessions: { visibility: "all" },
       }),
     ).toThrow("sessions.visibility must be one of: current, off, visible");
+  });
+});
+
+describe("anchorClawConfigSchema sessions.sync", () => {
+  it("accepts custom deltaBytes/deltaMessages thresholds", () => {
+    const parsed = anchorClawConfigSchema.parse({
+      ...baseConfig(),
+      sessions: {
+        visibility: "current",
+        sync: {
+          deltaBytes: 321,
+          deltaMessages: 7,
+        },
+      },
+    });
+    expect(parsed.sessions?.sync?.deltaBytes).toBe(321);
+    expect(parsed.sessions?.sync?.deltaMessages).toBe(7);
+  });
+
+  it("rejects negative thresholds", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        sessions: {
+          sync: {
+            deltaBytes: -1,
+          },
+        },
+      }),
+    ).toThrow("sessions.sync.deltaBytes must be between 0 and");
+  });
+
+  it("rejects non-integer thresholds", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        sessions: {
+          sync: {
+            deltaMessages: 2.5,
+          },
+        },
+      }),
+    ).toThrow("sessions.sync.deltaMessages must be an integer");
   });
 });
 

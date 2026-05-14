@@ -243,10 +243,10 @@ export function createAnchorClawMemorySearchManager(
           }
         }
         const mappedSessionHits = sessionHits.map(mapHitToManagerResult);
-        const filteredSessionHits =
-          sessionsVisibility === "visible"
-            ? await filterSessionHitsByVisibility({ api, hits: mappedSessionHits })
-            : mappedSessionHits;
+        const filteredSessionHits = await filterSessionHitsByVisibility({
+          api,
+          hits: mappedSessionHits,
+        });
         results.push(...filteredSessionHits);
       }
 
@@ -279,14 +279,12 @@ export function createAnchorClawMemorySearchManager(
         if (!sessionsEnabled) {
           return { text: "", path: readParams.relPath };
         }
-        if (sessionsVisibility === "visible") {
-          const verdict = await canAccessSessionPathByVisibility({
-            api,
-            path: relPath,
-          });
-          if (!verdict.allowed) {
-            return { text: "", path: readParams.relPath };
-          }
+        const verdict = await canAccessSessionPathByVisibility({
+          api,
+          path: relPath,
+        });
+        if (!verdict.allowed) {
+          return { text: "", path: readParams.relPath };
         }
         const got = await memoryGetFromDb({
           pool: params.getPool(),

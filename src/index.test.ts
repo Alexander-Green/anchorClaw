@@ -268,7 +268,7 @@ beforeEach(() => {
   );
   parseCfg.mockReturnValue({
     postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-    sessions: { visibility: "current" },
+    sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
     identity: { externalId: "test" },
   });
   memoryGetFromDb.mockResolvedValue({
@@ -512,6 +512,57 @@ describe("phase2 session delta listener", () => {
     );
   });
 
+  it("applies configured sessions.sync deltaMessages threshold", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: {
+        visibility: "current",
+        sync: { deltaBytes: 100_000, deltaMessages: 1 },
+      },
+      identity: { externalId: "test" },
+    });
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockResolvedValueOnce({ size: 120 });
+    openFs.mockResolvedValue({
+      read: vi.fn(async () => ({ bytesRead: 10 })),
+      close: vi.fn(async () => undefined),
+    });
+    const { api, getTranscriptListener } = buildApi();
+    (plugin as any).register(api);
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/one-message.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFiles: ["/tmp/agents/main/sessions/one-message.jsonl"],
+      }),
+    );
+  });
+
+  it("does not force sync on unchanged files when thresholds are zero", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: {
+        visibility: "current",
+        sync: { deltaBytes: 0, deltaMessages: 0 },
+      },
+      identity: { externalId: "test" },
+    });
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockResolvedValueOnce({ size: 0 });
+    const { api, getTranscriptListener } = buildApi();
+    (plugin as any).register(api);
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/unchanged.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+  });
+
   it("rejects unrecognized transcript path updates in visible visibility", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
@@ -552,6 +603,31 @@ describe("phase2 session delta listener", () => {
 
     const result = await getRegistration.execute("toolcall-1", {
       lookup: "sessions/other/a.jsonl",
+    });
+    expect(result.content[0].text).toContain("blocked by visibility policy");
+    expect(memoryGetFromDb).not.toHaveBeenCalled();
+  });
+
+  it("blocks memory_get sessions lookup in current mode when session visibility guard denies access", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "current" },
+      identity: { externalId: "test" },
+    });
+    canAccessSessionPathByVisibility.mockResolvedValueOnce({
+      allowed: false,
+      reason: "blocked by visibility policy",
+    } as any);
+    const { api } = buildApi();
+    (plugin as any).register(api);
+
+    const getRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_get");
+    expect(getRegistration).toBeDefined();
+
+    const result = await getRegistration.execute("toolcall-2", {
+      lookup: "sessions/main/a.jsonl",
     });
     expect(result.content[0].text).toContain("blocked by visibility policy");
     expect(memoryGetFromDb).not.toHaveBeenCalled();

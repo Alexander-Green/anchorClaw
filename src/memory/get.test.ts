@@ -119,6 +119,28 @@ describe("memoryGetFromDb sessions visibility", () => {
     expect(got.content).toContain("Assistant: hi");
   });
 
+  it("applies upstream agent normalization for current-visibility sessions scope", async () => {
+    const pool = createPool([
+      [{ id: "f1" }],
+      [{ text: "User: hello", start_line: 2 }],
+    ]);
+    const got = await memoryGetFromDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      agentId: "Team.Alpha",
+      sessionsVisibility: "current",
+      limits,
+      lookup: "sessions/team-alpha/s1.jsonl",
+    });
+    expect(got.ok).toBe(true);
+    if (!got.ok) {
+      throw new Error("expected successful result");
+    }
+    expect(got.path).toBe("sessions/team-alpha/s1.jsonl");
+    expect(got.content).toContain("User: hello");
+  });
+
   it("returns index_corrupt error when file row exists but indexed read is missing", async () => {
     const pool = createPool([[], [{ id: "indexed-row" }]]);
     const got = await memoryGetFromDb({

@@ -5,17 +5,9 @@ import { buildMemoryReadResult } from "./read-file-shared.js";
 import { memoryGetSessionFile } from "./sessions.js";
 import { memoryGetSessionFromIndexDb, normalizeSessionLookupPath } from "./sessions-index.js";
 import { syncSessionsIndexDb } from "./sessions-index-sync.js";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-function normalizeAgentId(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) {
-    return "main";
-  }
-  const normalized = trimmed.replaceAll(/[^a-z0-9._-]+/g, "-").replaceAll(/^-+|-+$/g, "");
-  return normalized || "main";
-}
 
 export type MemoryGetParams = {
   lookup: string;
@@ -129,9 +121,7 @@ export async function memoryGetFromDb(params: {
     }
     if ((params.sessionsVisibility ?? "current") === "current") {
       const [, lookupAgentId] = normalizedLookup.split("/");
-      const currentAgentId = normalizeAgentId(
-        typeof params.agentId === "string" ? params.agentId : "main",
-      );
+      const currentAgentId = normalizeAgentId(params.agentId);
       if (lookupAgentId && normalizeAgentId(lookupAgentId) !== currentAgentId) {
         return { ok: false, disabled: true, error: "sessions lookup is restricted to current agent scope" };
       }

@@ -34,6 +34,7 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
   - `memory_search(corpus="sessions")` uses Postgres-backed sessions index (`session_index_files` + `session_index_chunks`) with FTS ranking
   - `memory_get(path="sessions/<agentId>/<file>")` is DB-first; file fallback is used only on `index_miss`
   - `sessions.visibility` modes: `off | current | visible` (default: `current`)
+  - `sessions.sync.deltaBytes` / `sessions.sync.deltaMessages` control delta reindex thresholds (defaults: `100000` / `50`)
   - state/session path resolution follows OpenClaw-compatible order: `OPENCLAW_STATE_DIR` -> `OPENCLAW_HOME/.openclaw` (or `HOME/.openclaw`) -> legacy `HOME/.clawdbot`
   - Phase 2 live/delta indexing is enabled (`onSessionTranscriptUpdate` + debounce + targeted sync)
   - visibility behavior is runtime-verified:
@@ -74,6 +75,13 @@ Select the memory slot and configure Postgres:
       "anchorclaw": {
         "enabled": true,
         "config": {
+          "sessions": {
+            "visibility": "current",
+            "sync": {
+              "deltaBytes": 100000,
+              "deltaMessages": 50
+            }
+          },
           "identity": {
             "externalId": "family-main-01"
           },
@@ -141,6 +149,8 @@ To disable cleanup:
 - `postgres.pool.max`: `10`
 - `postgres.pool.connectionTimeoutMs`: `5000`
 - `postgres.pool.idleTimeoutMs`: `30000`
+- `sessions.sync.deltaBytes`: `100000` (OpenClaw-compatible default)
+- `sessions.sync.deltaMessages`: `50` (OpenClaw-compatible default)
 - Import cleanup: `import.cleanupMemoryMdAfterImport = true`
 
 ---

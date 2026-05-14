@@ -27,6 +27,7 @@ Current delivery state:
 
 - Sessions Phase 1 and Phase 2 are implemented, green in repo tests/typecheck, and runtime-verified on VPS (`server-166`).
 - Live/delta freshness loop is active: `onSessionTranscriptUpdate` listener + debounce + targeted sync.
+- Delta sync thresholds are config-driven via `sessions.sync.deltaBytes` / `sessions.sync.deltaMessages` (defaults: `100000` / `50`, aligned with OpenClaw defaults).
 - `sessions.visibility` behavior is runtime-verified:
   - `current`: cross-agent delta updates are ignored
   - `visible`: cross-agent delta updates are accepted and indexed

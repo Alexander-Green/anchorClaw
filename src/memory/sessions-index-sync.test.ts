@@ -147,6 +147,28 @@ describe("syncSessionsIndexDb", () => {
     expect(client.release).toHaveBeenCalledTimes(1);
   });
 
+  it("escapes wildcard characters in stale cleanup agent prefix", async () => {
+    listSessionFilesForAgent.mockResolvedValueOnce([]);
+    const { pool, calls } = createMockPool({
+      probeRows: [],
+      existingRowsByPrefix: {
+        "sessions/agent\\_a\\%prod/%": [],
+      },
+    });
+
+    await syncSessionsIndexDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      agentId: "agent_a%prod",
+    });
+
+    const staleProbe = calls.find(
+      (call) => call.sql.includes("SELECT path") && call.sql.includes("FROM session_index_files"),
+    );
+    expect(staleProbe?.args).toEqual(["u1", "w1", "sessions/agent\\_a\\%prod/%"]);
+  });
+
   it("does not run stale cleanup for targeted sync", async () => {
     resolveSessionsDirForAgent.mockResolvedValue("/root/.openclaw/agents/main/sessions");
     sessionPathForFile.mockReturnValue("/sdk/sessions/a.jsonl");

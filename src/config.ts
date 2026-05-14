@@ -1,6 +1,10 @@
 export type AnchorClawConfig = {
   sessions?: {
     visibility?: "current" | "off" | "visible";
+    sync?: {
+      deltaBytes?: number;
+      deltaMessages?: number;
+    };
   };
   identity?: {
     externalId?: string;
@@ -34,6 +38,9 @@ export type AnchorClawConfig = {
     getDefaultLines?: number;
   };
 };
+
+export const DEFAULT_SESSION_DELTA_BYTES = 100_000;
+export const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -165,7 +172,7 @@ export const anchorClawConfigSchema = {
       throw new Error("sessions must be an object");
     }
     if (sessionsObj) {
-      assertAllowedKeys(sessionsObj, ["visibility"], "sessions");
+      assertAllowedKeys(sessionsObj, ["visibility", "sync"], "sessions");
     }
     const visibilityRaw = sessionsObj
       ? readOptionalString(sessionsObj.visibility, "sessions.visibility")
@@ -177,6 +184,29 @@ export const anchorClawConfigSchema = {
             throw new Error("sessions.visibility must be one of: current, off, visible");
           })()
       : "current";
+    const sessionsSyncObj = sessionsObj ? asRecord(sessionsObj.sync) : undefined;
+    if (sessionsObj?.sync !== undefined && !sessionsSyncObj) {
+      throw new Error("sessions.sync must be an object");
+    }
+    if (sessionsSyncObj) {
+      assertAllowedKeys(sessionsSyncObj, ["deltaBytes", "deltaMessages"], "sessions.sync");
+    }
+    const sessionsDeltaBytes = sessionsSyncObj
+      ? readOptionalIntegerInRange({
+          value: sessionsSyncObj.deltaBytes,
+          label: "sessions.sync.deltaBytes",
+          min: 0,
+          max: Number.MAX_SAFE_INTEGER,
+        })
+      : undefined;
+    const sessionsDeltaMessages = sessionsSyncObj
+      ? readOptionalIntegerInRange({
+          value: sessionsSyncObj.deltaMessages,
+          label: "sessions.sync.deltaMessages",
+          min: 0,
+          max: Number.MAX_SAFE_INTEGER,
+        })
+      : undefined;
 
     const identityObj = asRecord(obj.identity);
     if (obj.identity !== undefined && !identityObj) {
@@ -306,7 +336,13 @@ export const anchorClawConfigSchema = {
       : undefined;
 
     return {
-      sessions: { visibility: sessionsVisibility },
+      sessions: {
+        visibility: sessionsVisibility,
+        sync: {
+          deltaBytes: sessionsDeltaBytes ?? DEFAULT_SESSION_DELTA_BYTES,
+          deltaMessages: sessionsDeltaMessages ?? DEFAULT_SESSION_DELTA_MESSAGES,
+        },
+      },
       ...(identityExternalId ? { identity: { externalId: identityExternalId } } : {}),
       postgres: {
         host,

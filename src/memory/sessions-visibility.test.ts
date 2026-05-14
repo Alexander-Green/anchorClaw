@@ -52,6 +52,18 @@ beforeEach(() => {
 });
 
 describe("filterSessionHitsByVisibility", () => {
+  it("passes runtime sandboxed flag into effective visibility resolver", async () => {
+    const api = buildApi();
+    (api as any).runtime.sandboxed = true;
+    const hits = [{ corpus: "sessions", path: "sessions/main/s1.jsonl", score: 0.5 }];
+    await filterSessionHitsByVisibility({ api, hits });
+    expect(resolveEffectiveVisibility).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sandboxed: true,
+      }),
+    );
+  });
+
   it("keeps memory hits and allows sessions hits approved by guard", async () => {
     const api = buildApi();
     const hits = [

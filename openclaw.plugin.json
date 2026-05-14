@@ -19,6 +19,23 @@
       "help": "Visibility scope for sessions corpus: current (default), off, or visible (requires visibility guard support).",
       "advanced": true
     },
+    "sessions.sync": {
+      "label": "Sessions Delta Sync",
+      "help": "Thresholds controlling when transcript updates trigger sessions index sync.",
+      "advanced": true
+    },
+    "sessions.sync.deltaBytes": {
+      "label": "Delta Bytes",
+      "placeholder": "100000",
+      "help": "Minimum appended bytes before reindexing sessions transcripts.",
+      "advanced": true
+    },
+    "sessions.sync.deltaMessages": {
+      "label": "Delta Messages",
+      "placeholder": "50",
+      "help": "Minimum appended message records before reindexing sessions transcripts.",
+      "advanced": true
+    },
     "import": {
       "label": "Import",
       "help": "Migration behavior when legacy memory files exist",
@@ -152,6 +169,22 @@
             "type": "string",
             "enum": ["current", "off", "visible"],
             "default": "current"
+          },
+          "sync": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "deltaBytes": {
+                "type": "number",
+                "default": 100000,
+                "minimum": 0
+              },
+              "deltaMessages": {
+                "type": "number",
+                "default": 50,
+                "minimum": 0
+              }
+            }
           }
         }
       },

@@ -32,6 +32,10 @@ function readRuntimeConfig(api: unknown): Record<string, unknown> {
   return {};
 }
 
+function readRuntimeSandboxed(api: unknown): boolean {
+  return (api as any)?.runtime?.sandboxed === true;
+}
+
 function isSessionsHit(hit: HitLike): boolean {
   if ((hit.corpus ?? "").toLowerCase() === "sessions") {
     return true;
@@ -49,9 +53,10 @@ async function createVisibilityGuard(api: unknown): Promise<{
 }> {
   const cfg = readRuntimeConfig(api);
   const requesterSessionKey = readRequesterSessionKey(api);
+  const sandboxed = readRuntimeSandboxed(api);
   const visibility = resolveEffectiveSessionToolsVisibility({
     cfg: cfg as any,
-    sandboxed: false,
+    sandboxed,
   });
   const a2aPolicy = createAgentToAgentPolicy(cfg as any);
   const guard = requesterSessionKey

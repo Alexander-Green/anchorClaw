@@ -1,5 +1,10 @@
 import { definePluginEntry, type OpenClawPluginApi, registerMemoryCapability } from "./api.js";
-import { anchorClawConfigSchema, type AnchorClawConfig } from "./config.js";
+import {
+  anchorClawConfigSchema,
+  DEFAULT_SESSION_DELTA_BYTES,
+  DEFAULT_SESSION_DELTA_MESSAGES,
+  type AnchorClawConfig,
+} from "./config.js";
 import { resolveUserAndWorkspaceScope } from "./identity.js";
 import { applyMigrations } from "./migrations.js";
 import { loadBundledMigrationsFromDisk } from "./migrations-fs.js";
@@ -52,8 +57,6 @@ function resolveActor(api: OpenClawPluginApi): string {
 }
 
 const SESSION_DELTA_DEBOUNCE_MS = 5_000;
-const SESSION_DELTA_BYTES_THRESHOLD = 4_096;
-const SESSION_DELTA_MESSAGES_THRESHOLD = 2;
 const SDK_RECOVERY_SUCCESS_THRESHOLD = 3;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 
@@ -69,6 +72,11 @@ type SdkHealthState = {
   affectedOperation?: string;
   lastErrorAt?: string;
   consecutiveSuccesses: number;
+};
+
+type SessionDeltaThresholds = {
+  deltaBytes: number;
+  deltaMessages: number;
 };
 
 type MemoryStatusCheckResult = {
@@ -170,6 +178,21 @@ async function countUsageCountedSessionRecordsInRange(params: {
       await handle.close().catch(() => {});
     }
   }
+}
+
+function resolveSessionDeltaThresholds(cfg: AnchorClawConfig | undefined): SessionDeltaThresholds {
+  const deltaBytes = cfg?.sessions?.sync?.deltaBytes;
+  const deltaMessages = cfg?.sessions?.sync?.deltaMessages;
+  return {
+    deltaBytes:
+      typeof deltaBytes === "number" && Number.isInteger(deltaBytes) && deltaBytes >= 0
+        ? deltaBytes
+        : DEFAULT_SESSION_DELTA_BYTES,
+    deltaMessages:
+      typeof deltaMessages === "number" && Number.isInteger(deltaMessages) && deltaMessages >= 0
+        ? deltaMessages
+        : DEFAULT_SESSION_DELTA_MESSAGES,
+  };
 }
 
 export default definePluginEntry({
@@ -401,6 +424,7 @@ export default definePluginEntry({
       }
 
       const batch = Array.from(pendingSessionDeltaFiles);
+      const sessionDeltaThresholds = resolveSessionDeltaThresholds(cfg);
       pendingSessionDeltaFiles.clear();
       const dirtyFiles: string[] = [];
       for (const sessionFile of batch) {
@@ -440,10 +464,15 @@ export default definePluginEntry({
           pendingBytes,
           pendingMessages,
         });
-        if (
-          pendingBytes >= SESSION_DELTA_BYTES_THRESHOLD ||
-          pendingMessages >= SESSION_DELTA_MESSAGES_THRESHOLD
-        ) {
+        const bytesHit =
+          sessionDeltaThresholds.deltaBytes <= 0
+            ? pendingBytes > 0
+            : pendingBytes >= sessionDeltaThresholds.deltaBytes;
+        const messagesHit =
+          sessionDeltaThresholds.deltaMessages <= 0
+            ? pendingMessages > 0
+            : pendingMessages >= sessionDeltaThresholds.deltaMessages;
+        if (bytesHit || messagesHit) {
           dirtyFiles.push(sessionFile);
         }
       }
@@ -479,8 +508,14 @@ export default definePluginEntry({
             }
             sessionDeltaStateByPath.set(sessionFile, {
               lastSize: state.lastSize,
-              pendingBytes: Math.max(0, state.pendingBytes - SESSION_DELTA_BYTES_THRESHOLD),
-              pendingMessages: Math.max(0, state.pendingMessages - SESSION_DELTA_MESSAGES_THRESHOLD),
+              pendingBytes:
+                sessionDeltaThresholds.deltaBytes > 0
+                  ? Math.max(0, state.pendingBytes - sessionDeltaThresholds.deltaBytes)
+                  : 0,
+              pendingMessages:
+                sessionDeltaThresholds.deltaMessages > 0
+                  ? Math.max(0, state.pendingMessages - sessionDeltaThresholds.deltaMessages)
+                  : 0,
             });
           }
           api.logger.info(
@@ -1002,9 +1037,7 @@ export default definePluginEntry({
                     limits,
                   });
             }
-            if (sessionsVisibility === "visible") {
-              hits = await filterSessionHitsByVisibility({ api, hits });
-            }
+            hits = await filterSessionHitsByVisibility({ api, hits });
           } else if (trimmedCorpus === "memory") {
             hits = await memorySearchDb({
               pool: getPool(),
@@ -1060,8 +1093,9 @@ export default definePluginEntry({
                 }
               }
             }
-            const mergedForOutput =
-              sessionsVisibility === "visible" ? await filterSessionHitsByVisibility({ api, hits: merged }) : merged;
+            const mergedForOutput = sessionsEnabled
+              ? await filterSessionHitsByVisibility({ api, hits: merged })
+              : merged;
             mergedForOutput.sort((left: any, right: any) => {
               const ls = typeof left?.score === "number" ? left.score : 0;
               const rs = typeof right?.score === "number" ? right.score : 0;
@@ -1175,7 +1209,7 @@ export default definePluginEntry({
             details: { disabled: true, error: "sessions corpus disabled", visibility: sessionsVisibility },
           };
         }
-        if (sessionsVisibility === "visible" && lookup.trim().startsWith("sessions/")) {
+        if (lookup.trim().startsWith("sessions/")) {
           const verdict = await canAccessSessionPathByVisibility({
             api,
             path: lookup.trim(),

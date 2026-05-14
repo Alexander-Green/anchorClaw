@@ -274,6 +274,15 @@ describe("sessions corpus (MVP)", () => {
     expect(isMatch).toBe(true);
   });
 
+  it("normalizes lookup-style agent ids with upstream semantics", async () => {
+    const isMatch = await isSessionFileForAgent({
+      sessionFile: "sessions/team.alpha/a.jsonl",
+      agentId: "team-alpha",
+    });
+
+    expect(isMatch).toBe(true);
+  });
+
   it("rejects lookup-style session path for a different agent", async () => {
     const isMatch = await isSessionFileForAgent({
       sessionFile: "sessions/other/a.jsonl",

@@ -111,6 +111,41 @@ describe("createAnchorClawMemorySearchManager.sync", () => {
 });
 
 describe("createAnchorClawMemorySearchManager visibility behavior", () => {
+  it("filters sessions hits in current mode through visibility helper", async () => {
+    vi.mocked(memorySearchDb).mockResolvedValueOnce([]);
+    vi.mocked(memorySearchSessionsIndexDb).mockResolvedValueOnce([
+      {
+        corpus: "sessions",
+        path: "sessions/main/a.jsonl",
+        kind: "session",
+        score: 0.7,
+        snippet: "x",
+        startLine: 1,
+        endLine: 1,
+      },
+    ] as any);
+    filterSessionHitsByVisibility.mockResolvedValueOnce([]);
+    const manager = createAnchorClawMemorySearchManager({
+      api: {
+        runtime: {
+          sessionKey: "agent:main:main",
+          workspaceDir: "/workspace",
+        },
+      } as any,
+      cfg: {
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        sessions: { visibility: "current" },
+      } as any,
+      ensureReady: async () => undefined,
+      getPool: () => ({ query: vi.fn() }) as any,
+      agentId: "main",
+    });
+
+    const results = await manager.search("needle", { sources: ["sessions"] });
+    expect(results).toHaveLength(0);
+    expect(filterSessionHitsByVisibility).toHaveBeenCalledTimes(1);
+  });
+
   it("filters sessions hits in visible mode through visibility helper", async () => {
     vi.mocked(memorySearchDb).mockResolvedValueOnce([]);
     vi.mocked(memorySearchSessionsIndexDb).mockResolvedValueOnce([
@@ -169,6 +204,32 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
 
     const got = await manager.readFile({ relPath: "sessions/other/a.jsonl" });
     expect(got).toEqual({ text: "", path: "sessions/other/a.jsonl" });
+    expect(memoryGetFromDb).not.toHaveBeenCalled();
+  });
+
+  it("returns empty read result for sessions path in current mode when visibility helper denies access", async () => {
+    canAccessSessionPathByVisibility.mockResolvedValueOnce({
+      allowed: false,
+      reason: "blocked",
+    } as any);
+    const manager = createAnchorClawMemorySearchManager({
+      api: {
+        runtime: {
+          sessionKey: "agent:main:main",
+          workspaceDir: "/workspace",
+        },
+      } as any,
+      cfg: {
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        sessions: { visibility: "current" },
+      } as any,
+      ensureReady: async () => undefined,
+      getPool: () => ({ query: vi.fn() }) as any,
+      agentId: "main",
+    });
+
+    const got = await manager.readFile({ relPath: "sessions/main/a.jsonl" });
+    expect(got).toEqual({ text: "", path: "sessions/main/a.jsonl" });
     expect(memoryGetFromDb).not.toHaveBeenCalled();
   });
 });

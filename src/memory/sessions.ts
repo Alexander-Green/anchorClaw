@@ -1,76 +1,23 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   buildSessionEntry as buildSessionEntryFromSdk,
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { resolveStateDir as resolveStateDirFromSdk } from "openclaw/plugin-sdk/state-paths";
 
 import type { MemorySearchHit } from "./search.js";
 import { type MemoryReadResult } from "./read-file-shared.js";
 import type { MemoryLimits } from "./limits.js";
 
-function normalizeAgentId(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) {
-    return "main";
-  }
-  const normalized = trimmed.replaceAll(/[^a-z0-9._-]+/g, "-").replaceAll(/^-+|-+$/g, "");
-  return normalized || "main";
-}
-
-function expandHome(input: string): string {
-  return input.startsWith("~") ? path.join(os.homedir(), input.slice(1)) : input;
-}
-
-function resolveHomeDir(): string {
-  const explicit = process.env.OPENCLAW_HOME?.trim();
-  if (explicit) {
-    return path.resolve(expandHome(explicit));
-  }
-  const home = process.env.HOME?.trim() || process.env.USERPROFILE?.trim();
-  if (home) {
-    return path.resolve(expandHome(home));
-  }
-  return path.resolve(os.homedir());
-}
-
-async function pathExists(candidate: string): Promise<boolean> {
-  try {
-    await fs.stat(candidate);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * Compatibility shim for OpenClaw state directory resolution.
- *
- * Keep this order aligned with OpenClaw core semantics:
- * 1) OPENCLAW_STATE_DIR
- * 2) OPENCLAW_HOME/.openclaw (or HOME/.openclaw when OPENCLAW_HOME is unset)
- * 3) legacy HOME/.clawdbot when present
- *
- * If OpenClaw core starts exporting a public resolver helper, prefer using it
- * directly instead of maintaining this local copy.
+ * Thin async wrapper for OpenClaw SDK resolver.
+ * We keep it async to avoid touching existing call sites.
  */
 async function resolveStateDir(): Promise<string> {
-  const override = process.env.OPENCLAW_STATE_DIR?.trim();
-  if (override) {
-    return path.resolve(expandHome(override));
-  }
-  const homeDir = resolveHomeDir();
-  const newDir = path.join(homeDir, ".openclaw");
-  const legacyDir = path.join(homeDir, ".clawdbot");
-  if (await pathExists(newDir)) {
-    return newDir;
-  }
-  if (await pathExists(legacyDir)) {
-    return legacyDir;
-  }
-  return newDir;
+  return resolveStateDirFromSdk(process.env);
 }
 
 export async function listKnownAgentIds(): Promise<string[]> {
@@ -90,7 +37,7 @@ export async function listKnownAgentIds(): Promise<string[]> {
 
 export async function resolveSessionsDirForAgent(agentId?: string): Promise<string> {
   const stateDir = await resolveStateDir();
-  const normalized = normalizeAgentId(agentId ?? "main");
+  const normalized = normalizeAgentId(agentId);
   return path.join(stateDir, "agents", normalized, "sessions");
 }
 
@@ -107,7 +54,7 @@ export async function isSessionFileForAgent(params: {
     const parts = normalizedLookup.split("/").filter(Boolean);
     if (parts.length === 3 && parts[0] === "sessions") {
       const lookupAgentId = normalizeAgentId(parts[1] ?? "");
-      const expectedAgentId = normalizeAgentId(params.agentId ?? "main");
+      const expectedAgentId = normalizeAgentId(params.agentId);
       return lookupAgentId === expectedAgentId;
     }
   }

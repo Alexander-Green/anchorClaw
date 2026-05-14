@@ -11,6 +11,13 @@ function clampInteger(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, rounded));
 }
 
+function escapeLikePattern(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("_", "\\_")
+    .replaceAll("%", "\\%");
+}
+
 export function normalizeSessionLookupPath(lookup: string): string | null {
   const trimmed = lookup.trim().replaceAll("\\", "/");
   if (!trimmed.startsWith("sessions/")) {
@@ -31,7 +38,7 @@ export function normalizeSessionLookupPath(lookup: string): string | null {
 }
 
 function buildAgentPathPrefix(agentId: string): string {
-  return `sessions/${agentId}/%`;
+  return `sessions/${escapeLikePattern(agentId)}/%`;
 }
 
 function clampPositiveInteger(value: number | undefined, fallback: number): number {

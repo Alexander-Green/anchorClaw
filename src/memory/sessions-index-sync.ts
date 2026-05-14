@@ -20,8 +20,15 @@ function getAgentIdFromSessionPath(sessionPath: string): string | null {
   return normalized.split("/")[1] ?? null;
 }
 
+function escapeLikePattern(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("_", "\\_")
+    .replaceAll("%", "\\%");
+}
+
 function buildAgentPathPrefix(agentId: string): string {
-  return `sessions/${agentId}/%`;
+  return `sessions/${escapeLikePattern(agentId)}/%`;
 }
 
 async function normalizeTargetSessionFiles(params: {
