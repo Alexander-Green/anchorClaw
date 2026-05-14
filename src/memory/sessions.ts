@@ -88,6 +88,23 @@ export async function isSessionFileForAgent(params: {
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
+export async function isSessionFileForAnyKnownAgent(sessionFile: string): Promise<boolean> {
+  const candidate = sessionFile.trim();
+  if (!candidate) {
+    return false;
+  }
+  const agentIds = await listKnownAgentIds();
+  const normalizedCandidate = path.resolve(candidate);
+  for (const agentId of agentIds) {
+    const sessionsDir = path.resolve(await resolveSessionsDirForAgent(agentId));
+    const rel = path.relative(sessionsDir, normalizedCandidate);
+    if (rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function clampInteger(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
     return min;

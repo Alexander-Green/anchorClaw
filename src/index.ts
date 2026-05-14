@@ -11,7 +11,12 @@ import { memoryStoreDb } from "./memory/store.js";
 import { memoryForgetDb } from "./memory/forget.js";
 import { memoryRecallDb } from "./memory/recall.js";
 import { buildPromptMemorySection, queryPromptMemoryItems } from "./memory/prompt.js";
-import { isSessionFileForAgent, listKnownAgentIds, memorySearchSessions } from "./memory/sessions.js";
+import {
+  isSessionFileForAgent,
+  isSessionFileForAnyKnownAgent,
+  listKnownAgentIds,
+  memorySearchSessions,
+} from "./memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
 import { syncSessionsIndexDb } from "./memory/sessions-index-sync.js";
 import {
@@ -315,6 +320,17 @@ export default definePluginEntry({
       const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
       const isRelevantSessionDeltaPath = async (sessionFile: string): Promise<boolean> => {
         if ((cfg?.sessions?.visibility ?? "current") === "visible") {
+          const knownAgentTranscript = await isSessionFileForAnyKnownAgent(sessionFile);
+          if (!knownAgentTranscript) {
+            const next = (ignoredSessionDeltaPathCounts.get(sessionFile) ?? 0) + 1;
+            ignoredSessionDeltaPathCounts.set(sessionFile, next);
+            if (next === 1 || next === 5 || next % 20 === 0) {
+              api.logger.warn(
+                `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
+              );
+            }
+            return false;
+          }
           const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
           if (!lookup) {
             const next = (ignoredSessionDeltaPathCounts.get(sessionFile) ?? 0) + 1;

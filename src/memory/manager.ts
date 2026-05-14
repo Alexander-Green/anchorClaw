@@ -431,16 +431,19 @@ export function createAnchorClawMemorySearchManager(
       if (typeof syncParams?.progress === "function") {
         syncParams.progress({ completed: 0, total: 1, label: "syncing sessions index" });
       }
+      const sessionFiles =
+        Array.isArray(syncParams?.sessionFiles) && syncParams.sessionFiles.length > 0
+          ? syncParams.sessionFiles
+          : sessionsVisibility === "visible"
+            ? await buildVisibleSessionFiles()
+            : undefined;
       await syncSessionsIndexDb({
-        ...(sessionsVisibility === "visible" && (!syncParams?.sessionFiles || syncParams.sessionFiles.length === 0)
-          ? { sessionFiles: await buildVisibleSessionFiles() }
-          : {}),
         pool: params.getPool(),
         userId: scope.userId,
         workspaceId: scope.workspaceId,
         agentId: params.agentId,
         force: syncParams?.force === true,
-        sessionFiles: syncParams?.sessionFiles,
+        ...(sessionFiles ? { sessionFiles } : {}),
       });
       if (typeof syncParams?.progress === "function") {
         syncParams.progress({ completed: 1, total: 1, label: "done" });
