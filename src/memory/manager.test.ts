@@ -13,10 +13,10 @@ const {
 } = vi.hoisted(() => ({
   resolveScope: vi.fn(),
   syncSessionsIndexDb: vi.fn(async () => undefined),
-  listKnownAgentIds: vi.fn(async () => []),
-  listSessionFilesForAgent: vi.fn(async () => []),
+  listKnownAgentIds: vi.fn(async () => [] as string[]),
+  listSessionFilesForAgent: vi.fn(async (_agentId: string) => [] as string[]),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
-  canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true })),
+  canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   memorySearchDb: vi.fn(async () => []),
   memorySearchSessionsIndexDb: vi.fn(async () => []),
   memoryGetFromDb: vi.fn(async () => ({ ok: false, error: "not found" })),
@@ -155,7 +155,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     canAccessSessionPathByVisibility.mockResolvedValueOnce({
       allowed: false,
       reason: "blocked",
-    });
+    } as any);
     const manager = createAnchorClawMemorySearchManager({
       api: {
         runtime: {

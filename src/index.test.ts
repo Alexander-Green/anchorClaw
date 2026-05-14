@@ -39,7 +39,7 @@ const {
   isSessionFileForAgent: vi.fn(async () => true),
   isSessionFileForAnyKnownAgent: vi.fn(async () => true),
   memoryGetFromDb: vi.fn(),
-  canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true })),
+  canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
 }));
 
@@ -362,7 +362,7 @@ describe("phase2 session delta listener", () => {
     canAccessSessionPathByVisibility.mockResolvedValueOnce({
       allowed: false,
       reason: "blocked by visibility policy",
-    });
+    } as any);
     const { api } = buildApi();
     (plugin as any).register(api);
 
