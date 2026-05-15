@@ -1,4 +1,4 @@
-import { definePluginEntry, type OpenClawPluginApi, registerMemoryCapability } from "./api.js";
+import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   anchorClawConfigSchema,
   type AnchorClawConfig,
@@ -10,7 +10,6 @@ import { memorySearchDb } from "./memory/search.js";
 import { memoryStoreDb } from "./memory/store.js";
 import { memoryForgetDb } from "./memory/forget.js";
 import { memoryRecallDb } from "./memory/recall.js";
-import { buildPromptMemorySection, queryPromptMemoryItems } from "./memory/prompt.js";
 import {
   memorySearchSessions,
   resolveSessionsDirForAgent,
@@ -20,16 +19,15 @@ import {
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
 } from "./memory/sessions-visibility.js";
-import {
-  createAnchorClawMemorySearchManager,
-  type AnchorClawMemorySearchManagerOptions,
-} from "./memory/manager.js";
 import { runOneTimeWorkspaceImport } from "./importer.js";
 import { getIdentityStartupWarning } from "./identity-policy.js";
 import {
   createPluginRuntimeContext,
   type PluginRuntimeContext,
 } from "./plugin/runtime-context.js";
+import { createPromptCacheRuntime } from "./plugin/prompt-cache.js";
+import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
+import { registerSessionDeltaLifecycle } from "./plugin/lifecycle.js";
 import { createSessionDeltaRuntime } from "./plugin/session-delta.js";
 import type {
   MemoryStatusCheckResult,
@@ -75,55 +73,7 @@ export default definePluginEntry({
       cfg,
       disabledReason,
     });
-    const refreshPromptCache = () => {
-      if (!ctx.cfg) {
-        ctx.promptCache.lines = null;
-        ctx.promptCache.error = ctx.disabledReason ?? "invalid config";
-        return;
-      }
-      if (ctx.promptCache.refreshPromise) {
-        return;
-      }
-      ctx.promptCache.refreshPromise = (async () => {
-        try {
-          await ctx.ensureReady();
-          const scope = await resolveUserAndWorkspaceScope({
-            api,
-            pool: ctx.getPool(),
-            agentId: (api as any)?.runtime?.agentId,
-            sessionKey: (api as any)?.runtime?.sessionKey,
-            configuredExternalId: ctx.cfg?.identity?.externalId,
-          });
-          const items = await queryPromptMemoryItems({
-            pool: ctx.getPool(),
-            userId: scope.userId,
-            workspaceId: scope.workspaceId,
-            limit: 50,
-            // MVP: durable injection focuses on facts and notes.
-            // TODO: extend prompt injection policy for other types:
-            // profile/config/skill/summary/automation (safe ordering + size budgets + canonicalKey conventions).
-            types: ["fact", "note"],
-          });
-          ctx.promptCache.lines = buildPromptMemorySection({
-            items,
-            maxTotalChars: 12_000,
-            maxTitleChars: 120,
-            policy: {
-              // MVP: durable injection focuses on facts and notes.
-              maxItemsByType: { fact: 6, note: 4 },
-              defaultMaxItemChars: 1_200,
-            },
-          });
-          ctx.promptCache.error = null;
-        } catch (error) {
-          ctx.promptCache.lines = null;
-          ctx.promptCache.error = error instanceof Error ? error.message : String(error);
-          api.logger.warn(`anchorclaw: prompt cache refresh failed (${ctx.promptCache.error})`);
-        } finally {
-          ctx.promptCache.refreshPromise = null;
-        }
-      })();
-    };
+    const { refreshPromptCache } = createPromptCacheRuntime({ api, ctx });
     const { ensureSessionsIndexBootstrapped, ensureSessionDeltaListener, cleanupSessionDelta } =
       createSessionDeltaRuntime({ api, ctx });
 
@@ -166,126 +116,11 @@ export default definePluginEntry({
         }
       })();
     }
-    const registerRuntimeLifecycle = (api as any)?.lifecycle?.registerRuntimeLifecycle;
-    const registerRuntimeLifecycleCompat =
-      typeof registerRuntimeLifecycle === "function"
-        ? registerRuntimeLifecycle.bind((api as any).lifecycle)
-        : typeof (api as any)?.registerRuntimeLifecycle === "function"
-          ? (api as any).registerRuntimeLifecycle.bind(api)
-          : null;
-    if (typeof registerRuntimeLifecycle === "function") {
-      api.logger.info("anchorclaw: runtime lifecycle API detected (api.lifecycle.registerRuntimeLifecycle)");
-    } else if (typeof (api as any)?.registerRuntimeLifecycle === "function") {
-      api.logger.warn(
-        "anchorclaw: using legacy runtime lifecycle API (api.registerRuntimeLifecycle); host SDK appears older than grouped lifecycle surface",
-      );
-    } else if (!registerRuntimeLifecycleCompat) {
-      const logError =
-        typeof (api.logger as any)?.error === "function"
-          ? (api.logger as any).error.bind(api.logger)
-          : api.logger.warn.bind(api.logger);
-      logError(
-        "anchorclaw: no runtime lifecycle registration API available; listener cleanup on reload/disable is unavailable",
-      );
-    }
-    if (registerRuntimeLifecycleCompat) {
-      registerRuntimeLifecycleCompat({
-        id: "anchorclaw-sessions-delta-listener",
-        description: "Cleans up transcript update listener and pending debounce timer.",
-        cleanup: async () => {
-          cleanupSessionDelta();
-        },
-      });
-    }
-
-    registerMemoryCapability("anchorclaw", {
-      promptBuilder: (params?: { availableTools: Set<string>; citationsMode?: "off" | "inline" | "block" | string }) => {
-        if (ctx.disabledReason) {
-          return [`AnchorClaw memory is disabled until configured (${ctx.disabledReason}).`];
-        }
-
-        if (!ctx.promptCache.lines && !ctx.promptCache.error) {
-          refreshPromptCache();
-        }
-        const cached = ctx.promptCache.lines ?? [];
-        const cacheNotice = ctx.promptCache.error
-          ? [`[AnchorClaw durable memory cache unavailable: ${ctx.promptCache.error}]`, ""]
-          : cached.length === 0
-            ? ["[AnchorClaw durable memory cache is warming up...]", ""]
-            : [];
-        const sdkNotice = ctx.sdkHealth.degraded
-          ? [
-              `[AnchorClaw sessions SDK is degraded: ${ctx.sdkHealth.reason ?? "unknown error"}; operation=${ctx.sdkHealth.affectedOperation ?? "unknown"}]`,
-              "",
-            ]
-          : [];
-
-        const hasMemorySearch = Boolean(params?.availableTools?.has?.("memory_search"));
-        const hasMemoryGet = Boolean(params?.availableTools?.has?.("memory_get"));
-
-        let toolGuidance = "";
-        if (hasMemorySearch && hasMemoryGet) {
-          toolGuidance =
-            "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.";
-        } else if (hasMemorySearch) {
-          toolGuidance =
-            "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search and answer from matching results. If low confidence after search, say you checked.";
-        } else if (hasMemoryGet) {
-          toolGuidance =
-            "Before answering anything about prior work, decisions, dates, people, preferences, or todos that already point to a specific memory item: run memory_get to pull only the needed lines. If low confidence after reading them, say you checked.";
-        }
-
-        const citationsMode = params?.citationsMode ?? "inline";
-        const citationsLine =
-          citationsMode === "off"
-            ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."
-            : "Citations: include Source: <path#line> when it helps the user verify memory snippets.";
-
-        return [
-          "AnchorClaw durable memory is enabled (Postgres-backed).",
-          "",
-          ...(toolGuidance ? ["## Memory Recall", toolGuidance, citationsLine, ""] : []),
-          "MVP usage rules:",
-          "- Save durable memory with memory_store({ content, canonicalKey?, type? }).",
-          "- Use canonicalKey only for updateable facts/preferences/settings (so updates overwrite instead of duplicating).",
-          "- Find memory with memory_search({ query, corpus? }).",
-          "- Read items with memory_get({ lookup: \"db-memory/items/<uuid>.md\" | \"sessions/<agentId>/<file>\", fromLine?, lineCount? }).",
-          "- Shortcut recall: memory_recall({ query? }) (without query returns top important recent items).",
-          "- Forget items with memory_forget({ lookup }) or memory_forget({ id }).",
-          "",
-          "Notes:",
-          "- memory_search supports corpus=\"memory\" (Postgres durable), corpus=\"sessions\" (Postgres sessions index, DB-first), and corpus=\"all\" (merge). corpus=\"wiki\" is deferred; use wiki_search/wiki_get when installed.",
-          "",
-          ...cacheNotice,
-          ...sdkNotice,
-          ...cached,
-        ];
-      },
-      runtime: {
-        async getMemorySearchManager(params: { cfg: any; agentId: string; purpose?: "default" | "status" | "cli" }) {
-          if (ctx.disabledReason) {
-            return {
-              manager: null,
-              error: `anchorclaw: disabled until configured (${ctx.disabledReason})`,
-            };
-          }
-          ctx.getPool();
-          return {
-            manager: createAnchorClawMemorySearchManager(({
-              api,
-              cfg: ctx.cfg!,
-              ensureReady: ctx.ensureReady,
-              ensureSessionsIndexBootstrapped,
-              getPool: ctx.getPool,
-              agentId: params.agentId,
-              purpose: params.purpose,
-            } satisfies AnchorClawMemorySearchManagerOptions)),
-          };
-        },
-        resolveMemoryBackendConfig(_params: { cfg: any; agentId: string }) {
-          return { backend: "builtin" as const };
-        },
-      },
+    registerSessionDeltaLifecycle({ api, cleanupSessionDelta });
+    registerAnchorClawMemoryCapability({
+      ctx,
+      refreshPromptCache,
+      ensureSessionsIndexBootstrapped,
     });
 
     api.registerTool({
