@@ -12,13 +12,10 @@ import { memoryForgetDb } from "./memory/forget.js";
 import { memoryRecallDb } from "./memory/recall.js";
 import { buildPromptMemorySection, queryPromptMemoryItems } from "./memory/prompt.js";
 import {
-  isSessionFileForAgent,
-  isSessionFileForAnyKnownAgent,
   memorySearchSessions,
   resolveSessionsDirForAgent,
 } from "./memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "./memory/sessions-index.js";
-import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "./memory/sessions-index-sync.js";
 import {
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
@@ -29,24 +26,16 @@ import {
 } from "./memory/manager.js";
 import { runOneTimeWorkspaceImport } from "./importer.js";
 import { getIdentityStartupWarning } from "./identity-policy.js";
-import { sessionPathForFile } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
-import { normalizeSessionLookupPath } from "./memory/sessions-index.js";
-import {
-  countNewlinesInRange,
-  isSessionArchiveArtifactPath,
-  resolveSessionDeltaThresholds,
-} from "./plugin/session-delta-helpers.js";
 import {
   createPluginRuntimeContext,
   type PluginRuntimeContext,
 } from "./plugin/runtime-context.js";
+import { createSessionDeltaRuntime } from "./plugin/session-delta.js";
 import type {
   MemoryStatusCheckResult,
 } from "./plugin/types.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-const SESSION_DELTA_DEBOUNCE_MS = 5_000;
 
 export default definePluginEntry({
   id: "anchorclaw",
@@ -135,297 +124,8 @@ export default definePluginEntry({
         }
       })();
     };
-    const ensureSessionsIndexBootstrapped = async () => {
-      if (!ctx.cfg) {
-        return;
-      }
-      if ((ctx.cfg?.sessions?.visibility ?? "current") === "off") {
-        return;
-      }
-      if (ctx.sessionsIndex.bootstrapped) {
-        return;
-      }
-      if (ctx.sessionsIndex.bootstrapPromise) {
-        await ctx.sessionsIndex.bootstrapPromise;
-        return;
-      }
-      ctx.sessionsIndex.bootstrapPromise = (async () => {
-        try {
-          await ctx.ensureReady();
-          const scope = await resolveUserAndWorkspaceScope({
-            api,
-            pool: ctx.getPool(),
-            agentId: (api as any)?.runtime?.agentId,
-            sessionKey: (api as any)?.runtime?.sessionKey,
-            configuredExternalId: ctx.cfg?.identity?.externalId,
-          });
-          const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
-          if ((ctx.cfg?.sessions?.visibility ?? "current") === "visible") {
-            const visibleAgentIds = await ctx.listVisibleAgentIds();
-            await syncVisibleSessionsIndexDb({
-              pool: ctx.getPool(),
-              userId: scope.userId,
-              workspaceId: scope.workspaceId,
-              agentId: currentAgentId,
-              otherAgentIds: visibleAgentIds.filter((agentId) => agentId !== currentAgentId),
-            });
-          } else {
-            await syncSessionsIndexDb({
-              pool: ctx.getPool(),
-              userId: scope.userId,
-              workspaceId: scope.workspaceId,
-              agentId: currentAgentId,
-            });
-          }
-          ctx.sessionsIndex.bootstrapped = true;
-        } catch (error) {
-          api.logger.warn(
-            `anchorclaw: sessions index bootstrap failed (${error instanceof Error ? error.message : String(error)})`,
-          );
-        } finally {
-          ctx.sessionsIndex.bootstrapPromise = null;
-        }
-      })();
-      await ctx.sessionsIndex.bootstrapPromise;
-    };
-    const flushSessionDeltaSync = async () => {
-      if (ctx.sessionDelta.closed) {
-        ctx.sessionDelta.pendingFiles.clear();
-        return;
-      }
-      if (!ctx.cfg) {
-        ctx.sessionDelta.pendingFiles.clear();
-        return;
-      }
-      if ((ctx.cfg?.sessions?.visibility ?? "current") === "off") {
-        ctx.sessionDelta.pendingFiles.clear();
-        return;
-      }
-      if (ctx.sessionDelta.pendingFiles.size === 0) {
-        return;
-      }
-      if (ctx.sessionDelta.syncInFlight) {
-        return;
-      }
-
-      const batch = Array.from(ctx.sessionDelta.pendingFiles);
-      const sessionDeltaThresholds = resolveSessionDeltaThresholds(ctx.cfg);
-      ctx.sessionDelta.pendingFiles.clear();
-      const dirtyFiles: string[] = [];
-      for (const sessionFile of batch) {
-        if (isSessionArchiveArtifactPath(sessionFile)) {
-          dirtyFiles.push(sessionFile);
-          continue;
-        }
-        let statSize: number | null = null;
-        try {
-          const stat = await fs.stat(sessionFile);
-          statSize = typeof stat.size === "number" ? stat.size : null;
-        } catch {
-          // If stat is unavailable, keep previous behavior and allow targeted sync.
-          dirtyFiles.push(sessionFile);
-        }
-        if (statSize === null) {
-          continue;
-        }
-        const prev = ctx.sessionDelta.stateByPath.get(sessionFile) ?? {
-          lastSize: 0,
-          pendingBytes: 0,
-          pendingMessages: 0,
-        };
-        const sizeReduced = statSize < prev.lastSize;
-        const deltaBytes = sizeReduced ? statSize : Math.max(0, statSize - prev.lastSize);
-        const pendingBytes = prev.pendingBytes + Math.max(0, deltaBytes);
-        const shouldCountMessages =
-          sessionDeltaThresholds.deltaMessages > 0 &&
-          (sessionDeltaThresholds.deltaBytes <= 0 || pendingBytes < sessionDeltaThresholds.deltaBytes);
-        const messageSpanStart = sizeReduced ? 0 : prev.lastSize;
-        const deltaMessages = shouldCountMessages
-          ? await countNewlinesInRange({
-              filePath: sessionFile,
-              start: messageSpanStart,
-              end: statSize,
-            })
-          : 0;
-        const pendingMessages = prev.pendingMessages + Math.max(0, deltaMessages);
-        ctx.sessionDelta.stateByPath.set(sessionFile, {
-          lastSize: statSize,
-          pendingBytes,
-          pendingMessages,
-        });
-        const bytesHit =
-          sessionDeltaThresholds.deltaBytes <= 0
-            ? pendingBytes > 0
-            : pendingBytes >= sessionDeltaThresholds.deltaBytes;
-        const messagesHit =
-          sessionDeltaThresholds.deltaMessages > 0 &&
-          pendingMessages >= sessionDeltaThresholds.deltaMessages;
-        if (bytesHit || messagesHit) {
-          dirtyFiles.push(sessionFile);
-        }
-      }
-      if (dirtyFiles.length === 0) {
-        return;
-      }
-
-      ctx.sessionDelta.syncInFlight = (async () => {
-        try {
-          api.logger.info(
-            `anchorclaw: sessions delta flush start (batch=${batch.length}, dirty=${dirtyFiles.length}, visibility=${ctx.cfg?.sessions?.visibility ?? "current"})`,
-          );
-          await ctx.ensureReady();
-          const scope = await resolveUserAndWorkspaceScope({
-            api,
-            pool: ctx.getPool(),
-            agentId: (api as any)?.runtime?.agentId,
-            sessionKey: (api as any)?.runtime?.sessionKey,
-            configuredExternalId: ctx.cfg?.identity?.externalId,
-          });
-          const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
-          await syncSessionsIndexDb({
-            pool: ctx.getPool(),
-            userId: scope.userId,
-            workspaceId: scope.workspaceId,
-            agentId: currentAgentId,
-            sessionFiles: dirtyFiles,
-          });
-          for (const sessionFile of dirtyFiles) {
-            const state = ctx.sessionDelta.stateByPath.get(sessionFile);
-            if (!state) {
-              continue;
-            }
-            ctx.sessionDelta.stateByPath.set(sessionFile, {
-              lastSize: state.lastSize,
-              pendingBytes:
-                sessionDeltaThresholds.deltaBytes > 0
-                  ? Math.max(0, state.pendingBytes - sessionDeltaThresholds.deltaBytes)
-                  : 0,
-              pendingMessages:
-                sessionDeltaThresholds.deltaMessages > 0
-                  ? Math.max(0, state.pendingMessages - sessionDeltaThresholds.deltaMessages)
-                  : 0,
-            });
-          }
-          api.logger.info(
-            `anchorclaw: sessions delta flush done (batch=${batch.length}, dirty=${dirtyFiles.length}, agent=${currentAgentId})`,
-          );
-        } catch (error) {
-          api.logger.warn(
-            `anchorclaw: sessions delta sync failed (${error instanceof Error ? error.message : String(error)})`,
-          );
-        } finally {
-          ctx.sessionDelta.syncInFlight = null;
-          if (ctx.sessionDelta.pendingFiles.size > 0 && !ctx.sessionDelta.closed && !ctx.sessionDelta.timer) {
-            ctx.sessionDelta.timer = setTimeout(() => {
-              ctx.sessionDelta.timer = null;
-              void flushSessionDeltaSync();
-            }, SESSION_DELTA_DEBOUNCE_MS);
-          }
-        }
-      })();
-
-      await ctx.sessionDelta.syncInFlight;
-    };
-    const scheduleSessionDeltaSync = (sessionFile: string) => {
-      const filePath = sessionFile.trim();
-      if (!filePath || ctx.sessionDelta.closed) {
-        return;
-      }
-      ctx.sessionDelta.pendingFiles.add(filePath);
-      if (ctx.sessionDelta.timer) {
-        return;
-      }
-      ctx.sessionDelta.timer = setTimeout(() => {
-        ctx.sessionDelta.timer = null;
-        void flushSessionDeltaSync();
-      }, SESSION_DELTA_DEBOUNCE_MS);
-    };
-    const ensureSessionDeltaListener = () => {
-      if (!ctx.cfg || ctx.sessionDelta.closed || ctx.sessionDelta.unsubscribe) {
-        return;
-      }
-      if ((ctx.cfg?.sessions?.visibility ?? "current") === "off") {
-        return;
-      }
-      const subscribe = (api as any)?.runtime?.events?.onSessionTranscriptUpdate;
-      if (typeof subscribe !== "function") {
-        api.logger.warn("anchorclaw: runtime.events.onSessionTranscriptUpdate unavailable; sessions delta sync disabled");
-        return;
-      }
-      const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
-      const isRelevantSessionDeltaPath = async (sessionFile: string): Promise<boolean> => {
-        if ((ctx.cfg?.sessions?.visibility ?? "current") === "visible") {
-          const knownAgentTranscript = await isSessionFileForAnyKnownAgent(sessionFile);
-          if (!knownAgentTranscript) {
-            const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
-            ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
-            if (next === 1 || next === 5 || next % 20 === 0) {
-              api.logger.warn(
-                `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
-              );
-            }
-            return false;
-          }
-          const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
-          if (!lookup) {
-            const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
-            ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
-            if (next === 1 || next === 5 || next % 20 === 0) {
-              api.logger.warn(
-                `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
-              );
-            }
-            return false;
-          }
-          return true;
-        }
-        const inCurrentAgentDir = await isSessionFileForAgent({
-          sessionFile,
-          agentId: currentAgentId,
-        });
-        if (!inCurrentAgentDir) {
-          const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
-          const logKey = lookup || sessionFile;
-          const next = (ctx.sessionDelta.ignoredPathCounts.get(logKey) ?? 0) + 1;
-          ctx.sessionDelta.ignoredPathCounts.set(logKey, next);
-          if (next === 1 || next === 5 || next % 20 === 0) {
-            api.logger.warn(
-              `anchorclaw: ignored session delta update outside current visibility (${logKey}) [count=${next}]`,
-            );
-          }
-          return false;
-        }
-        const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
-        if (!lookup) {
-          const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
-          ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
-          if (next === 1 || next === 5 || next % 20 === 0) {
-            api.logger.warn(
-              `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
-            );
-          }
-          return false;
-        }
-        return true;
-      };
-      ctx.sessionDelta.unsubscribe = subscribe((update: { sessionFile?: unknown }) => {
-        if (ctx.sessionDelta.closed) {
-          return;
-        }
-        const sessionFile = typeof update?.sessionFile === "string" ? update.sessionFile : "";
-        if (!sessionFile) {
-          return;
-        }
-        api.logger.info(`anchorclaw: transcript update event received (${sessionFile})`);
-        void (async () => {
-          if (!(await isRelevantSessionDeltaPath(sessionFile))) {
-            return;
-          }
-          api.logger.info(`anchorclaw: transcript update accepted for delta sync (${sessionFile})`);
-          scheduleSessionDeltaSync(sessionFile);
-        })();
-      });
-    };
+    const { ensureSessionsIndexBootstrapped, ensureSessionDeltaListener, cleanupSessionDelta } =
+      createSessionDeltaRuntime({ api, ctx });
 
     api.logger.info(
       ctx.cfg
@@ -493,20 +193,7 @@ export default definePluginEntry({
         id: "anchorclaw-sessions-delta-listener",
         description: "Cleans up transcript update listener and pending debounce timer.",
         cleanup: async () => {
-          ctx.sessionDelta.closed = true;
-          if (ctx.sessionDelta.timer) {
-            clearTimeout(ctx.sessionDelta.timer);
-            ctx.sessionDelta.timer = null;
-          }
-          ctx.sessionDelta.pendingFiles.clear();
-          ctx.sessionDelta.stateByPath.clear();
-          if (ctx.sessionDelta.unsubscribe) {
-            try {
-              ctx.sessionDelta.unsubscribe();
-            } finally {
-              ctx.sessionDelta.unsubscribe = null;
-            }
-          }
+          cleanupSessionDelta();
         },
       });
     }
