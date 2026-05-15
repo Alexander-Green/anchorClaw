@@ -114,27 +114,17 @@ function isSessionArchiveArtifactPath(sessionFile: string): boolean {
   );
 }
 
-function countUsageCountedSessionRecordsFromChunk(chunk: string): number {
-  const lines = chunk.split("\n");
+function countNewlinesFromChunk(chunk: string): number {
   let count = 0;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as { type?: unknown };
-      if (parsed?.type === "message") {
-        count += 1;
-      }
-    } catch {
-      continue;
+  for (let i = 0; i < chunk.length; i += 1) {
+    if (chunk.charCodeAt(i) === 10) {
+      count += 1;
     }
   }
   return count;
 }
 
-async function countUsageCountedSessionRecordsInRange(params: {
+async function countNewlinesInRange(params: {
   filePath: string;
   start: number;
   end: number;
@@ -147,7 +137,6 @@ async function countUsageCountedSessionRecordsInRange(params: {
     handle = await fs.open(params.filePath, "r");
     const buffer = Buffer.alloc(SESSION_DELTA_READ_CHUNK_BYTES);
     let offset = params.start;
-    let carry = "";
     let count = 0;
     while (offset < params.end) {
       const toRead = Math.min(buffer.length, params.end - offset);
@@ -156,19 +145,8 @@ async function countUsageCountedSessionRecordsInRange(params: {
         break;
       }
       const textChunk = buffer.toString("utf8", 0, bytesRead);
-      const merged = carry + textChunk;
-      const lastNewlineIndex = merged.lastIndexOf("\n");
-      if (lastNewlineIndex >= 0) {
-        const completeLinesChunk = merged.slice(0, lastNewlineIndex + 1);
-        carry = merged.slice(lastNewlineIndex + 1);
-        count += countUsageCountedSessionRecordsFromChunk(completeLinesChunk);
-      } else {
-        carry = merged;
-      }
+      count += countNewlinesFromChunk(textChunk);
       offset += bytesRead;
-    }
-    if (carry.trim()) {
-      count += countUsageCountedSessionRecordsFromChunk(carry);
     }
     return count;
   } catch {
@@ -450,14 +428,18 @@ export default definePluginEntry({
         };
         const sizeReduced = statSize < prev.lastSize;
         const deltaBytes = sizeReduced ? statSize : Math.max(0, statSize - prev.lastSize);
-        const messageSpanStart = sizeReduced ? 0 : prev.lastSize;
-        const countedUsageRecords = await countUsageCountedSessionRecordsInRange({
-          filePath: sessionFile,
-          start: messageSpanStart,
-          end: statSize,
-        });
-        const deltaMessages = deltaBytes > 0 && countedUsageRecords === 0 ? 1 : countedUsageRecords;
         const pendingBytes = prev.pendingBytes + Math.max(0, deltaBytes);
+        const shouldCountMessages =
+          sessionDeltaThresholds.deltaMessages > 0 &&
+          (sessionDeltaThresholds.deltaBytes <= 0 || pendingBytes < sessionDeltaThresholds.deltaBytes);
+        const messageSpanStart = sizeReduced ? 0 : prev.lastSize;
+        const deltaMessages = shouldCountMessages
+          ? await countNewlinesInRange({
+              filePath: sessionFile,
+              start: messageSpanStart,
+              end: statSize,
+            })
+          : 0;
         const pendingMessages = prev.pendingMessages + Math.max(0, deltaMessages);
         sessionDeltaStateByPath.set(sessionFile, {
           lastSize: statSize,
@@ -469,9 +451,8 @@ export default definePluginEntry({
             ? pendingBytes > 0
             : pendingBytes >= sessionDeltaThresholds.deltaBytes;
         const messagesHit =
-          sessionDeltaThresholds.deltaMessages <= 0
-            ? pendingMessages > 0
-            : pendingMessages >= sessionDeltaThresholds.deltaMessages;
+          sessionDeltaThresholds.deltaMessages > 0 &&
+          pendingMessages >= sessionDeltaThresholds.deltaMessages;
         if (bytesHit || messagesHit) {
           dirtyFiles.push(sessionFile);
         }

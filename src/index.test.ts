@@ -393,9 +393,18 @@ describe("phase2 session delta listener", () => {
 
   it("syncs after message threshold is reached for repeated updates", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
-    statFs
-      .mockResolvedValueOnce({ size: 100 })
-      .mockResolvedValueOnce({ size: 150 });
+    const content = "\n\n";
+    statFs.mockResolvedValueOnce({ size: 1 }).mockResolvedValueOnce({ size: 2 });
+    openFs.mockResolvedValue({
+      read: vi.fn(async (buffer: Buffer, offset: number, length: number, position: number) => {
+        const start = Math.max(0, Math.min(content.length, position ?? 0));
+        const end = Math.min(content.length, start + length);
+        const chunk = Buffer.from(content.slice(start, end), "utf8");
+        chunk.copy(buffer, offset, 0, chunk.length);
+        return { bytesRead: chunk.length };
+      }),
+      close: vi.fn(async () => undefined),
+    });
     const { api, getTranscriptListener } = buildApi();
     (plugin as any).register(api);
 
@@ -414,11 +423,19 @@ describe("phase2 session delta listener", () => {
     );
   });
 
-  it("treats append without trailing newline as one pending message", async () => {
+  it("does not count append without trailing newline toward message threshold", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
-    statFs.mockResolvedValueOnce({ size: 120 });
+    const content = '{"type":"message","role":"assistant","content":"unterminated"}';
+    const size = Buffer.byteLength(content, "utf8");
+    statFs.mockResolvedValueOnce({ size });
     openFs.mockResolvedValue({
-      read: vi.fn(async () => ({ bytesRead: 10 })),
+      read: vi.fn(async (buffer: Buffer, offset: number, length: number, position: number) => {
+        const start = Math.max(0, Math.min(content.length, position ?? 0));
+        const end = Math.min(content.length, start + length);
+        const chunk = Buffer.from(content.slice(start, end), "utf8");
+        chunk.copy(buffer, offset, 0, chunk.length);
+        return { bytesRead: chunk.length };
+      }),
       close: vi.fn(async () => undefined),
     });
     const { api, getTranscriptListener } = buildApi();
@@ -474,15 +491,10 @@ describe("phase2 session delta listener", () => {
     );
   });
 
-  it("counts only usage-counted JSONL message records in mixed transcript appends", async () => {
+  it("counts newline-delimited records in mixed transcript appends", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
-    const chunk1 = [
-      '{"type":"header"}',
-      '{"type":"custom","value":"ignored"}',
-      '{"type":"metadata","value":"ignored"}',
-      "",
-    ].join("\n");
-    const chunk2 = '{"type":"message","role":"assistant","content":"counted"}\n';
+    const chunk1 = '{"type":"header"}\n';
+    const chunk2 = '{"type":"custom","value":"still-counted"}\n';
     const fullContent = `${chunk1}${chunk2}`;
     const size1 = Buffer.byteLength(chunk1, "utf8");
     const size2 = Buffer.byteLength(fullContent, "utf8");
@@ -524,9 +536,16 @@ describe("phase2 session delta listener", () => {
       identity: { externalId: "test" },
     });
     isSessionFileForAgent.mockResolvedValue(true);
-    statFs.mockResolvedValueOnce({ size: 120 });
+    const content = "\n";
+    statFs.mockResolvedValueOnce({ size: 1 });
     openFs.mockResolvedValue({
-      read: vi.fn(async () => ({ bytesRead: 10 })),
+      read: vi.fn(async (buffer: Buffer, offset: number, length: number, position: number) => {
+        const start = Math.max(0, Math.min(content.length, position ?? 0));
+        const end = Math.min(content.length, start + length);
+        const chunk = Buffer.from(content.slice(start, end), "utf8");
+        chunk.copy(buffer, offset, 0, chunk.length);
+        return { bytesRead: chunk.length };
+      }),
       close: vi.fn(async () => undefined),
     });
     const { api, getTranscriptListener } = buildApi();
@@ -544,7 +563,7 @@ describe("phase2 session delta listener", () => {
     );
   });
 
-  it("schedules targeted sync when thresholds are zero", async () => {
+  it("schedules targeted sync when thresholds are zero and file changed", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: {
@@ -554,17 +573,17 @@ describe("phase2 session delta listener", () => {
       identity: { externalId: "test" },
     });
     isSessionFileForAgent.mockResolvedValue(true);
-    statFs.mockResolvedValue({ size: 0 });
+    statFs.mockResolvedValue({ size: 1 });
     const { api, getTranscriptListener } = buildApi();
     (plugin as any).register(api);
     const listener = getTranscriptListener();
-    listener?.({ sessionFile: "/tmp/agents/main/sessions/unchanged.jsonl" });
+    listener?.({ sessionFile: "/tmp/agents/main/sessions/changed.jsonl" });
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
     expect(syncSessionsIndexDb).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionFiles: ["/tmp/agents/main/sessions/unchanged.jsonl"],
+        sessionFiles: ["/tmp/agents/main/sessions/changed.jsonl"],
       }),
     );
   });
