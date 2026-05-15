@@ -1,6 +1,6 @@
 {
   "name": "@anchorclaw/anchorclaw",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "OpenClaw Postgres-backed long-term memory plugin",
   "repository": {
     "type": "git",

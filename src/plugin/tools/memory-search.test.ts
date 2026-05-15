@@ -1,0 +1,133 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMemorySearchTool } from "./memory-search.js";
+
+const {
+  resolveScopeMock,
+  resolveLimitsMock,
+  memorySearchDbMock,
+  memorySearchSessionsMock,
+  hasSessionsIndexRowsMock,
+  memorySearchSessionsIndexDbMock,
+  filterSessionHitsByVisibilityMock,
+} = vi.hoisted(() => ({
+  resolveScopeMock: vi.fn(async () => ({ userId: "u1", workspaceId: "w1" })),
+  resolveLimitsMock: vi.fn(() => ({ maxResults: 10 })),
+  memorySearchDbMock: vi.fn(async () => []),
+  memorySearchSessionsMock: vi.fn(async () => []),
+  hasSessionsIndexRowsMock: vi.fn(async () => false),
+  memorySearchSessionsIndexDbMock: vi.fn(async () => []),
+  filterSessionHitsByVisibilityMock: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
+}));
+
+vi.mock("../../identity.js", () => ({
+  resolveUserAndWorkspaceScope: resolveScopeMock,
+}));
+
+vi.mock("../../memory/limits.js", () => ({
+  resolveMemoryLimits: resolveLimitsMock,
+}));
+
+vi.mock("../../memory/search.js", () => ({
+  memorySearchDb: memorySearchDbMock,
+}));
+
+vi.mock("../../memory/sessions.js", () => ({
+  memorySearchSessions: memorySearchSessionsMock,
+}));
+
+vi.mock("../../memory/sessions-index.js", () => ({
+  hasSessionsIndexRows: hasSessionsIndexRowsMock,
+  memorySearchSessionsIndexDb: memorySearchSessionsIndexDbMock,
+}));
+
+vi.mock("../../memory/sessions-visibility.js", () => ({
+  filterSessionHitsByVisibility: filterSessionHitsByVisibilityMock,
+}));
+
+function buildCtx() {
+  const registerTool = vi.fn();
+  return {
+    ctx: {
+      api: {
+        registerTool,
+        runtime: { agentId: "main", sessionKey: "agent:main:main" },
+      },
+      disabledReason: null,
+      cfg: { sessions: { visibility: "current" } },
+      ensureReady: vi.fn(async () => undefined),
+      getPool: vi.fn(() => ({ query: vi.fn() })),
+      sdkHealth: { degraded: false, reason: null, affectedOperation: null },
+      markSdkSuccess: vi.fn(),
+      markSdkError: vi.fn(),
+    } as any,
+    registerTool,
+  };
+}
+
+describe("memory_search tool exactTop1 metadata", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("emits exactTop1 metadata and top exact line for literal top-1 match", async () => {
+    (memorySearchDbMock as any).mockResolvedValueOnce([
+      {
+        corpus: "memory",
+        path: "db-memory/items/1.md",
+        id: "1",
+        title: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+        kind: "note",
+        score: 6.7,
+        snippet: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+      },
+    ] as any[]);
+    const { ctx, registerTool } = buildCtx();
+    registerMemorySearchTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-1", {
+      query: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+      corpus: "memory",
+    });
+
+    expect(result.content[0].text).toContain("Found 1 result(s).");
+    expect(result.content[0].text).toContain("Top exact match: ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
+    expect(result.details.meta).toMatchObject({
+      exactTop1: true,
+      exactTop1Value: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+    });
+  });
+
+  it("does not emit exactTop1 metadata for non-literal top-1", async () => {
+    (memorySearchDbMock as any).mockResolvedValueOnce([
+      {
+        corpus: "memory",
+        path: "db-memory/items/2.md",
+        id: "2",
+        title: "RETRIEVAL_MARKER_20260515_D gamma grape",
+        kind: "note",
+        score: 1.4,
+        snippet: "RETRIEVAL_MARKER_20260515_D gamma grape",
+      },
+    ] as any[]);
+    const { ctx, registerTool } = buildCtx();
+    registerMemorySearchTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-2", { query: "smoke", corpus: "memory" });
+
+    expect(result.content[0].text).toBe("Found 1 result(s).");
+    expect(result.details.meta).toMatchObject({
+      exactTop1: false,
+      exactTop1Value: null,
+    });
+  });
+});

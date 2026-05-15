@@ -41,10 +41,10 @@ export function registerAnchorClawMemoryCapability(params: {
       let toolGuidance = "";
       if (hasMemorySearch && hasMemoryGet) {
         toolGuidance =
-          "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.";
+          "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search; then use memory_get to pull only the needed lines. For one exact marker/id/key value questions, make at most two memory_search/memory_recall attempts: full user phrase, then one concise candidate query. If any memory_search or memory_recall result has details.meta.exactTop1=true, return details.meta.exactTop1Value verbatim immediately; do not call more memory tools or substitute nearby/recent markers. Never use empty memory_recall as a tie-breaker for exact lookups. If no exactTop1 after two attempts, say you checked and give the best candidate with uncertainty.";
       } else if (hasMemorySearch) {
         toolGuidance =
-          "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search and answer from matching results. If low confidence after search, say you checked.";
+          "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search and answer from matching results. For one exact marker/id/key value questions, make at most two memory_search/memory_recall attempts: full user phrase, then one concise candidate query. If any memory_search or memory_recall result has details.meta.exactTop1=true, return details.meta.exactTop1Value verbatim immediately; do not call more memory tools or substitute nearby/recent markers. Never use empty memory_recall as a tie-breaker for exact lookups. If no exactTop1 after two attempts, say you checked and give the best candidate with uncertainty.";
       } else if (hasMemoryGet) {
         toolGuidance =
           "Before answering anything about prior work, decisions, dates, people, preferences, or todos that already point to a specific memory item: run memory_get to pull only the needed lines. If low confidence after reading them, say you checked.";

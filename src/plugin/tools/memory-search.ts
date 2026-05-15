@@ -6,6 +6,10 @@ import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
 import type { ToolRegistrationParams } from "./common.js";
 
+function normalizeExact(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 export function registerMemorySearchTool({
   ctx,
   ensureSessionsIndexBootstrapped,
@@ -15,7 +19,7 @@ export function registerMemorySearchTool({
     name: "memory_search",
     label: "Memory Search",
     description:
-      "Search memory.\n\nBehavior contract:\n- corpus defaults to \"memory\" (durable items in Postgres).\n- For corpus=\"memory\", retrieval is lexical Postgres FTS (tsquery/ts_rank), not vector semantic retrieval.\n- corpus=\"sessions\" uses Postgres-backed sessions index (DB-first) and returns paths like sessions/<agentId>/<session>.jsonl.\n- Results contain synthetic paths. Use memory_get to read them.\n- Do not claim semantic/vector retrieval unless details.meta explicitly reports it in a future implementation.",
+      "Search memory.\n\nBehavior contract:\n- corpus defaults to \"memory\" (durable items in Postgres).\n- For corpus=\"memory\", retrieval is lexical Postgres FTS (tsquery/ts_rank), not vector semantic retrieval.\n- corpus=\"sessions\" uses Postgres-backed sessions index (DB-first) and returns paths like sessions/<agentId>/<session>.jsonl.\n- Results contain synthetic paths. Use memory_get to read them.\n- If the top result is an exact literal match, content includes \"Top exact match: <value>\" and details.meta.exactTop1/exactTop1Value.\n- Do not claim semantic/vector retrieval unless details.meta explicitly reports it in a future implementation.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -211,14 +215,31 @@ export function registerMemorySearchTool({
       if (typeof minScore === "number" && Number.isFinite(minScore)) {
         hits = hits.filter((hit: any) => typeof hit?.score === "number" && hit.score >= minScore);
       }
+      const normalizedQuery = normalizeExact(query);
+      const topHit = hits[0] as any;
+      const topTitle = normalizeExact(topHit?.title);
+      const topSnippet = normalizeExact(topHit?.snippet);
+      const exactTop1 = Boolean(
+        normalizedQuery &&
+          topHit &&
+          (topTitle === normalizedQuery || topSnippet === normalizedQuery),
+      );
+      const exactTop1Value = exactTop1
+        ? (typeof topHit?.title === "string" && topHit.title.trim()) ||
+          (typeof topHit?.snippet === "string" && topHit.snippet.trim()) ||
+          null
+        : null;
+      const topExactLine = exactTop1 && exactTop1Value ? `\nTop exact match: ${exactTop1Value}` : "";
       return {
-        content: [{ type: "text", text: hits.length ? `Found ${hits.length} result(s).` : "No results." }],
+        content: [{ type: "text", text: hits.length ? `Found ${hits.length} result(s).${topExactLine}` : "No results." }],
         details: {
           results: hits,
           count: hits.length,
           meta: {
             retrievalMode,
             semantic: false,
+            exactTop1,
+            exactTop1Value,
           },
           ...(ctx.sdkHealth.degraded
             ? { degraded: true, degradedReason: "sdk_error", sdk: { ...ctx.sdkHealth } }

@@ -58,7 +58,14 @@ export async function memorySearchDb(params: {
       type,
       content,
       updated_at,
-      ts_rank_cd(search_vector, plainto_tsquery('simple', $3)) AS score
+      (
+        ts_rank_cd(search_vector, plainto_tsquery('simple', $3))
+        + CASE
+            WHEN lower(coalesce(title, '')) = lower($3) THEN 3.0
+            WHEN lower(content) = lower($3) THEN 2.5
+            ELSE 0
+          END
+      ) AS score
     FROM memory_items
     WHERE user_id = $1
       AND workspace_id = $2
