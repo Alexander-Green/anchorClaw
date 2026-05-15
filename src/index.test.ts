@@ -74,6 +74,8 @@ vi.mock("./config.js", () => ({
   anchorClawConfigSchema: {
     parse: parseCfg,
   },
+  DEFAULT_SESSION_DELTA_BYTES: 100_000,
+  DEFAULT_SESSION_DELTA_MESSAGES: 50,
 }));
 
 vi.mock("./identity.js", () => ({
@@ -542,7 +544,7 @@ describe("phase2 session delta listener", () => {
     );
   });
 
-  it("does not force sync on unchanged files when thresholds are zero", async () => {
+  it("schedules targeted sync when thresholds are zero", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: {
@@ -552,15 +554,19 @@ describe("phase2 session delta listener", () => {
       identity: { externalId: "test" },
     });
     isSessionFileForAgent.mockResolvedValue(true);
-    statFs.mockResolvedValueOnce({ size: 0 });
+    statFs.mockResolvedValue({ size: 0 });
     const { api, getTranscriptListener } = buildApi();
     (plugin as any).register(api);
-
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/unchanged.jsonl" });
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFiles: ["/tmp/agents/main/sessions/unchanged.jsonl"],
+      }),
+    );
   });
 
   it("rejects unrecognized transcript path updates in visible visibility", async () => {
