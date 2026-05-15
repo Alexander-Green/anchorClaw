@@ -4,9 +4,6 @@ import {
   type AnchorClawConfig,
 } from "./config.js";
 import { resolveUserAndWorkspaceScope } from "./identity.js";
-import { applyMigrations } from "./migrations.js";
-import { loadBundledMigrationsFromDisk } from "./migrations-fs.js";
-import { createPostgresPool, type PostgresPool } from "./postgres.js";
 import { resolveMemoryLimits } from "./memory/limits.js";
 import { memoryGetFromDb } from "./memory/get.js";
 import { memorySearchDb } from "./memory/search.js";
@@ -17,7 +14,6 @@ import { buildPromptMemorySection, queryPromptMemoryItems } from "./memory/promp
 import {
   isSessionFileForAgent,
   isSessionFileForAnyKnownAgent,
-  listKnownAgentIds,
   memorySearchSessions,
   resolveSessionsDirForAgent,
 } from "./memory/sessions.js";
@@ -40,17 +36,17 @@ import {
   isSessionArchiveArtifactPath,
   resolveSessionDeltaThresholds,
 } from "./plugin/session-delta-helpers.js";
-import { resolveActor } from "./plugin/runtime-helpers.js";
+import {
+  createPluginRuntimeContext,
+  type PluginRuntimeContext,
+} from "./plugin/runtime-context.js";
 import type {
   MemoryStatusCheckResult,
-  SdkHealthState,
-  SessionDeltaState,
 } from "./plugin/types.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 const SESSION_DELTA_DEBOUNCE_MS = 5_000;
-const SDK_RECOVERY_SUCCESS_THRESHOLD = 3;
 
 export default definePluginEntry({
   id: "anchorclaw",
@@ -85,100 +81,32 @@ export default definePluginEntry({
       }
     }
 
-    let pool: PostgresPool | undefined;
-    let migrationsApplied: Promise<void> | undefined;
-    const getPool = () => {
-      if (!cfg) {
-        throw new Error(`anchorclaw: disabled until configured (${disabledReason ?? "invalid config"})`);
-      }
-      pool ??= createPostgresPool({ cfg });
-      migrationsApplied ??= (async () => {
-        if (cfg?.postgres?.schema) {
-          const schema = cfg.postgres.schema.trim();
-          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
-            throw new Error("postgres.schema must be a simple identifier (letters/numbers/underscore)");
-          }
-          await pool!.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
-        }
-        const migrations = await loadBundledMigrationsFromDisk();
-        const result = await applyMigrations({ pool: pool!, migrations });
-        if (result.applied.length > 0) {
-          api.logger.info(`anchorclaw: applied migrations: ${result.applied.join(", ")}`);
-        }
-      })();
-      return pool;
-    };
-
-    const ensureReady = async () => {
-      getPool();
-      await migrationsApplied;
-    };
-
-    // PromptBuilder is synchronous in OpenClaw, so we keep a best-effort cached durable memory block.
-    // It is refreshed lazily (on demand) and opportunistically after successful writes.
-    let promptCacheLines: string[] | null = null;
-    let promptCacheError: string | null = null;
-    let promptCacheRefreshPromise: Promise<void> | null = null;
-    let sessionsIndexBootstrapPromise: Promise<void> | null = null;
-    let sessionsIndexBootstrapped = false;
-    const pendingSessionDeltaFiles = new Set<string>();
-    let sessionDeltaTimer: ReturnType<typeof setTimeout> | null = null;
-    let sessionDeltaSyncInFlight: Promise<void> | null = null;
-    let sessionDeltaUnsubscribe: (() => void) | null = null;
-    let sessionDeltaClosed = false;
-    const ignoredSessionDeltaPathCounts = new Map<string, number>();
-    const sessionDeltaStateByPath = new Map<string, SessionDeltaState>();
-    const sdkHealth: SdkHealthState = {
-      degraded: false,
-      consecutiveSuccesses: 0,
-    };
-    const markSdkError = (operation: string, error: unknown) => {
-      sdkHealth.degraded = true;
-      sdkHealth.consecutiveSuccesses = 0;
-      sdkHealth.affectedOperation = operation;
-      sdkHealth.reason = error instanceof Error ? error.message : String(error);
-      sdkHealth.lastErrorAt = new Date().toISOString();
-    };
-    const markSdkSuccess = () => {
-      if (!sdkHealth.degraded) {
-        return;
-      }
-      sdkHealth.consecutiveSuccesses += 1;
-      if (sdkHealth.consecutiveSuccesses < SDK_RECOVERY_SUCCESS_THRESHOLD) {
-        return;
-      }
-      sdkHealth.degraded = false;
-      sdkHealth.reason = undefined;
-      sdkHealth.affectedOperation = undefined;
-      sdkHealth.lastErrorAt = undefined;
-      sdkHealth.consecutiveSuccesses = 0;
-    };
-    const listVisibleAgentIds = async (): Promise<string[]> => {
-      const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
-      const agentIds = await listKnownAgentIds();
-      return [currentAgentId, ...agentIds.filter((agentId) => agentId !== currentAgentId)];
-    };
+    const ctx: PluginRuntimeContext = createPluginRuntimeContext({
+      api,
+      cfg,
+      disabledReason,
+    });
     const refreshPromptCache = () => {
-      if (!cfg) {
-        promptCacheLines = null;
-        promptCacheError = disabledReason ?? "invalid config";
+      if (!ctx.cfg) {
+        ctx.promptCache.lines = null;
+        ctx.promptCache.error = ctx.disabledReason ?? "invalid config";
         return;
       }
-      if (promptCacheRefreshPromise) {
+      if (ctx.promptCache.refreshPromise) {
         return;
       }
-      promptCacheRefreshPromise = (async () => {
+      ctx.promptCache.refreshPromise = (async () => {
         try {
-          await ensureReady();
+          await ctx.ensureReady();
           const scope = await resolveUserAndWorkspaceScope({
             api,
-            pool: getPool(),
+            pool: ctx.getPool(),
             agentId: (api as any)?.runtime?.agentId,
             sessionKey: (api as any)?.runtime?.sessionKey,
-            configuredExternalId: cfg?.identity?.externalId,
+            configuredExternalId: ctx.cfg?.identity?.externalId,
           });
           const items = await queryPromptMemoryItems({
-            pool: getPool(),
+            pool: ctx.getPool(),
             userId: scope.userId,
             workspaceId: scope.workspaceId,
             limit: 50,
@@ -187,7 +115,7 @@ export default definePluginEntry({
             // profile/config/skill/summary/automation (safe ordering + size budgets + canonicalKey conventions).
             types: ["fact", "note"],
           });
-          promptCacheLines = buildPromptMemorySection({
+          ctx.promptCache.lines = buildPromptMemorySection({
             items,
             maxTotalChars: 12_000,
             maxTitleChars: 120,
@@ -197,45 +125,45 @@ export default definePluginEntry({
               defaultMaxItemChars: 1_200,
             },
           });
-          promptCacheError = null;
+          ctx.promptCache.error = null;
         } catch (error) {
-          promptCacheLines = null;
-          promptCacheError = error instanceof Error ? error.message : String(error);
-          api.logger.warn(`anchorclaw: prompt cache refresh failed (${promptCacheError})`);
+          ctx.promptCache.lines = null;
+          ctx.promptCache.error = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`anchorclaw: prompt cache refresh failed (${ctx.promptCache.error})`);
         } finally {
-          promptCacheRefreshPromise = null;
+          ctx.promptCache.refreshPromise = null;
         }
       })();
     };
     const ensureSessionsIndexBootstrapped = async () => {
-      if (!cfg) {
+      if (!ctx.cfg) {
         return;
       }
-      if ((cfg.sessions?.visibility ?? "current") === "off") {
+      if ((ctx.cfg?.sessions?.visibility ?? "current") === "off") {
         return;
       }
-      if (sessionsIndexBootstrapped) {
+      if (ctx.sessionsIndex.bootstrapped) {
         return;
       }
-      if (sessionsIndexBootstrapPromise) {
-        await sessionsIndexBootstrapPromise;
+      if (ctx.sessionsIndex.bootstrapPromise) {
+        await ctx.sessionsIndex.bootstrapPromise;
         return;
       }
-      sessionsIndexBootstrapPromise = (async () => {
+      ctx.sessionsIndex.bootstrapPromise = (async () => {
         try {
-          await ensureReady();
+          await ctx.ensureReady();
           const scope = await resolveUserAndWorkspaceScope({
             api,
-            pool: getPool(),
+            pool: ctx.getPool(),
             agentId: (api as any)?.runtime?.agentId,
             sessionKey: (api as any)?.runtime?.sessionKey,
-            configuredExternalId: cfg?.identity?.externalId,
+            configuredExternalId: ctx.cfg?.identity?.externalId,
           });
           const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
-          if ((cfg.sessions?.visibility ?? "current") === "visible") {
-            const visibleAgentIds = await listVisibleAgentIds();
+          if ((ctx.cfg?.sessions?.visibility ?? "current") === "visible") {
+            const visibleAgentIds = await ctx.listVisibleAgentIds();
             await syncVisibleSessionsIndexDb({
-              pool: getPool(),
+              pool: ctx.getPool(),
               userId: scope.userId,
               workspaceId: scope.workspaceId,
               agentId: currentAgentId,
@@ -243,46 +171,46 @@ export default definePluginEntry({
             });
           } else {
             await syncSessionsIndexDb({
-              pool: getPool(),
+              pool: ctx.getPool(),
               userId: scope.userId,
               workspaceId: scope.workspaceId,
               agentId: currentAgentId,
             });
           }
-          sessionsIndexBootstrapped = true;
+          ctx.sessionsIndex.bootstrapped = true;
         } catch (error) {
           api.logger.warn(
             `anchorclaw: sessions index bootstrap failed (${error instanceof Error ? error.message : String(error)})`,
           );
         } finally {
-          sessionsIndexBootstrapPromise = null;
+          ctx.sessionsIndex.bootstrapPromise = null;
         }
       })();
-      await sessionsIndexBootstrapPromise;
+      await ctx.sessionsIndex.bootstrapPromise;
     };
     const flushSessionDeltaSync = async () => {
-      if (sessionDeltaClosed) {
-        pendingSessionDeltaFiles.clear();
+      if (ctx.sessionDelta.closed) {
+        ctx.sessionDelta.pendingFiles.clear();
         return;
       }
-      if (!cfg) {
-        pendingSessionDeltaFiles.clear();
+      if (!ctx.cfg) {
+        ctx.sessionDelta.pendingFiles.clear();
         return;
       }
-      if ((cfg.sessions?.visibility ?? "current") === "off") {
-        pendingSessionDeltaFiles.clear();
+      if ((ctx.cfg?.sessions?.visibility ?? "current") === "off") {
+        ctx.sessionDelta.pendingFiles.clear();
         return;
       }
-      if (pendingSessionDeltaFiles.size === 0) {
+      if (ctx.sessionDelta.pendingFiles.size === 0) {
         return;
       }
-      if (sessionDeltaSyncInFlight) {
+      if (ctx.sessionDelta.syncInFlight) {
         return;
       }
 
-      const batch = Array.from(pendingSessionDeltaFiles);
-      const sessionDeltaThresholds = resolveSessionDeltaThresholds(cfg);
-      pendingSessionDeltaFiles.clear();
+      const batch = Array.from(ctx.sessionDelta.pendingFiles);
+      const sessionDeltaThresholds = resolveSessionDeltaThresholds(ctx.cfg);
+      ctx.sessionDelta.pendingFiles.clear();
       const dirtyFiles: string[] = [];
       for (const sessionFile of batch) {
         if (isSessionArchiveArtifactPath(sessionFile)) {
@@ -300,7 +228,7 @@ export default definePluginEntry({
         if (statSize === null) {
           continue;
         }
-        const prev = sessionDeltaStateByPath.get(sessionFile) ?? {
+        const prev = ctx.sessionDelta.stateByPath.get(sessionFile) ?? {
           lastSize: 0,
           pendingBytes: 0,
           pendingMessages: 0,
@@ -320,7 +248,7 @@ export default definePluginEntry({
             })
           : 0;
         const pendingMessages = prev.pendingMessages + Math.max(0, deltaMessages);
-        sessionDeltaStateByPath.set(sessionFile, {
+        ctx.sessionDelta.stateByPath.set(sessionFile, {
           lastSize: statSize,
           pendingBytes,
           pendingMessages,
@@ -340,33 +268,33 @@ export default definePluginEntry({
         return;
       }
 
-      sessionDeltaSyncInFlight = (async () => {
+      ctx.sessionDelta.syncInFlight = (async () => {
         try {
           api.logger.info(
-            `anchorclaw: sessions delta flush start (batch=${batch.length}, dirty=${dirtyFiles.length}, visibility=${cfg.sessions?.visibility ?? "current"})`,
+            `anchorclaw: sessions delta flush start (batch=${batch.length}, dirty=${dirtyFiles.length}, visibility=${ctx.cfg?.sessions?.visibility ?? "current"})`,
           );
-          await ensureReady();
+          await ctx.ensureReady();
           const scope = await resolveUserAndWorkspaceScope({
             api,
-            pool: getPool(),
+            pool: ctx.getPool(),
             agentId: (api as any)?.runtime?.agentId,
             sessionKey: (api as any)?.runtime?.sessionKey,
-            configuredExternalId: cfg?.identity?.externalId,
+            configuredExternalId: ctx.cfg?.identity?.externalId,
           });
           const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
           await syncSessionsIndexDb({
-            pool: getPool(),
+            pool: ctx.getPool(),
             userId: scope.userId,
             workspaceId: scope.workspaceId,
             agentId: currentAgentId,
             sessionFiles: dirtyFiles,
           });
           for (const sessionFile of dirtyFiles) {
-            const state = sessionDeltaStateByPath.get(sessionFile);
+            const state = ctx.sessionDelta.stateByPath.get(sessionFile);
             if (!state) {
               continue;
             }
-            sessionDeltaStateByPath.set(sessionFile, {
+            ctx.sessionDelta.stateByPath.set(sessionFile, {
               lastSize: state.lastSize,
               pendingBytes:
                 sessionDeltaThresholds.deltaBytes > 0
@@ -386,37 +314,37 @@ export default definePluginEntry({
             `anchorclaw: sessions delta sync failed (${error instanceof Error ? error.message : String(error)})`,
           );
         } finally {
-          sessionDeltaSyncInFlight = null;
-          if (pendingSessionDeltaFiles.size > 0 && !sessionDeltaClosed && !sessionDeltaTimer) {
-            sessionDeltaTimer = setTimeout(() => {
-              sessionDeltaTimer = null;
+          ctx.sessionDelta.syncInFlight = null;
+          if (ctx.sessionDelta.pendingFiles.size > 0 && !ctx.sessionDelta.closed && !ctx.sessionDelta.timer) {
+            ctx.sessionDelta.timer = setTimeout(() => {
+              ctx.sessionDelta.timer = null;
               void flushSessionDeltaSync();
             }, SESSION_DELTA_DEBOUNCE_MS);
           }
         }
       })();
 
-      await sessionDeltaSyncInFlight;
+      await ctx.sessionDelta.syncInFlight;
     };
     const scheduleSessionDeltaSync = (sessionFile: string) => {
       const filePath = sessionFile.trim();
-      if (!filePath || sessionDeltaClosed) {
+      if (!filePath || ctx.sessionDelta.closed) {
         return;
       }
-      pendingSessionDeltaFiles.add(filePath);
-      if (sessionDeltaTimer) {
+      ctx.sessionDelta.pendingFiles.add(filePath);
+      if (ctx.sessionDelta.timer) {
         return;
       }
-      sessionDeltaTimer = setTimeout(() => {
-        sessionDeltaTimer = null;
+      ctx.sessionDelta.timer = setTimeout(() => {
+        ctx.sessionDelta.timer = null;
         void flushSessionDeltaSync();
       }, SESSION_DELTA_DEBOUNCE_MS);
     };
     const ensureSessionDeltaListener = () => {
-      if (!cfg || sessionDeltaClosed || sessionDeltaUnsubscribe) {
+      if (!ctx.cfg || ctx.sessionDelta.closed || ctx.sessionDelta.unsubscribe) {
         return;
       }
-      if ((cfg.sessions?.visibility ?? "current") === "off") {
+      if ((ctx.cfg?.sessions?.visibility ?? "current") === "off") {
         return;
       }
       const subscribe = (api as any)?.runtime?.events?.onSessionTranscriptUpdate;
@@ -426,11 +354,11 @@ export default definePluginEntry({
       }
       const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
       const isRelevantSessionDeltaPath = async (sessionFile: string): Promise<boolean> => {
-        if ((cfg?.sessions?.visibility ?? "current") === "visible") {
+        if ((ctx.cfg?.sessions?.visibility ?? "current") === "visible") {
           const knownAgentTranscript = await isSessionFileForAnyKnownAgent(sessionFile);
           if (!knownAgentTranscript) {
-            const next = (ignoredSessionDeltaPathCounts.get(sessionFile) ?? 0) + 1;
-            ignoredSessionDeltaPathCounts.set(sessionFile, next);
+            const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
+            ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
             if (next === 1 || next === 5 || next % 20 === 0) {
               api.logger.warn(
                 `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
@@ -440,8 +368,8 @@ export default definePluginEntry({
           }
           const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
           if (!lookup) {
-            const next = (ignoredSessionDeltaPathCounts.get(sessionFile) ?? 0) + 1;
-            ignoredSessionDeltaPathCounts.set(sessionFile, next);
+            const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
+            ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
             if (next === 1 || next === 5 || next % 20 === 0) {
               api.logger.warn(
                 `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
@@ -458,8 +386,8 @@ export default definePluginEntry({
         if (!inCurrentAgentDir) {
           const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
           const logKey = lookup || sessionFile;
-          const next = (ignoredSessionDeltaPathCounts.get(logKey) ?? 0) + 1;
-          ignoredSessionDeltaPathCounts.set(logKey, next);
+          const next = (ctx.sessionDelta.ignoredPathCounts.get(logKey) ?? 0) + 1;
+          ctx.sessionDelta.ignoredPathCounts.set(logKey, next);
           if (next === 1 || next === 5 || next % 20 === 0) {
             api.logger.warn(
               `anchorclaw: ignored session delta update outside current visibility (${logKey}) [count=${next}]`,
@@ -469,8 +397,8 @@ export default definePluginEntry({
         }
         const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
         if (!lookup) {
-          const next = (ignoredSessionDeltaPathCounts.get(sessionFile) ?? 0) + 1;
-          ignoredSessionDeltaPathCounts.set(sessionFile, next);
+          const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
+          ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
           if (next === 1 || next === 5 || next % 20 === 0) {
             api.logger.warn(
               `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
@@ -480,8 +408,8 @@ export default definePluginEntry({
         }
         return true;
       };
-      sessionDeltaUnsubscribe = subscribe((update: { sessionFile?: unknown }) => {
-        if (sessionDeltaClosed) {
+      ctx.sessionDelta.unsubscribe = subscribe((update: { sessionFile?: unknown }) => {
+        if (ctx.sessionDelta.closed) {
           return;
         }
         const sessionFile = typeof update?.sessionFile === "string" ? update.sessionFile : "";
@@ -500,31 +428,32 @@ export default definePluginEntry({
     };
 
     api.logger.info(
-      cfg
-        ? `anchorclaw: plugin registered (db: ${cfg.postgres.host}, lazy init)`
+      ctx.cfg
+        ? `anchorclaw: plugin registered (db: ${ctx.cfg.postgres.host}, lazy init)`
         : "anchorclaw: plugin registered (disabled until configured)",
     );
 
     // Best-effort warm-up so the very first prompt often has durable memory available.
-    if (cfg) {
+    if (ctx.cfg) {
       refreshPromptCache();
       ensureSessionDeltaListener();
     }
 
     // Best-effort one-time import of legacy memory files from the workspace into Postgres.
     // This does not remove/disable file-based behavior in OpenClaw core; it only populates DB state.
-    if (cfg) {
+    if (ctx.cfg) {
+      const importCfg = ctx.cfg;
       (async () => {
         try {
-          await ensureReady();
+          await ctx.ensureReady();
           const workspaceDir =
             typeof (api as any)?.runtime?.workspaceDir === "string" && (api as any).runtime.workspaceDir.trim()
               ? String((api as any).runtime.workspaceDir)
               : process.cwd();
           await runOneTimeWorkspaceImport({
             api,
-            cfg,
-            pool: getPool(),
+            cfg: importCfg,
+            pool: ctx.getPool(),
             workspaceDir,
             agentId: (api as any)?.runtime?.agentId,
             sessionKey: (api as any)?.runtime?.sessionKey,
@@ -561,45 +490,45 @@ export default definePluginEntry({
     }
     if (registerRuntimeLifecycleCompat) {
       registerRuntimeLifecycleCompat({
-      id: "anchorclaw-sessions-delta-listener",
-      description: "Cleans up transcript update listener and pending debounce timer.",
-      cleanup: async () => {
-        sessionDeltaClosed = true;
-        if (sessionDeltaTimer) {
-          clearTimeout(sessionDeltaTimer);
-          sessionDeltaTimer = null;
-        }
-        pendingSessionDeltaFiles.clear();
-        sessionDeltaStateByPath.clear();
-        if (sessionDeltaUnsubscribe) {
-          try {
-            sessionDeltaUnsubscribe();
-          } finally {
-            sessionDeltaUnsubscribe = null;
+        id: "anchorclaw-sessions-delta-listener",
+        description: "Cleans up transcript update listener and pending debounce timer.",
+        cleanup: async () => {
+          ctx.sessionDelta.closed = true;
+          if (ctx.sessionDelta.timer) {
+            clearTimeout(ctx.sessionDelta.timer);
+            ctx.sessionDelta.timer = null;
           }
-        }
-      },
-    });
+          ctx.sessionDelta.pendingFiles.clear();
+          ctx.sessionDelta.stateByPath.clear();
+          if (ctx.sessionDelta.unsubscribe) {
+            try {
+              ctx.sessionDelta.unsubscribe();
+            } finally {
+              ctx.sessionDelta.unsubscribe = null;
+            }
+          }
+        },
+      });
     }
 
     registerMemoryCapability("anchorclaw", {
       promptBuilder: (params?: { availableTools: Set<string>; citationsMode?: "off" | "inline" | "block" | string }) => {
-        if (disabledReason) {
-          return [`AnchorClaw memory is disabled until configured (${disabledReason}).`];
+        if (ctx.disabledReason) {
+          return [`AnchorClaw memory is disabled until configured (${ctx.disabledReason}).`];
         }
 
-        if (!promptCacheLines && !promptCacheError) {
+        if (!ctx.promptCache.lines && !ctx.promptCache.error) {
           refreshPromptCache();
         }
-        const cached = promptCacheLines ?? [];
-        const cacheNotice = promptCacheError
-          ? [`[AnchorClaw durable memory cache unavailable: ${promptCacheError}]`, ""]
+        const cached = ctx.promptCache.lines ?? [];
+        const cacheNotice = ctx.promptCache.error
+          ? [`[AnchorClaw durable memory cache unavailable: ${ctx.promptCache.error}]`, ""]
           : cached.length === 0
             ? ["[AnchorClaw durable memory cache is warming up...]", ""]
             : [];
-        const sdkNotice = sdkHealth.degraded
+        const sdkNotice = ctx.sdkHealth.degraded
           ? [
-              `[AnchorClaw sessions SDK is degraded: ${sdkHealth.reason ?? "unknown error"}; operation=${sdkHealth.affectedOperation ?? "unknown"}]`,
+              `[AnchorClaw sessions SDK is degraded: ${ctx.sdkHealth.reason ?? "unknown error"}; operation=${ctx.sdkHealth.affectedOperation ?? "unknown"}]`,
               "",
             ]
           : [];
@@ -647,20 +576,20 @@ export default definePluginEntry({
       },
       runtime: {
         async getMemorySearchManager(params: { cfg: any; agentId: string; purpose?: "default" | "status" | "cli" }) {
-          if (disabledReason) {
+          if (ctx.disabledReason) {
             return {
               manager: null,
-              error: `anchorclaw: disabled until configured (${disabledReason})`,
+              error: `anchorclaw: disabled until configured (${ctx.disabledReason})`,
             };
           }
-          getPool();
+          ctx.getPool();
           return {
             manager: createAnchorClawMemorySearchManager(({
               api,
-              cfg: cfg!,
-              ensureReady,
+              cfg: ctx.cfg!,
+              ensureReady: ctx.ensureReady,
               ensureSessionsIndexBootstrapped,
-              getPool,
+              getPool: ctx.getPool,
               agentId: params.agentId,
               purpose: params.purpose,
             } satisfies AnchorClawMemorySearchManagerOptions)),
@@ -689,10 +618,10 @@ export default definePluginEntry({
         },
       },
       async execute(_toolCallId: string, params: unknown) {
-        if (disabledReason) {
+        if (ctx.disabledReason) {
           return {
-            content: [{ type: "text", text: `anchorclaw: disabled until configured (${disabledReason})` }],
-            details: { disabled: true, error: disabledReason },
+            content: [{ type: "text", text: `anchorclaw: disabled until configured (${ctx.disabledReason})` }],
+            details: { disabled: true, error: ctx.disabledReason },
           };
         }
         const record = (params ?? {}) as { check?: unknown };
@@ -700,15 +629,15 @@ export default definePluginEntry({
         const base: MemoryStatusCheckResult = {
           ok: true,
           mode: activeCheck ? "active" : "cached",
-          sdk: { ...sdkHealth },
+          sdk: { ...ctx.sdkHealth },
         };
         if (activeCheck) {
           const startedAt = Date.now();
           let dbError: string | undefined;
           try {
-            await ensureReady();
-            await getPool().query("SELECT 1");
-            const schemaRows = await getPool().query<{
+            await ctx.ensureReady();
+            await ctx.getPool().query("SELECT 1");
+            const schemaRows = await ctx.getPool().query<{
               memory_items: string | null;
               session_index_files: string | null;
               session_index_chunks: string | null;
@@ -723,7 +652,7 @@ export default definePluginEntry({
                 schema?.session_index_chunks &&
                 schema?.schema_migrations,
             );
-            const migrationRows = await getPool().query<{ id: string }>(
+            const migrationRows = await ctx.getPool().query<{ id: string }>(
               "SELECT id FROM schema_migrations ORDER BY id DESC LIMIT 1",
             );
             base.database = {
@@ -744,7 +673,7 @@ export default definePluginEntry({
             };
           }
 
-          const sessionsVisibility = cfg?.sessions?.visibility ?? "current";
+          const sessionsVisibility = ctx.cfg?.sessions?.visibility ?? "current";
           const sessionsEnabled = sessionsVisibility !== "off";
           try {
             const agentId = String((api as any)?.runtime?.agentId ?? "main");
@@ -774,7 +703,7 @@ export default definePluginEntry({
             };
           }
 
-          const pending = Array.from(sessionDeltaStateByPath.values()).reduce(
+          const pending = Array.from(ctx.sessionDelta.stateByPath.values()).reduce(
             (acc, item) => {
               acc.pendingBytes += item.pendingBytes;
               acc.pendingMessages += item.pendingMessages;
@@ -783,7 +712,7 @@ export default definePluginEntry({
             { pendingBytes: 0, pendingMessages: 0 },
           );
           base.index = {
-            trackedFiles: sessionDeltaStateByPath.size,
+            trackedFiles: ctx.sessionDelta.stateByPath.size,
             pendingBytes: pending.pendingBytes,
             pendingMessages: pending.pendingMessages,
           };
@@ -792,8 +721,8 @@ export default definePluginEntry({
           content: [
             {
               type: "text",
-              text: sdkHealth.degraded
-                ? `AnchorClaw memory is degraded (${sdkHealth.reason ?? "unknown error"}).`
+              text: ctx.sdkHealth.degraded
+                ? `AnchorClaw memory is degraded (${ctx.sdkHealth.reason ?? "unknown error"}).`
                 : activeCheck && !base.ok
                   ? "AnchorClaw memory active check failed."
                   : "AnchorClaw memory is healthy.",
@@ -824,21 +753,21 @@ export default definePluginEntry({
         },
       },
       async execute(_toolCallId: string, params: unknown) {
-        if (disabledReason) {
+        if (ctx.disabledReason) {
           return {
-            content: [{ type: "text", text: `anchorclaw: disabled until configured (${disabledReason})` }],
-            details: { disabled: true, error: disabledReason },
+            content: [{ type: "text", text: `anchorclaw: disabled until configured (${ctx.disabledReason})` }],
+            details: { disabled: true, error: ctx.disabledReason },
           };
         }
-        await ensureReady();
+        await ctx.ensureReady();
         const scope = await resolveUserAndWorkspaceScope({
           api,
-          pool: getPool(),
+          pool: ctx.getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
-          configuredExternalId: cfg?.identity?.externalId,
+          configuredExternalId: ctx.cfg?.identity?.externalId,
         });
-        const limits = resolveMemoryLimits(cfg!);
+        const limits = resolveMemoryLimits(ctx.cfg!);
         const record = (params ?? {}) as any;
         const query = typeof record.query === "string" ? String(record.query) : "";
         const corpus = typeof record.corpus === "string" ? String(record.corpus) : "memory";
@@ -846,7 +775,7 @@ export default definePluginEntry({
         const minScore = typeof record.minScore === "number" ? (record.minScore as number) : undefined;
         const effectiveMax = typeof maxResults === "number" ? maxResults : limits.maxResults;
         const trimmedCorpus = corpus.trim();
-        const sessionsVisibility = cfg?.sessions?.visibility ?? "current";
+        const sessionsVisibility = ctx.cfg?.sessions?.visibility ?? "current";
         const sessionsEnabled = sessionsVisibility !== "off";
         if (trimmedCorpus === "wiki") {
           return {
@@ -871,7 +800,7 @@ export default definePluginEntry({
             }
             await ensureSessionsIndexBootstrapped();
             const indexedHits = await memorySearchSessionsIndexDb({
-              pool: getPool(),
+              pool: ctx.getPool(),
               userId: scope.userId,
               workspaceId: scope.workspaceId,
               limits,
@@ -883,7 +812,7 @@ export default definePluginEntry({
               hits = indexedHits;
             } else {
               const hasIndex = await hasSessionsIndexRows({
-                pool: getPool(),
+                pool: ctx.getPool(),
                 userId: scope.userId,
                 workspaceId: scope.workspaceId,
                 ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
@@ -900,7 +829,7 @@ export default definePluginEntry({
             hits = await filterSessionHitsByVisibility({ api, hits });
           } else if (trimmedCorpus === "memory") {
             hits = await memorySearchDb({
-              pool: getPool(),
+              pool: ctx.getPool(),
               userId: scope.userId,
               workspaceId: scope.workspaceId,
               limits,
@@ -913,7 +842,7 @@ export default definePluginEntry({
             }
             const merged = [
               ...(await memorySearchDb({
-                pool: getPool(),
+                pool: ctx.getPool(),
                 userId: scope.userId,
                 workspaceId: scope.workspaceId,
                 limits,
@@ -922,7 +851,7 @@ export default definePluginEntry({
               })),
               ...(sessionsEnabled
                 ? await memorySearchSessionsIndexDb({
-                    pool: getPool(),
+                    pool: ctx.getPool(),
                     userId: scope.userId,
                     workspaceId: scope.workspaceId,
                     limits,
@@ -936,7 +865,7 @@ export default definePluginEntry({
               const hasSessionsHits = merged.some((item: any) => item?.corpus === "sessions");
               if (!hasSessionsHits) {
                 const hasIndex = await hasSessionsIndexRows({
-                  pool: getPool(),
+                  pool: ctx.getPool(),
                   userId: scope.userId,
                   workspaceId: scope.workspaceId,
                   ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
@@ -974,9 +903,9 @@ export default definePluginEntry({
             });
             hits = mergedForOutput.slice(0, effectiveMax);
           }
-          markSdkSuccess();
+          ctx.markSdkSuccess();
         } catch (error) {
-          markSdkError(`memory_search:${trimmedCorpus || "unknown"}`, error);
+          ctx.markSdkError(`memory_search:${trimmedCorpus || "unknown"}`, error);
           const message = error instanceof Error ? error.message : String(error);
           return {
             content: [{ type: "text", text: `anchorclaw: memory_search degraded (sdk/runtime error: ${message})` }],
@@ -985,7 +914,7 @@ export default definePluginEntry({
               error: message,
               degraded: true,
               degradedReason: "sdk_error",
-              sdk: { ...sdkHealth },
+              sdk: { ...ctx.sdkHealth },
             },
           };
         }
@@ -1005,7 +934,9 @@ export default definePluginEntry({
           details: {
             results: hits,
             count: hits.length,
-            ...(sdkHealth.degraded ? { degraded: true, degradedReason: "sdk_error", sdk: { ...sdkHealth } } : {}),
+            ...(ctx.sdkHealth.degraded
+              ? { degraded: true, degradedReason: "sdk_error", sdk: { ...ctx.sdkHealth } }
+              : {}),
           },
         };
       },
@@ -1032,21 +963,21 @@ export default definePluginEntry({
         },
       },
       async execute(_toolCallId: string, params: unknown) {
-        if (disabledReason) {
+        if (ctx.disabledReason) {
           return {
-            content: [{ type: "text", text: `anchorclaw: disabled until configured (${disabledReason})` }],
-            details: { disabled: true, error: disabledReason },
+            content: [{ type: "text", text: `anchorclaw: disabled until configured (${ctx.disabledReason})` }],
+            details: { disabled: true, error: ctx.disabledReason },
           };
         }
-        await ensureReady();
+        await ctx.ensureReady();
         const scope = await resolveUserAndWorkspaceScope({
           api,
-          pool: getPool(),
+          pool: ctx.getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
-          configuredExternalId: cfg?.identity?.externalId,
+          configuredExternalId: ctx.cfg?.identity?.externalId,
         });
-        const limits = resolveMemoryLimits(cfg!);
+        const limits = resolveMemoryLimits(ctx.cfg!);
         const record = (params ?? {}) as any;
         const lookup =
           typeof record.lookup === "string" && record.lookup.trim()
@@ -1062,7 +993,7 @@ export default definePluginEntry({
             details: { disabled: true, error: "lookup required" },
           };
         }
-        const sessionsVisibility = cfg?.sessions?.visibility ?? "current";
+        const sessionsVisibility = ctx.cfg?.sessions?.visibility ?? "current";
         if (sessionsVisibility === "off" && lookup.trim().startsWith("sessions/")) {
           return {
             content: [{ type: "text", text: "anchorclaw: sessions corpus is disabled by config (sessions.visibility=off)" }],
@@ -1092,7 +1023,7 @@ export default definePluginEntry({
         let got: any;
         try {
           got = await memoryGetFromDb({
-            pool: getPool(),
+            pool: ctx.getPool(),
             userId: scope.userId,
             workspaceId: scope.workspaceId,
             agentId: (api as any)?.runtime?.agentId,
@@ -1106,9 +1037,9 @@ export default definePluginEntry({
             ...(typeof fromLine === "number" ? { fromLine } : {}),
             ...(typeof lineCount === "number" ? { lineCount } : {}),
           });
-          markSdkSuccess();
+          ctx.markSdkSuccess();
         } catch (error) {
-          markSdkError("memory_get", error);
+          ctx.markSdkError("memory_get", error);
           const message = error instanceof Error ? error.message : String(error);
           return {
             content: [{ type: "text", text: `anchorclaw: memory_get degraded (sdk/runtime error: ${message})` }],
@@ -1117,7 +1048,7 @@ export default definePluginEntry({
               error: message,
               degraded: true,
               degradedReason: "sdk_error",
-              sdk: { ...sdkHealth },
+              sdk: { ...ctx.sdkHealth },
             },
           };
         }
@@ -1126,7 +1057,9 @@ export default definePluginEntry({
             content: [{ type: "text", text: `anchorclaw: memory_get failed (${got.error})` }],
             details: {
               ...got,
-              ...(sdkHealth.degraded ? { degraded: true, degradedReason: "sdk_error", sdk: { ...sdkHealth } } : {}),
+              ...(ctx.sdkHealth.degraded
+                ? { degraded: true, degradedReason: "sdk_error", sdk: { ...ctx.sdkHealth } }
+                : {}),
             },
           };
         }
@@ -1134,7 +1067,9 @@ export default definePluginEntry({
           content: [{ type: "text", text: got.content }],
           details: {
             ...got,
-            ...(sdkHealth.degraded ? { degraded: true, degradedReason: "sdk_error", sdk: { ...sdkHealth } } : {}),
+            ...(ctx.sdkHealth.degraded
+              ? { degraded: true, degradedReason: "sdk_error", sdk: { ...ctx.sdkHealth } }
+              : {}),
           },
         };
       },
@@ -1171,19 +1106,19 @@ export default definePluginEntry({
         },
       },
       async execute(_toolCallId: string, params: unknown) {
-        if (disabledReason) {
+        if (ctx.disabledReason) {
           return {
-            content: [{ type: "text", text: `anchorclaw: disabled until configured (${disabledReason})` }],
-            details: { disabled: true, error: disabledReason },
+            content: [{ type: "text", text: `anchorclaw: disabled until configured (${ctx.disabledReason})` }],
+            details: { disabled: true, error: ctx.disabledReason },
           };
         }
-        await ensureReady();
+        await ctx.ensureReady();
         const scope = await resolveUserAndWorkspaceScope({
           api,
-          pool: getPool(),
+          pool: ctx.getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
-          configuredExternalId: cfg?.identity?.externalId,
+          configuredExternalId: ctx.cfg?.identity?.externalId,
         });
 
         const record = (params ?? {}) as any;
@@ -1203,10 +1138,10 @@ export default definePluginEntry({
         const type = typeof record.type === "string" ? String(record.type) : undefined;
 
         const stored = await memoryStoreDb({
-          pool: getPool(),
+          pool: ctx.getPool(),
           userId: scope.userId,
           workspaceId: scope.workspaceId,
-          actor: resolveActor(api),
+          actor: ctx.resolveActor(),
           logger: api.logger,
           input: { content, ...(canonicalKey ? { canonicalKey } : {}), ...(type ? { type } : {}) },
         });
@@ -1245,23 +1180,23 @@ export default definePluginEntry({
         },
       },
       async execute(_toolCallId: string, params: unknown) {
-        if (disabledReason) {
+        if (ctx.disabledReason) {
           return {
-            content: [{ type: "text", text: `anchorclaw: disabled until configured (${disabledReason})` }],
-            details: { disabled: true, error: disabledReason },
+            content: [{ type: "text", text: `anchorclaw: disabled until configured (${ctx.disabledReason})` }],
+            details: { disabled: true, error: ctx.disabledReason },
           };
         }
-        await ensureReady();
+        await ctx.ensureReady();
         const scope = await resolveUserAndWorkspaceScope({
           api,
-          pool: getPool(),
+          pool: ctx.getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
-          configuredExternalId: cfg?.identity?.externalId,
+          configuredExternalId: ctx.cfg?.identity?.externalId,
         });
-        const limits = resolveMemoryLimits(cfg!);
+        const limits = resolveMemoryLimits(ctx.cfg!);
         const recalled = await memoryRecallDb({
-          pool: getPool(),
+          pool: ctx.getPool(),
           userId: scope.userId,
           workspaceId: scope.workspaceId,
           limits,
@@ -1310,19 +1245,19 @@ export default definePluginEntry({
         },
       },
       async execute(_toolCallId: string, params: unknown) {
-        if (disabledReason) {
+        if (ctx.disabledReason) {
           return {
-            content: [{ type: "text", text: `anchorclaw: disabled until configured (${disabledReason})` }],
-            details: { disabled: true, error: disabledReason },
+            content: [{ type: "text", text: `anchorclaw: disabled until configured (${ctx.disabledReason})` }],
+            details: { disabled: true, error: ctx.disabledReason },
           };
         }
-        await ensureReady();
+        await ctx.ensureReady();
         const scope = await resolveUserAndWorkspaceScope({
           api,
-          pool: getPool(),
+          pool: ctx.getPool(),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
-          configuredExternalId: cfg?.identity?.externalId,
+          configuredExternalId: ctx.cfg?.identity?.externalId,
         });
 
         const record = (params ?? {}) as any;
@@ -1341,10 +1276,10 @@ export default definePluginEntry({
         }
 
         const forgot = await memoryForgetDb({
-          pool: getPool(),
+          pool: ctx.getPool(),
           userId: scope.userId,
           workspaceId: scope.workspaceId,
-          actor: resolveActor(api),
+          actor: ctx.resolveActor(),
           logger: api.logger,
           input: { ...(lookup ? { lookup } : {}), ...(id ? { id } : {}) },
         });

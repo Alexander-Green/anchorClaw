@@ -43,3 +43,24 @@ export type MemoryStatusCheckResult = {
     pendingMessages: number;
   };
 };
+
+export type PromptCacheState = {
+  lines: string[] | null;
+  error: string | null;
+  refreshPromise: Promise<void> | null;
+};
+
+export type SessionsIndexState = {
+  bootstrapPromise: Promise<void> | null;
+  bootstrapped: boolean;
+};
+
+export type SessionDeltaRuntimeState = {
+  pendingFiles: Set<string>;
+  timer: ReturnType<typeof setTimeout> | null;
+  syncInFlight: Promise<void> | null;
+  unsubscribe: (() => void) | null;
+  closed: boolean;
+  ignoredPathCounts: Map<string, number>;
+  stateByPath: Map<string, SessionDeltaState>;
+};
