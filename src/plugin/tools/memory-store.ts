@@ -85,8 +85,8 @@ export function registerMemoryStoreTool({ ctx, refreshPromptCache }: ToolRegistr
         ok: true,
         path: stored.path,
         id: stored.id,
-        canonicalKey: stored.canonicalKey ?? null,
-        type: stored.type ?? null,
+        canonicalKey: canonicalKey ?? null,
+        type: type ?? null,
       };
 
       return {
