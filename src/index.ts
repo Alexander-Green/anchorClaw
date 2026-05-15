@@ -13,7 +13,7 @@ import { createPromptCacheRuntime } from "./plugin/prompt-cache.js";
 import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
 import { registerSessionDeltaLifecycle } from "./plugin/lifecycle.js";
 import { createSessionDeltaRuntime } from "./plugin/session-delta.js";
-import { registerAnchorClawTools } from "./plugin/tools.js";
+import { registerAnchorClawTools } from "./plugin/tools/index.js";
 
 export default definePluginEntry({
   id: "anchorclaw",
