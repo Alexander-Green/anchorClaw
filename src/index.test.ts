@@ -21,6 +21,7 @@ const {
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
   statFs,
+  accessFs,
   openFs,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
@@ -55,6 +56,7 @@ const {
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
   statFs: vi.fn(async () => ({ size: 0 })),
+  accessFs: vi.fn(async () => undefined),
   openFs: vi.fn(async () => ({
     read: vi.fn(async () => ({ bytesRead: 0 })),
     close: vi.fn(async () => undefined),
@@ -134,8 +136,9 @@ vi.mock("./memory/sessions-visibility.js", () => ({
 }));
 
 vi.mock("node:fs/promises", () => ({
-  default: { stat: statFs, open: openFs },
+  default: { stat: statFs, access: accessFs, open: openFs },
   stat: statFs,
+  access: accessFs,
   open: openFs,
 }));
 
@@ -260,6 +263,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   statFs.mockResolvedValue({ size: 0 });
+  accessFs.mockResolvedValue(undefined);
   openFs.mockResolvedValue({
     read: vi.fn(async () => ({ bytesRead: 0 })),
     close: vi.fn(async () => undefined),
@@ -875,5 +879,46 @@ describe("phase2 session delta listener", () => {
       },
     });
     expect(typeof result.details.database.latencyMs).toBe("number");
+  });
+
+  it("reports readable=false when sessions dir exists but read access is denied", async () => {
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+      connect: vi.fn(async () => ({
+        query: vi.fn(async () => ({ rows: [] })),
+        release: vi.fn(),
+      })),
+    };
+    createPool.mockReturnValue(pool);
+    (pool.query as any)
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            memory_items: "memory_items",
+            session_index_files: "session_index_files",
+            session_index_chunks: "session_index_chunks",
+            schema_migrations: "schema_migrations",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: "0002" }] });
+    statFs.mockResolvedValueOnce({ size: 1 });
+    accessFs.mockRejectedValueOnce(new Error("EACCES"));
+
+    const { api } = buildApi();
+    (plugin as any).register(api);
+    const statusRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_status");
+    expect(statusRegistration).toBeDefined();
+
+    const result = await statusRegistration.execute("toolcall-status-active-2", { check: true });
+    expect(result.details.sessions).toMatchObject({
+      enabled: true,
+      visibility: "current",
+      exists: true,
+      readable: false,
+    });
   });
 });

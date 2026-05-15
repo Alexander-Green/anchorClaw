@@ -49,7 +49,7 @@ Current delivery state:
   - DB connectivity (`SELECT 1`)
   - required schema objects (`memory_items`, `session_index_files`, `session_index_chunks`, `schema_migrations`)
   - latest applied migration id
-  - current-agent sessions directory accessibility
+  - current-agent sessions directory status (`exists`) and explicit read-access check (`readable`)
   - in-memory pending sessions delta counters
 
 This keeps default calls cheap, while allowing explicit active checks when health validation is needed.

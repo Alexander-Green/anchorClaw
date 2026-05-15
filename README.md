@@ -122,7 +122,7 @@ AnchorClaw exposes both “native” and compatibility surfaces via OpenClaw too
 - `memory_recall({ query? })`
 - `memory_status({ check? })`
   - default (`check` omitted / `false`): cached runtime degraded-state report
-  - active mode (`check: true`): lightweight healthcheck for DB connectivity/schema + sessions dir accessibility
+  - active mode (`check: true`): lightweight healthcheck for DB connectivity/schema + sessions dir accessibility (`exists` + explicit `readable` check)
 
 ---
 

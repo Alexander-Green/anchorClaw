@@ -1,6 +1,7 @@
 import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
 import type { MemoryStatusCheckResult } from "../types.js";
 import type { ToolRegistrationParams } from "./common.js";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -85,11 +86,20 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
           const agentSessionsDir = await resolveSessionsDirForAgent(agentId);
           const stateDir = path.dirname(path.dirname(path.dirname(agentSessionsDir)));
           let exists = false;
+          let readable = false;
           try {
             await fs.stat(agentSessionsDir);
             exists = true;
           } catch {
             exists = false;
+          }
+          if (exists) {
+            try {
+              await fs.access(agentSessionsDir, fsConstants.R_OK);
+              readable = true;
+            } catch {
+              readable = false;
+            }
           }
           base.sessions = {
             enabled: sessionsEnabled,
@@ -97,7 +107,7 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
             stateDir,
             agentSessionsDir,
             exists,
-            readable: exists,
+            readable,
           };
         } catch (error) {
           base.ok = false;
