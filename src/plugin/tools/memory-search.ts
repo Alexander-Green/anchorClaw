@@ -5,6 +5,7 @@ import { memorySearchSessions } from "../../memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/sessions-index.js";
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
 import type { ToolRegistrationParams } from "./common.js";
+import { formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
 
 function normalizeExact(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -229,9 +230,23 @@ export function registerMemorySearchTool({
           (typeof topHit?.snippet === "string" && topHit.snippet.trim()) ||
           null
         : null;
-      const topExactLine = exactTop1 && exactTop1Value ? `\nTop exact match: ${exactTop1Value}` : "";
+      const recommendedAction = exactTop1 ? "return_exact" : hits.length > 0 ? "inspect_top" : "stop_not_found";
+      const visible = formatSearchLikeVisibleOutput({
+        hits,
+        retrievalMode,
+        exactTop1,
+        exactTop1Value,
+        recommendedAction,
+        provider: "anchorclaw",
+        model: "postgres-fts",
+      });
       return {
-        content: [{ type: "text", text: hits.length ? `Found ${hits.length} result(s).${topExactLine}` : "No results." }],
+        content: [
+          {
+            type: "text",
+            text: visible,
+          },
+        ],
         details: {
           results: hits,
           count: hits.length,
@@ -240,6 +255,7 @@ export function registerMemorySearchTool({
             semantic: false,
             exactTop1,
             exactTop1Value,
+            recommendedAction,
           },
           ...(ctx.sdkHealth.degraded
             ? { degraded: true, degradedReason: "sdk_error", sdk: { ...ctx.sdkHealth } }

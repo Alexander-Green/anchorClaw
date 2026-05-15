@@ -7,10 +7,11 @@ import { registerMemoryStoreTool } from "./memory-store.js";
 import type { ToolRegistrationParams } from "./common.js";
 
 export function registerAnchorClawTools(params: ToolRegistrationParams) {
-  registerMemoryStatusTool(params);
   registerMemorySearchTool(params);
   registerMemoryGetTool(params);
   registerMemoryStoreTool(params);
   registerMemoryRecallTool(params);
   registerMemoryForgetTool(params);
+  // Keep diagnostics tool last so retrieval flows prioritize search/get/recall tools.
+  registerMemoryStatusTool(params);
 }

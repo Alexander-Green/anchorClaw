@@ -81,8 +81,16 @@ export function registerMemoryStoreTool({ ctx, refreshPromptCache }: ToolRegistr
 
       refreshPromptCache();
 
+      const visible = {
+        ok: true,
+        path: stored.path,
+        id: stored.id,
+        canonicalKey: stored.canonicalKey ?? null,
+        type: stored.type ?? null,
+      };
+
       return {
-        content: [{ type: "text", text: `Stored: ${stored.path}` }],
+        content: [{ type: "text", text: JSON.stringify(visible, null, 2) }],
         details: stored,
       };
     },

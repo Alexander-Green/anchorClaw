@@ -46,10 +46,12 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     const text = lines.join("\n");
 
     expect(text).toContain("For one exact marker/id/key value questions");
-    expect(text).toContain("make at most two memory_search/memory_recall attempts");
+    expect(text).toContain("prioritize literal evidence from memory_search/memory_recall");
     expect(text).toContain("If any memory_search or memory_recall result has details.meta.exactTop1=true");
     expect(text).toContain("Never use empty memory_recall as a tie-breaker for exact lookups.");
+    expect(text).toContain("If no exactTop1 is found, say you checked and give the best candidate with uncertainty.");
     expect(text).not.toContain("For exact marker/id/key questions");
+    expect(text).not.toContain("make at most two memory_search/memory_recall attempts");
   });
 
   it("keeps broad-memory-search guidance for non-exact overview questions", () => {
@@ -77,6 +79,9 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     const text = lines.join("\n");
 
     expect(text).toContain("Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search; then use memory_get to pull only the needed lines.");
-    expect(text).toContain("If no exactTop1 after two attempts, say you checked and give the best candidate with uncertainty.");
+    expect(text).toContain("If no exactTop1 is found, say you checked and give the best candidate with uncertainty.");
+    expect(text).toContain("For broad agreement/policy/decision questions, use memory_search/memory_recall to gather closest evidence");
+    expect(text).toContain("if no direct agreement record is found, report not found with a brief summary of closest evidence.");
+    expect(text).not.toContain("cap retrieval at two memory_search queries plus at most one memory_recall fallback");
   });
 });

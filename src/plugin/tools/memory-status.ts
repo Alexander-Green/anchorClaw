@@ -11,7 +11,7 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
     name: "memory_status",
     label: "Memory Status",
     description:
-      "Return runtime health state for AnchorClaw memory operations.\n\nMVP rules:\n- Use this for operator diagnostics.\n- It reports SDK degraded state without exposing secrets.",
+      "Return runtime health state for AnchorClaw memory operations.\n\nMVP rules:\n- Diagnostics only: use for operator health/debug checks.\n- Do not use this tool for fact lookup, retrieval ranking, or answer selection.\n- It reports SDK degraded state without exposing secrets.",
     parameters: {
       type: "object",
       additionalProperties: false,

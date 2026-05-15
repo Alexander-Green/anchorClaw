@@ -66,12 +66,15 @@ describe("memory_recall tool exactTop1 metadata", () => {
     const result = await def.execute("toolcall-1", {
       query: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
     });
+    const visible = JSON.parse(result.content[0].text);
 
-    expect(result.content[0].text).toContain("Recalled 1 item(s).");
-    expect(result.content[0].text).toContain("Top exact match: ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
+    expect(visible.results).toHaveLength(1);
+    expect(visible.meta.recommendedAction).toBe("return_exact");
+    expect(visible.meta.exactTop1Value).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
     expect(result.details.meta).toMatchObject({
       exactTop1: true,
       exactTop1Value: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+      recommendedAction: "return_exact",
     });
   });
 
@@ -98,11 +101,41 @@ describe("memory_recall tool exactTop1 metadata", () => {
     const def = registerTool.mock.calls[0]?.[0];
 
     const result = await def.execute("toolcall-2", {});
+    const visible = JSON.parse(result.content[0].text);
 
-    expect(result.content[0].text).toBe("Recalled 1 item(s).");
+    expect(visible.results).toHaveLength(1);
+    expect(visible.meta.recommendedAction).toBe("inspect_top");
+    expect(visible.meta.broadContext).toBe(true);
+    expect(visible.meta.notExactEvidence).toBe(true);
+    expect(String(visible.meta.note)).toContain("broad context");
     expect(result.details.meta).toMatchObject({
       exactTop1: false,
       exactTop1Value: null,
+      recommendedAction: "inspect_top",
+    });
+  });
+
+  it("emits stop_not_found recommendation when recall returns no hits", async () => {
+    (memoryRecallDbMock as any).mockResolvedValueOnce({
+      ok: true,
+      corpus: "memory",
+      retrievalMode: "fts",
+      results: [],
+      count: 0,
+    });
+    const { ctx, registerTool } = buildCtx();
+    registerMemoryRecallTool({ ctx } as any);
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-3", { query: "nothing-here" });
+    const visible = JSON.parse(result.content[0].text);
+
+    expect(visible.results).toHaveLength(0);
+    expect(visible.meta.recommendedAction).toBe("stop_not_found");
+    expect(result.details.meta).toMatchObject({
+      exactTop1: false,
+      exactTop1Value: null,
+      recommendedAction: "stop_not_found",
     });
   });
 });

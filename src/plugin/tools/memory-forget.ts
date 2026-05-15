@@ -74,13 +74,15 @@ export function registerMemoryForgetTool({ ctx, refreshPromptCache }: ToolRegist
 
       refreshPromptCache();
 
+      const visible = {
+        ok: true,
+        deleted: forgot.deleted,
+        lookup: lookup ?? null,
+        id: id ?? null,
+      };
+
       return {
-        content: [
-          {
-            type: "text",
-            text: forgot.deleted > 0 ? `Forgot ${forgot.deleted} item(s).` : "Nothing to forget.",
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify(visible, null, 2) }],
         details: forgot,
       };
     },

@@ -2,6 +2,7 @@ import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { memoryRecallDb } from "../../memory/recall.js";
 import type { ToolRegistrationParams } from "./common.js";
+import { formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
 
 function normalizeExact(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -13,7 +14,7 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
     name: "memory_recall",
     label: "Memory Recall",
     description:
-      "Recall long-term memory from Postgres.\n\nBehavior contract:\n- If query is non-empty, this is a shortcut to the same lexical FTS path as memory_search over durable memory.\n- If query is empty, returns top important recent durable items ordered by importance/recency.\n- If the top result is an exact literal match, content includes \"Top exact match: <value>\" and details.meta.exactTop1/exactTop1Value.\n- Do not describe this tool as vector/embedding semantic retrieval unless details.meta explicitly says so in a future implementation.",
+      "Recall long-term memory from Postgres.\n\nBehavior contract:\n- If query is non-empty, this is a shortcut to the same lexical FTS path as memory_search over durable memory.\n- If query is empty, returns top important recent durable items ordered by importance/recency.\n- Empty-query recall is broad recent-context recall and should not be used as evidence for exact marker/id/key lookup.\n- If the top result is an exact literal match, content includes \"Top exact match: <value>\" and details.meta.exactTop1/exactTop1Value.\n- Do not describe this tool as vector/embedding semantic retrieval unless details.meta explicitly says so in a future implementation.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -21,7 +22,7 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
         query: {
           type: "string",
           description:
-            "Optional query. If provided, AnchorClaw behaves like memory_search. If empty, returns top important recent durable items.",
+            "Optional query. If provided, AnchorClaw behaves like memory_search. If empty, returns broad recent-context items (not for exact marker/id/key lookup).",
         },
         maxResults: { type: "number", description: "Max results (capped by configured limits)." },
       },
@@ -72,13 +73,24 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
           (typeof topHit?.snippet === "string" && topHit.snippet.trim()) ||
           null
         : null;
-      const topExactLine = exactTop1 && exactTop1Value ? `\nTop exact match: ${exactTop1Value}` : "";
+      const recommendedAction = exactTop1 ? "return_exact" : recalled.count > 0 ? "inspect_top" : "stop_not_found";
+      const broadContext = normalizedQuery.length === 0;
+      const visible = formatSearchLikeVisibleOutput({
+        hits: recalled.results as any[],
+        retrievalMode: recalled.retrievalMode,
+        exactTop1,
+        exactTop1Value,
+        recommendedAction,
+        provider: "anchorclaw",
+        model: "postgres-fts",
+        broadContext,
+      });
 
       return {
         content: [
           {
             type: "text",
-            text: recalled.count ? `Recalled ${recalled.count} item(s).${topExactLine}` : "No recalled items.",
+            text: visible,
           },
         ],
         details: {
@@ -88,6 +100,7 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
             semantic: false,
             exactTop1,
             exactTop1Value,
+            recommendedAction,
           },
         },
       };
