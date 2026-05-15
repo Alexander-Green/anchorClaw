@@ -14,6 +14,7 @@ export type MemoryRecallResult =
   | {
       ok: true;
       corpus: "memory";
+      retrievalMode: "fts" | "importance_recent";
       results: MemorySearchHit[];
       count: number;
     }
@@ -48,7 +49,7 @@ export async function memoryRecallDb(params: {
       query: q,
       ...(typeof maxResults === "number" ? { maxResults } : {}),
     });
-    return { ok: true, corpus: "memory", results: hits, count: hits.length };
+    return { ok: true, corpus: "memory", retrievalMode: "fts", results: hits, count: hits.length };
   }
 
   type RecallRow = {
@@ -94,5 +95,5 @@ export async function memoryRecallDb(params: {
     };
   });
 
-  return { ok: true, corpus: "memory", results, count: results.length };
+  return { ok: true, corpus: "memory", retrievalMode: "importance_recent", results, count: results.length };
 }

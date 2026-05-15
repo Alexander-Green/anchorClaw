@@ -8,7 +8,8 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
   api.registerTool({
     name: "memory_recall",
     label: "Memory Recall",
-    description: "Recall relevant long-term memory from Postgres (shortcut).",
+    description:
+      "Recall long-term memory from Postgres.\n\nBehavior contract:\n- If query is non-empty, this is a shortcut to the same lexical FTS path as memory_search over durable memory.\n- If query is empty, returns top important recent durable items ordered by importance/recency.\n- Do not describe this tool as vector/embedding semantic retrieval unless details.meta explicitly says so in a future implementation.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -59,7 +60,13 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
             text: recalled.count ? `Recalled ${recalled.count} item(s).` : "No recalled items.",
           },
         ],
-        details: recalled,
+        details: {
+          ...recalled,
+          meta: {
+            retrievalMode: recalled.retrievalMode,
+            semantic: false,
+          },
+        },
       };
     },
   });

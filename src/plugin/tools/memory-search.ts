@@ -15,7 +15,7 @@ export function registerMemorySearchTool({
     name: "memory_search",
     label: "Memory Search",
     description:
-      "Search memory.\n\nMVP rules:\n- corpus defaults to \"memory\" (durable items in Postgres).\n- corpus=\"sessions\" uses Postgres-backed sessions index (DB-first) and returns paths like sessions/<agentId>/<session>.jsonl.\n- Results contain synthetic paths. Use memory_get to read them.",
+      "Search memory.\n\nBehavior contract:\n- corpus defaults to \"memory\" (durable items in Postgres).\n- For corpus=\"memory\", retrieval is lexical Postgres FTS (tsquery/ts_rank), not vector semantic retrieval.\n- corpus=\"sessions\" uses Postgres-backed sessions index (DB-first) and returns paths like sessions/<agentId>/<session>.jsonl.\n- Results contain synthetic paths. Use memory_get to read them.\n- Do not claim semantic/vector retrieval unless details.meta explicitly reports it in a future implementation.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -68,6 +68,7 @@ export function registerMemorySearchTool({
         };
       }
       let hits: any[] = [];
+      let retrievalMode: "fts_memory" | "sessions_index" | "sessions_fallback" | "all_merge_lexical" = "fts_memory";
       try {
         if (trimmedCorpus === "sessions") {
           if (!sessionsEnabled) {
@@ -88,6 +89,7 @@ export function registerMemorySearchTool({
           });
           if (indexedHits.length > 0) {
             hits = indexedHits;
+            retrievalMode = "sessions_index";
           } else {
             const hasIndex = await hasSessionsIndexRows({
               pool: ctx.getPool(),
@@ -103,6 +105,7 @@ export function registerMemorySearchTool({
                   agentId: (api as any)?.runtime?.agentId,
                   limits,
                 });
+            retrievalMode = hasIndex ? "sessions_index" : "sessions_fallback";
           }
           hits = await filterSessionHitsByVisibility({ api, hits });
         } else if (trimmedCorpus === "memory") {
@@ -114,6 +117,7 @@ export function registerMemorySearchTool({
             query,
             ...(typeof maxResults === "number" ? { maxResults } : {}),
           });
+          retrievalMode = "fts_memory";
         } else if (trimmedCorpus === "all") {
           if (sessionsEnabled) {
             await ensureSessionsIndexBootstrapped();
@@ -179,6 +183,7 @@ export function registerMemorySearchTool({
             return lp.localeCompare(rp);
           });
           hits = mergedForOutput.slice(0, effectiveMax);
+          retrievalMode = "all_merge_lexical";
         }
         ctx.markSdkSuccess();
       } catch (error) {
@@ -211,6 +216,10 @@ export function registerMemorySearchTool({
         details: {
           results: hits,
           count: hits.length,
+          meta: {
+            retrievalMode,
+            semantic: false,
+          },
           ...(ctx.sdkHealth.degraded
             ? { degraded: true, degradedReason: "sdk_error", sdk: { ...ctx.sdkHealth } }
             : {}),
