@@ -10,6 +10,7 @@ type Hit = {
 export function formatSearchLikeVisibleOutput(params: {
   hits: Hit[];
   retrievalMode: RetrievalMode;
+  queryMode: "exact_value" | "contextual";
   exactTop1: boolean;
   exactTop1Value: string | null;
   recommendedAction: "return_exact" | "inspect_top" | "stop_not_found";
@@ -18,6 +19,15 @@ export function formatSearchLikeVisibleOutput(params: {
   broadContext?: boolean;
 }) {
   const { hits } = params;
+  const topCandidates = hits
+    .slice(0, 5)
+    .map((hit) => {
+      const title = typeof (hit as any).title === "string" ? (hit as any).title.trim() : "";
+      const snippet = typeof hit.snippet === "string" ? hit.snippet.trim() : "";
+      return title || snippet;
+    })
+    .filter((value) => value.length > 0);
+
   const results = hits.map((hit) => {
     const path = typeof hit.path === "string" ? hit.path : "";
     const snippetRaw = typeof hit.snippet === "string" ? hit.snippet : "";
@@ -38,6 +48,10 @@ export function formatSearchLikeVisibleOutput(params: {
   });
 
   const envelope = {
+    recommendedAction: params.recommendedAction,
+    queryMode: params.queryMode,
+    exactTop1Value: params.exactTop1Value,
+    topCandidates,
     results,
     provider: params.provider,
     model: params.model,
@@ -49,6 +63,7 @@ export function formatSearchLikeVisibleOutput(params: {
     },
     meta: {
       retrievalMode: params.retrievalMode,
+      queryMode: params.queryMode,
       semantic: false,
       exactTop1: params.exactTop1,
       exactTop1Value: params.exactTop1Value,
@@ -65,4 +80,3 @@ export function formatSearchLikeVisibleOutput(params: {
 
   return JSON.stringify(envelope, null, 2);
 }
-

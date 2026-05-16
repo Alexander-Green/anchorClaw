@@ -96,6 +96,8 @@ describe("memory_search tool exactTop1 metadata", () => {
     const visible = JSON.parse(result.content[0].text);
 
     expect(visible.results).toHaveLength(1);
+    expect(visible.queryMode).toBe("exact_value");
+    expect(visible.topCandidates[0]).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
     expect(visible.results[0].snippet).toContain("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
     expect(visible.meta.recommendedAction).toBe("return_exact");
     expect(visible.meta.exactTop1Value).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
@@ -130,6 +132,7 @@ describe("memory_search tool exactTop1 metadata", () => {
     const visible = JSON.parse(result.content[0].text);
 
     expect(visible.results).toHaveLength(1);
+    expect(visible.queryMode).toBe("contextual");
     expect(visible.meta.recommendedAction).toBe("inspect_top");
     expect(result.details.meta).toMatchObject({
       exactTop1: false,
@@ -152,11 +155,82 @@ describe("memory_search tool exactTop1 metadata", () => {
     const visible = JSON.parse(result.content[0].text);
 
     expect(visible.results).toHaveLength(0);
+    expect(visible.queryMode).toBe("contextual");
     expect(visible.meta.recommendedAction).toBe("stop_not_found");
     expect(result.details.meta).toMatchObject({
       exactTop1: false,
       exactTop1Value: null,
       recommendedAction: "stop_not_found",
     });
+  });
+
+  it("boosts marker-like candidates in exact_value mode", async () => {
+    (memorySearchDbMock as any).mockResolvedValueOnce([
+      {
+        corpus: "memory",
+        path: "db-memory/items/desc.md",
+        id: "desc",
+        title: "anchorclaw post-restart smoke",
+        kind: "note",
+        score: 2.0,
+        snippet: "anchorclaw post-restart smoke",
+      },
+      {
+        corpus: "memory",
+        path: "db-memory/items/marker.md",
+        id: "marker",
+        title: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+        kind: "note",
+        score: 1.0,
+        snippet: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+      },
+    ] as any[]);
+    const { ctx, registerTool } = buildCtx();
+    registerMemorySearchTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-4", {
+      query: "What exact marker did I save?",
+      corpus: "memory",
+    });
+    const visible = JSON.parse(result.content[0].text);
+
+    expect(visible.queryMode).toBe("exact_value");
+    expect(visible.topCandidates[0]).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
+    expect(visible.results[0].snippet).toContain("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
+  });
+
+  it("keeps contextual mode for broad marker/id/key summary prompts", async () => {
+    (memorySearchDbMock as any).mockResolvedValueOnce([
+      {
+        corpus: "memory",
+        path: "db-memory/items/desc.md",
+        id: "desc",
+        title: "anchorclaw post-restart smoke",
+        kind: "note",
+        score: 2.0,
+        snippet: "anchorclaw post-restart smoke",
+      },
+    ] as any[]);
+    const { ctx, registerTool } = buildCtx();
+    registerMemorySearchTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-5", {
+      query: "What marker/id/key values do we have around tests? Summarize briefly.",
+      corpus: "memory",
+    });
+    const visible = JSON.parse(result.content[0].text);
+
+    expect(visible.queryMode).toBe("contextual");
+    expect(visible.meta.queryMode).toBe("contextual");
   });
 });

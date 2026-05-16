@@ -8,6 +8,68 @@ function normalizeExact(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
+function classifyQueryMode(query: string): "exact_value" | "contextual" {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return "contextual";
+  }
+  const broadSignals = [
+    "summarize",
+    "summary",
+    "overview",
+    "around",
+    "what values",
+    "какие",
+    "кратко",
+    "обзор",
+    "сгруппируй",
+    "вокруг",
+  ];
+  if (broadSignals.some((signal) => normalized.includes(signal))) {
+    return "contextual";
+  }
+  const exactSignals = [
+    "exact",
+    "top-1",
+    "only",
+    "value only",
+    "string only",
+    "id",
+    "key",
+    "marker",
+    "token",
+    "uuid",
+    "login",
+    "точн",
+    "только",
+    "значени",
+  ];
+  return exactSignals.some((signal) => normalized.includes(signal)) ? "exact_value" : "contextual";
+}
+
+function isMarkerLike(value: string): boolean {
+  const text = value.trim();
+  if (!text) {
+    return false;
+  }
+  if (/^[A-Z0-9]+(?:_[A-Z0-9]+){2,}$/.test(text)) {
+    return true;
+  }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) {
+    return true;
+  }
+  if (/^@\w{3,}$/.test(text)) {
+    return true;
+  }
+  return /^[0-9]{6,}$/.test(text);
+}
+
+function markerBoostForHit(hit: any): number {
+  const title = typeof hit?.title === "string" ? hit.title : "";
+  const snippet = typeof hit?.snippet === "string" ? hit.snippet : "";
+  return isMarkerLike(title) || isMarkerLike(snippet) ? 2 : 0;
+}
+
 export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
   const api = ctx.api;
   api.registerTool({
@@ -60,7 +122,21 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
 
       const query = typeof (params as any)?.query === "string" ? String((params as any).query) : "";
       const normalizedQuery = normalizeExact(query);
-      const topHit = recalled.results[0] as any;
+      const queryMode = classifyQueryMode(query);
+      const rerankedResults = [...recalled.results];
+      if (queryMode === "exact_value") {
+        rerankedResults.sort((left: any, right: any) => {
+          const ls = (typeof left?.score === "number" ? left.score : 0) + markerBoostForHit(left);
+          const rs = (typeof right?.score === "number" ? right.score : 0) + markerBoostForHit(right);
+          if (rs !== ls) {
+            return rs - ls;
+          }
+          const lp = typeof left?.path === "string" ? left.path : "";
+          const rp = typeof right?.path === "string" ? right.path : "";
+          return lp.localeCompare(rp);
+        });
+      }
+      const topHit = rerankedResults[0] as any;
       const topTitle = normalizeExact(topHit?.title);
       const topSnippet = normalizeExact(topHit?.snippet);
       const exactTop1 = Boolean(
@@ -76,8 +152,9 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
       const recommendedAction = exactTop1 ? "return_exact" : recalled.count > 0 ? "inspect_top" : "stop_not_found";
       const broadContext = normalizedQuery.length === 0;
       const visible = formatSearchLikeVisibleOutput({
-        hits: recalled.results as any[],
+        hits: rerankedResults as any[],
         retrievalMode: recalled.retrievalMode,
+        queryMode,
         exactTop1,
         exactTop1Value,
         recommendedAction,
@@ -95,8 +172,10 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
         ],
         details: {
           ...recalled,
+          results: rerankedResults,
           meta: {
             retrievalMode: recalled.retrievalMode,
+            queryMode,
             semantic: false,
             exactTop1,
             exactTop1Value,

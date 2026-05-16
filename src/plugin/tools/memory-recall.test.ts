@@ -69,6 +69,8 @@ describe("memory_recall tool exactTop1 metadata", () => {
     const visible = JSON.parse(result.content[0].text);
 
     expect(visible.results).toHaveLength(1);
+    expect(visible.queryMode).toBe("exact_value");
+    expect(visible.topCandidates[0]).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
     expect(visible.meta.recommendedAction).toBe("return_exact");
     expect(visible.meta.exactTop1Value).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
     expect(result.details.meta).toMatchObject({
@@ -104,6 +106,7 @@ describe("memory_recall tool exactTop1 metadata", () => {
     const visible = JSON.parse(result.content[0].text);
 
     expect(visible.results).toHaveLength(1);
+    expect(visible.queryMode).toBe("contextual");
     expect(visible.meta.recommendedAction).toBe("inspect_top");
     expect(visible.meta.broadContext).toBe(true);
     expect(visible.meta.notExactEvidence).toBe(true);
@@ -131,11 +134,54 @@ describe("memory_recall tool exactTop1 metadata", () => {
     const visible = JSON.parse(result.content[0].text);
 
     expect(visible.results).toHaveLength(0);
+    expect(visible.queryMode).toBe("contextual");
     expect(visible.meta.recommendedAction).toBe("stop_not_found");
     expect(result.details.meta).toMatchObject({
       exactTop1: false,
       exactTop1Value: null,
       recommendedAction: "stop_not_found",
     });
+  });
+
+  it("reranks marker-like value higher for exact_value recall query", async () => {
+    (memoryRecallDbMock as any).mockResolvedValueOnce({
+      ok: true,
+      corpus: "memory",
+      retrievalMode: "fts",
+      results: [
+        {
+          corpus: "memory",
+          path: "db-memory/items/desc.md",
+          id: "2",
+          title: "anchorclaw post-restart smoke",
+          kind: "note",
+          score: 2.0,
+          snippet: "anchorclaw post-restart smoke",
+        },
+        {
+          corpus: "memory",
+          path: "db-memory/items/marker.md",
+          id: "1",
+          title: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+          kind: "note",
+          score: 1.0,
+          snippet: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+        },
+      ],
+      count: 2,
+    });
+
+    const { ctx, registerTool } = buildCtx();
+    registerMemoryRecallTool({ ctx } as any);
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-4", {
+      query: "What exact marker did I save?",
+    });
+    const visible = JSON.parse(result.content[0].text);
+
+    expect(visible.queryMode).toBe("exact_value");
+    expect(visible.topCandidates[0]).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
+    expect(visible.results[0].snippet).toContain("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
   });
 });
