@@ -2,6 +2,12 @@
   "name": "@anchorclaw/anchorclaw",
   "version": "0.0.3",
   "description": "OpenClaw Postgres-backed long-term memory plugin",
+  "author": "Alexander Green",
+  "license": "MIT",
+  "homepage": "https://github.com/Alexander-Green/anchorClaw#readme",
+  "bugs": {
+    "url": "https://github.com/Alexander-Green/anchorClaw/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/Alexander-Green/anchorClaw"
@@ -11,6 +17,7 @@
     "dist/",
     "migrations/",
     "openclaw.plugin.json",
+    "NOTICE",
     "README.md",
     "package.json"
   ],
@@ -31,8 +38,9 @@
     }
   },
   "devDependencies": {
-    "@types/pg": "^8.15.4",
     "@types/node": "^22.15.3",
+    "@types/pg": "^8.15.4",
+    "openclaw": "2026.5.7",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   },

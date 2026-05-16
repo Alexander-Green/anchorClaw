@@ -4,6 +4,11 @@
 
 # AnchorClaw — Postgres Memory Plugin (OpenClaw)
 
+> Alpha preview. API may change before stable release.
+
+**AnchorClaw** is created and maintained by Alexander Green.
+The canonical repository is https://github.com/Alexander-Green/anchorClaw.
+
 **AnchorClaw** is an OpenClaw memory plugin that replaces file-based durable memory (`MEMORY.md`) with a Postgres-backed, SQL-first durable store while keeping OpenClaw’s memory tooling and CLI/doctor/status flows compatible.
 
 ## Why We Built This
