@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildSessionEntry, listSessionFilesForAgent, sessionPathForFile } = vi.hoisted(() => ({
@@ -32,12 +33,12 @@ describe("sessions corpus (MVP)", () => {
 
   it("reads sessions/<agentId>/<file> through SDK buildSessionEntry and sessionPathForFile", async () => {
     const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
-    const stateDir = `${tmp}/anchorclaw-test-state`;
+    const stateDir = path.join(tmp, "anchorclaw-test-state");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     const agentId = "main";
     const fileName = "session.jsonl";
-    const sessionsDir = `${stateDir}/agents/${agentId}/sessions`;
-    const absPath = `${sessionsDir}/${fileName}`;
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    const absPath = path.join(sessionsDir, fileName);
 
     vi.mocked(buildSessionEntry).mockResolvedValueOnce({
       path: `sessions/${agentId}/${fileName}`,
@@ -68,12 +69,12 @@ describe("sessions corpus (MVP)", () => {
 
   it("uses JSONL lineMap coordinates for fallback memory_get pagination", async () => {
     const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
-    const stateDir = `${tmp}/anchorclaw-test-state-linemap`;
+    const stateDir = path.join(tmp, "anchorclaw-test-state-linemap");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     const agentId = "main";
     const fileName = "session-line-map.jsonl";
-    const sessionsDir = `${stateDir}/agents/${agentId}/sessions`;
-    const absPath = `${sessionsDir}/${fileName}`;
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    const absPath = path.join(sessionsDir, fileName);
 
     vi.mocked(buildSessionEntry).mockResolvedValueOnce({
       path: `sessions/${agentId}/${fileName}`,
@@ -106,12 +107,12 @@ describe("sessions corpus (MVP)", () => {
 
   it("uses strict numeric from/lineCount range for sparse lineMap values", async () => {
     const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
-    const stateDir = `${tmp}/anchorclaw-test-state-linemap-sparse`;
+    const stateDir = path.join(tmp, "anchorclaw-test-state-linemap-sparse");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     const agentId = "main";
     const fileName = "session-line-map-sparse.jsonl";
-    const sessionsDir = `${stateDir}/agents/${agentId}/sessions`;
-    const absPath = `${sessionsDir}/${fileName}`;
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    const absPath = path.join(sessionsDir, fileName);
 
     vi.mocked(buildSessionEntry).mockResolvedValueOnce({
       path: `sessions/${agentId}/${fileName}`,
@@ -188,13 +189,13 @@ describe("sessions corpus (MVP)", () => {
 
   it("detects that a transcript file belongs to the current agent sessions dir", async () => {
     const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
-    const stateDir = `${tmp}/anchorclaw-test-state-agent-match`;
+    const stateDir = path.join(tmp, "anchorclaw-test-state-agent-match");
     process.env.OPENCLAW_STATE_DIR = stateDir;
 
     const agentId = "main";
     const fileName = "match.jsonl";
-    const sessionsDir = `${stateDir}/agents/${agentId}/sessions`;
-    const absPath = `${sessionsDir}/${fileName}`;
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    const absPath = path.join(sessionsDir, fileName);
 
     const { mkdir, writeFile } = await import("node:fs/promises");
     await mkdir(sessionsDir, { recursive: true });
@@ -210,13 +211,13 @@ describe("sessions corpus (MVP)", () => {
 
   it("rejects transcript files outside the current agent sessions dir", async () => {
     const tmp = process.env.TEMP ?? process.env.TMP ?? process.cwd();
-    const stateDir = `${tmp}/anchorclaw-test-state-agent-mismatch`;
+    const stateDir = path.join(tmp, "anchorclaw-test-state-agent-mismatch");
     process.env.OPENCLAW_STATE_DIR = stateDir;
 
     const currentAgentId = "main";
     const otherAgentId = "other";
-    const otherSessionsDir = `${stateDir}/agents/${otherAgentId}/sessions`;
-    const absPath = `${otherSessionsDir}/foreign.jsonl`;
+    const otherSessionsDir = path.join(stateDir, "agents", otherAgentId, "sessions");
+    const absPath = path.join(otherSessionsDir, "foreign.jsonl");
 
     const { mkdir, writeFile } = await import("node:fs/promises");
     await mkdir(otherSessionsDir, { recursive: true });
@@ -236,11 +237,11 @@ describe("sessions corpus (MVP)", () => {
     const previousHome = process.env.OPENCLAW_HOME;
     try {
       delete process.env.OPENCLAW_STATE_DIR;
-      process.env.OPENCLAW_HOME = `${tmp}/anchorclaw-openclaw-home`;
+      process.env.OPENCLAW_HOME = path.join(tmp, "anchorclaw-openclaw-home");
 
       const agentId = "main";
-      const sessionsDir = `${process.env.OPENCLAW_HOME}/.openclaw/agents/${agentId}/sessions`;
-      const absPath = `${sessionsDir}/home-based.jsonl`;
+      const sessionsDir = path.join(process.env.OPENCLAW_HOME, ".openclaw", "agents", agentId, "sessions");
+      const absPath = path.join(sessionsDir, "home-based.jsonl");
       const { mkdir, writeFile } = await import("node:fs/promises");
       await mkdir(sessionsDir, { recursive: true });
       await writeFile(absPath, "", "utf8");
