@@ -193,6 +193,7 @@ function buildApi() {
       }),
     },
     registerTool: vi.fn(),
+    registerCli: vi.fn(),
     registerHook: vi.fn(),
     registerHttpRoute: vi.fn(),
     registerHostedMediaResolver: vi.fn(),
@@ -240,6 +241,7 @@ function buildApiLegacyLifecycle() {
       lifecycleCleanup = registration.cleanup ?? null;
     }),
     registerTool: vi.fn(),
+    registerCli: vi.fn(),
     registerHook: vi.fn(),
     registerHttpRoute: vi.fn(),
     registerHostedMediaResolver: vi.fn(),
@@ -299,6 +301,21 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("cli registration", () => {
+  it("registers anchorclaw cli command metadata even when memory slot is different", () => {
+    const { api } = buildApi();
+    (api as any).runtime.config.current = () => ({ plugins: { slots: { memory: "memory-core" } } });
+
+    (plugin as any).register(api);
+
+    expect(api.registerCli).toHaveBeenCalledTimes(1);
+    expect((api.registerCli as any).mock.calls[0][1]).toEqual({ commands: ["anchorclaw"] });
+    expect(api.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('installed but not active (plugins.slots.memory="memory-core")'),
+    );
+  });
 });
 
 describe("phase2 session delta listener", () => {

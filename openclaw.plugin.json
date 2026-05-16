@@ -1,5 +1,10 @@
 {
   "id": "anchorclaw",
+  "commandAliases": [
+    {
+      "name": "anchorclaw"
+    }
+  ],
   "activation": {
     "onStartup": false
   },

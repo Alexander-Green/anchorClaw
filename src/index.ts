@@ -58,7 +58,7 @@ export default definePluginEntry({
               nonInteractive: opts.nonInteractive,
             });
           });
-      });
+      }, { commands: ["anchorclaw"] });
     }
 
     const selectedMemorySlot =
