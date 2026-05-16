@@ -65,7 +65,7 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
 ### 1) Install
 
 ```bash
-openclaw plugins install @anchorclaw/anchorclaw
+openclaw plugins install @alexandrgreen/anchorclaw
 ```
 
 ### 2) Configure
