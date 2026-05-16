@@ -14,6 +14,7 @@ import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
 import { registerSessionDeltaLifecycle } from "./plugin/lifecycle.js";
 import { createSessionDeltaRuntime } from "./plugin/session-delta.js";
 import { registerAnchorClawTools } from "./plugin/tools/index.js";
+import { runAnchorClawSetup } from "./scripts/setup-db.js";
 
 export default definePluginEntry({
   id: "anchorclaw",
@@ -22,6 +23,44 @@ export default definePluginEntry({
   kind: "memory" as const,
 
   register(api: OpenClawPluginApi) {
+    if (typeof (api as any).registerCli === "function") {
+      (api as any).registerCli(({ program }: { program: any }) => {
+        const anchorclaw = program.command("anchorclaw").description("AnchorClaw database management");
+        anchorclaw
+          .command("setup")
+          .description("Create and initialize AnchorClaw PostgreSQL resources")
+          .option("--admin-url <url>", "PostgreSQL superuser connection string (default: postgres://localhost/postgres)")
+          .option("--db-name <name>", "Database name (default: anchorclaw)")
+          .option("--db-user <user>", "App user name (default: anchorclaw)")
+          .option("--db-password <pass>", "App user password (auto-generated if omitted)")
+          .option("--schema <name>", 'Schema name (default: memory, use "none" for search_path/public fallback)')
+          .option("--no-schema", "Disable dedicated schema and use default PostgreSQL search_path")
+          .option("--skip-config", "Do not update ~/.openclaw/openclaw.json")
+          .option("--non-interactive", "Disable prompts and use defaults/flags only")
+          .action(async (opts: {
+            adminUrl?: string;
+            dbName?: string;
+            dbUser?: string;
+            dbPassword?: string;
+            schema?: string;
+            noSchema?: boolean;
+            skipConfig?: boolean;
+            nonInteractive?: boolean;
+          }) => {
+            await runAnchorClawSetup({
+              adminUrl: opts.adminUrl,
+              dbName: opts.dbName,
+              dbUser: opts.dbUser,
+              dbPassword: opts.dbPassword,
+              schema: opts.schema,
+              noSchema: opts.noSchema,
+              skipConfig: opts.skipConfig,
+              nonInteractive: opts.nonInteractive,
+            });
+          });
+      });
+    }
+
     const selectedMemorySlot =
       typeof api.runtime?.config?.current === "function"
         ? (api.runtime.config.current() as any)?.plugins?.slots?.memory

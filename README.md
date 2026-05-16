@@ -93,6 +93,7 @@ Select the memory slot and configure Postgres:
           "postgres": {
             "host": "localhost",
             "database": "anchorclaw",
+            "schema": "memory",
             "user": "postgres",
             "password": "${ANCHORCLAW_DB_PASSWORD}"
           }
@@ -108,6 +109,39 @@ Select the memory slot and configure Postgres:
 ```bash
 openclaw gateway restart
 ```
+
+---
+
+## Recommended DB Setup (Automatic)
+
+AnchorClaw now supports explicit setup via CLI:
+
+```bash
+openclaw anchorclaw setup
+```
+
+Non-interactive example:
+
+```bash
+openclaw anchorclaw setup \
+  --admin-url postgres://postgres:password@localhost/postgres \
+  --db-name anchorclaw \
+  --db-user anchorclaw \
+  --schema memory \
+  --non-interactive
+```
+
+Useful flags:
+
+- `--skip-config`: do not update `~/.openclaw/openclaw.json`
+- `--no-schema`: do not create/use a dedicated schema (fallback to PostgreSQL default `search_path`, commonly `public`)
+- `--db-password <pass>`: set explicit app user password (otherwise generated)
+
+Safety behavior:
+
+- idempotent setup for existing database/user/schema
+- no destructive operations on existing databases/schemas
+- fail-fast on schema conflicts that look AnchorClaw-related but have no `schema_migrations`
 
 ---
 
@@ -151,6 +185,7 @@ To disable cleanup:
 ## Defaults
 
 - `postgres.port`: `5432`
+- `postgres.schema`: optional; when omitted, AnchorClaw uses the default PostgreSQL `search_path` (commonly `"$user", public`)
 - `postgres.pool.max`: `10`
 - `postgres.pool.connectionTimeoutMs`: `5000`
 - `postgres.pool.idleTimeoutMs`: `30000`
@@ -224,6 +259,7 @@ Optional pool tuning:
   "postgres": {
     "host": "localhost",
     "database": "anchorclaw",
+    "schema": "memory",
     "user": "postgres",
     "pool": {
       "max": 10,
@@ -233,6 +269,31 @@ Optional pool tuning:
   }
 }
 ```
+
+`postgres.schema` is strongly recommended for production to isolate AnchorClaw tables from shared `public` schema objects.
+
+---
+
+## Manual Postgres Setup
+
+If you prefer manual provisioning:
+
+```sql
+CREATE DATABASE anchorclaw;
+CREATE USER anchorclaw WITH PASSWORD 'change-me';
+GRANT CONNECT ON DATABASE anchorclaw TO anchorclaw;
+```
+
+Then connect to `anchorclaw` and run:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS memory AUTHORIZATION anchorclaw;
+GRANT USAGE, CREATE ON SCHEMA memory TO anchorclaw;
+ALTER DEFAULT PRIVILEGES IN SCHEMA memory GRANT ALL ON TABLES TO anchorclaw;
+ALTER DEFAULT PRIVILEGES IN SCHEMA memory GRANT ALL ON SEQUENCES TO anchorclaw;
+```
+
+After that configure plugin `postgres` fields in `openclaw.json` and restart gateway.
 
 ---
 
