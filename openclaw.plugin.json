@@ -66,6 +66,12 @@
       "label": "Postgres",
       "help": "Postgres connection settings for AnchorClaw memory storage"
     },
+    "workspaceDir": {
+      "label": "Workspace Directory",
+      "placeholder": "/root/.openclaw/workspace",
+      "help": "Explicit workspace root used by startup legacy MEMORY.md import when runtime workspace context is unavailable.",
+      "advanced": true
+    },
     "postgres.host": {
       "label": "Host",
       "placeholder": "localhost",
@@ -166,6 +172,10 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "workspaceDir": {
+        "type": "string",
+        "minLength": 1
+      },
       "sessions": {
         "type": "object",
         "additionalProperties": false,

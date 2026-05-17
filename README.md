@@ -79,8 +79,9 @@ By default, setup updates `~/.openclaw/openclaw.json` with the required runtime 
 - `plugins.slots.memory = "anchorclaw"`
 - `plugins.entries.anchorclaw.enabled = true`
 - `plugins.entries.anchorclaw.config.postgres` (`host`, `port`, `database`, `schema`, `user`, `password`)
+- `plugins.entries.anchorclaw.config.workspaceDir` should be set explicitly (for example: `"/root/.openclaw/workspace"`)
 
-For the default local setup, no additional config is required.
+For stable startup import behavior (especially on legacy runtime lifecycle), set `workspaceDir` explicitly.
 
 ### 3) Optional config overrides
 
@@ -274,6 +275,7 @@ Recommended for Docker/production:
     "entries": {
       "anchorclaw": {
         "config": {
+          "workspaceDir": "/root/.openclaw/workspace",
           "identity": { "externalId": "family-main-01" }
         }
       }

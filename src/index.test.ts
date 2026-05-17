@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
 
 const {
   registerMemoryCapability,
@@ -959,5 +960,80 @@ describe("phase2 session delta listener", () => {
       exists: true,
       readable: false,
     });
+  });
+
+  it("logs workspace import degraded when importer returns degraded result", async () => {
+    runImport.mockResolvedValueOnce({
+      overall: "degraded",
+      import: "ready",
+      cleanup: "failed",
+      reason: "legacy MEMORY.md cleanup failed; duplicate prompt injection risk remains",
+      lastImportRunId: "run-1",
+      lastSourceSha256: "sha-1",
+    } as any);
+    const { api } = buildApi();
+
+    await registerAndWaitStartup(api);
+
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("anchorclaw: startup step workspace-import degraded"),
+    );
+    expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step workspace-import succeeded");
+  });
+
+  it("logs workspace import blocked when importer returns blocked result", async () => {
+    runImport.mockResolvedValueOnce({
+      overall: "blocked",
+      import: "failed_retryable",
+      cleanup: "not_needed",
+      reason: "workspace_import_failed: connection timeout",
+      lastImportRunId: "run-2",
+      lastSourceSha256: "sha-2",
+    } as any);
+  const { api } = buildApi();
+
+    await registerAndWaitStartup(api);
+
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("anchorclaw: startup step workspace-import blocked"),
+    );
+    expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step workspace-import succeeded");
+  });
+
+  it("uses cfg.workspaceDir when runtime.workspaceDir is unavailable", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
+      identity: { externalId: "test" },
+      workspaceDir: "/cfg/workspace",
+    });
+    const { api } = buildApi();
+    (api.runtime as any).workspaceDir = undefined;
+
+    await registerAndWaitStartup(api);
+
+    expect(runImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: path.resolve("/cfg/workspace"),
+      }),
+    );
+  });
+
+  it("blocks startup import when neither runtime.workspaceDir nor cfg.workspaceDir is set", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
+      identity: { externalId: "test" },
+    });
+    const { api } = buildApi();
+    (api.runtime as any).workspaceDir = undefined;
+
+    await registerAndWaitStartup(api);
+
+    expect(runImport).not.toHaveBeenCalled();
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("anchorclaw: startup step workspace-import blocked (workspace_dir_unavailable)"),
+    );
+    expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step workspace-import succeeded");
   });
 });

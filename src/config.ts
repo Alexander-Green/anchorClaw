@@ -1,4 +1,5 @@
 export type AnchorClawConfig = {
+  workspaceDir?: string;
   sessions?: {
     visibility?: "current" | "off" | "visible";
     sync?: {
@@ -165,7 +166,8 @@ export const anchorClawConfigSchema = {
     if (!obj) {
       throw new Error("anchorclaw config required");
     }
-    assertAllowedKeys(obj, ["sessions", "identity", "postgres", "import", "limits"], "anchorclaw config");
+    assertAllowedKeys(obj, ["workspaceDir", "sessions", "identity", "postgres", "import", "limits"], "anchorclaw config");
+    const workspaceDir = readOptionalNonEmptyString(obj.workspaceDir, "workspaceDir");
 
     const sessionsObj = asRecord(obj.sessions);
     if (obj.sessions !== undefined && !sessionsObj) {
@@ -336,6 +338,7 @@ export const anchorClawConfigSchema = {
       : undefined;
 
     return {
+      workspaceDir,
       sessions: {
         visibility: sessionsVisibility,
         sync: {

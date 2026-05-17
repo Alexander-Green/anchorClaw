@@ -1,3 +1,4 @@
+import path from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   anchorClawConfigSchema,
@@ -173,10 +174,27 @@ export default definePluginEntry({
 
         api.logger.info("anchorclaw: startup step workspace-import started");
         try {
-          const workspaceDir =
+          const runtimeWorkspaceDir =
             typeof (api as any)?.runtime?.workspaceDir === "string" && (api as any).runtime.workspaceDir.trim()
-              ? String((api as any).runtime.workspaceDir)
-              : process.cwd();
+              ? path.resolve(String((api as any).runtime.workspaceDir))
+              : undefined;
+          const configWorkspaceDir =
+            typeof importCfg.workspaceDir === "string" && importCfg.workspaceDir.trim()
+              ? path.resolve(importCfg.workspaceDir)
+              : undefined;
+          const workspaceDir = runtimeWorkspaceDir ?? configWorkspaceDir;
+          if (!workspaceDir) {
+            const reason = "workspace_dir_unavailable";
+            ctx.setDurableState({
+              overall: "blocked",
+              import: "failed_retryable",
+              cleanup: "not_needed",
+              reason,
+            });
+            ctx.setStartupCriticalFailure(reason);
+            api.logger.warn(`anchorclaw: startup step workspace-import blocked (${reason})`);
+            return;
+          }
           const importResult = await runOneTimeWorkspaceImport({
             api,
             cfg: importCfg,
@@ -197,10 +215,19 @@ export default definePluginEntry({
           });
           if (importResult.overall === "blocked") {
             ctx.setStartupCriticalFailure(importResult.reason ?? "workspace_import_failed");
-          } else {
-            ctx.setStartupCriticalFailure(undefined);
+            api.logger.warn(
+              `anchorclaw: startup step workspace-import blocked (${importResult.reason ?? "durable memory import blocked"})`,
+            );
+            return;
           }
-          api.logger.info("anchorclaw: startup step workspace-import succeeded");
+          ctx.setStartupCriticalFailure(undefined);
+          if (importResult.overall === "degraded") {
+            api.logger.warn(
+              `anchorclaw: startup step workspace-import degraded (${importResult.reason ?? "cleanup failed"})`,
+            );
+          } else {
+            api.logger.info("anchorclaw: startup step workspace-import succeeded");
+          }
           if (importResult.cleanup === "failed" && importResult.reason) {
             api.logger.warn(`anchorclaw: workspace import cleanup warning (${importResult.reason})`);
           }

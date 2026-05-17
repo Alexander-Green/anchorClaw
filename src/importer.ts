@@ -32,6 +32,23 @@ function normalizeMemoryContent(value: string): string {
   return value.replaceAll("\r\n", "\n").trim();
 }
 
+function isGenericMemoryHeading(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "memory" || normalized === "long-term memory";
+}
+
+function buildHeadingSegments(headingPath: string[]): string[] {
+  if (headingPath.length > 1 && isGenericMemoryHeading(headingPath[0] ?? "")) {
+    return headingPath.slice(1);
+  }
+  return headingPath;
+}
+
+function buildHeadingTitle(headingPath: string[]): string {
+  const segments = buildHeadingSegments(headingPath);
+  return segments.join(" > ") || "Memory";
+}
+
 function guessItemTypeFromSection(title: string): string {
   const t = title.trim().toLowerCase();
   if (t.includes("fact") || t.includes("preference")) {
@@ -69,80 +86,60 @@ function parseMemoryMdToItems(params: { content: string; relPath: string }): Mem
   const lines = params.content.split("\n");
   const items: MemoryMdItem[] = [];
 
-  let currentSectionTitle = "Memory";
-  let currentSectionStart = 0;
+  let headingPath: string[] = [];
+  let blockLines: string[] = [];
 
-  const flushSection = (sectionTitle: string, startIndex: number, endIndex: number) => {
-    const sectionLines = lines.slice(startIndex, endIndex);
-    const sectionBody = sectionLines.join("\n").trim();
-    if (!sectionBody) {
+  const flushBlock = () => {
+    const content = normalizeMemoryContent(blockLines.join("\n"));
+    blockLines = [];
+    if (!content) {
       return;
     }
 
-    const subsectionIndexes: Array<{ title: string; start: number }> = [];
-    for (let i = 0; i < sectionLines.length; i += 1) {
-      const line = sectionLines[i] ?? "";
-      const match = /^###\s+(.+)\s*$/.exec(line);
-      if (match) {
-        subsectionIndexes.push({ title: match[1]!.trim(), start: i });
-      }
-    }
-
-    if (subsectionIndexes.length === 0) {
-      const type = guessItemTypeFromSection(sectionTitle);
-      const canonicalKey = `${type}:${slugify(sectionTitle) || "memory"}`;
-      items.push({
-        type,
-        title: sectionTitle,
-        canonicalKey,
-        content: sectionBody,
-        metadata: {
-          legacy_file: params.relPath,
-          legacy_heading: sectionTitle,
-          legacy_format: "memory-md:v1",
-        },
-      });
-      return;
-    }
-
-    const type = guessItemTypeFromSection(sectionTitle);
-    for (let idx = 0; idx < subsectionIndexes.length; idx += 1) {
-      const current = subsectionIndexes[idx]!;
-      const next = subsectionIndexes[idx + 1];
-      const subStart = current.start;
-      const subEnd = next ? next.start : sectionLines.length;
-      const raw = sectionLines.slice(subStart, subEnd).join("\n").trim();
-      const body = raw.replace(/^###\s+.+\s*\n?/, "").trim();
-      if (!body) {
-        continue;
-      }
-      const title = current.title;
-      const canonicalKey = `${type}:${slugify(sectionTitle)}:${slugify(title) || "item"}`;
-      items.push({
-        type,
-        title,
-        canonicalKey,
-        content: body,
-        metadata: {
-          legacy_file: params.relPath,
-          legacy_heading: sectionTitle,
-          legacy_subheading: title,
-          legacy_format: "memory-md:v1",
-        },
-      });
-    }
+    const title = buildHeadingTitle(headingPath);
+    const type = guessItemTypeFromSection(title);
+    const keySuffix = buildHeadingSegments(headingPath)
+      .map((segment) => slugify(segment))
+      .filter(Boolean)
+      .join(":");
+    const canonicalKey = `${type}:${keySuffix || "memory"}`;
+    items.push({
+      type,
+      title,
+      canonicalKey,
+      content,
+      metadata: {
+        legacy_file: params.relPath,
+        legacy_heading_path: [...headingPath],
+        legacy_format: "memory-md:v1",
+      },
+    });
   };
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    const match = /^##\s+(.+)\s*$/.exec(line);
-    if (match) {
-      flushSection(currentSectionTitle, currentSectionStart, i);
-      currentSectionTitle = match[1]!.trim();
-      currentSectionStart = i + 1;
+  const updateHeadingPath = (level: number, title: string) => {
+    flushBlock();
+    const nextPath = headingPath.slice(0, Math.max(level - 1, 0));
+    nextPath[level - 1] = title.trim();
+    headingPath = nextPath;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine ?? "";
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (headingMatch) {
+      updateHeadingPath(headingMatch[1]!.length, headingMatch[2]!.trim());
+      continue;
     }
+
+    if (!line.trim()) {
+      flushBlock();
+      continue;
+    }
+
+    blockLines.push(line);
   }
-  flushSection(currentSectionTitle, currentSectionStart, lines.length);
+
+  flushBlock();
   return items;
 }
 
