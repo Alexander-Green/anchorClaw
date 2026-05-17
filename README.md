@@ -133,19 +133,18 @@ openclaw anchorclaw setup \
 
 Useful flags:
 
-- `--skip-config`: do not update `~/.openclaw/openclaw.json`
-- `--schema-none`: do not create/use a dedicated schema (fallback to PostgreSQL default `search_path`, commonly `public`)
-- `--db-password <pass>`: set explicit app user password (otherwise generated)
+- `--skip-config`: keep `~/.openclaw/openclaw.json` unchanged
+- `--schema-none`: use PostgreSQL default `search_path` (no dedicated schema)
+- `--db-password <pass>`: set app user password explicitly
 
-Setup defaults (when flags are omitted):
+Defaults (when omitted):
 
 - `--admin-url`: `postgres://localhost/postgres`
 - `--db-name`: `anchorclaw`
 - `--db-user`: `anchorclaw`
 - `--db-password`: auto-generated
 - `--schema`: `memory`
-  - to disable dedicated schema, use `--schema-none` or `--schema none`
-- config update is enabled by default (use `--skip-config` to disable)
+- config update: enabled by default
 
 Safety behavior:
 
