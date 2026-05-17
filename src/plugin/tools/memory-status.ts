@@ -1,6 +1,6 @@
 import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
 import type { MemoryStatusCheckResult } from "../types.js";
-import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
+import type { ToolRegistrationParams } from "./common.js";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -24,12 +24,17 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      const unavailable = getToolUnavailableResponse(ctx);
-      if (unavailable) return unavailable;
       const record = (params ?? {}) as { check?: unknown };
       const activeCheck = record.check === true;
       const base: MemoryStatusCheckResult = {
-        ok: true,
+        ok: ctx.durableState?.overall === "ready",
+        backend: "anchorclaw",
+        overall: ctx.durableState?.overall ?? "blocked",
+        databaseState: ctx.durableState?.database ?? "failed",
+        migrationsState: ctx.durableState?.migrations ?? "failed",
+        importState: ctx.durableState?.import ?? "failed_permanent",
+        cleanupState: ctx.durableState?.cleanup ?? "failed",
+        reason: ctx.durableState?.reason ?? ctx.disabledReason ?? null,
         mode: activeCheck ? "active" : "cached",
         sdk: { ...ctx.sdkHealth },
       };
@@ -132,11 +137,16 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
         content: [
           {
             type: "text",
-            text: ctx.sdkHealth.degraded
-              ? `AnchorClaw memory is degraded (${ctx.sdkHealth.reason ?? "unknown error"}).`
-              : activeCheck && !base.ok
-                ? "AnchorClaw memory active check failed."
-                : "AnchorClaw memory is healthy.",
+            text:
+              base.overall === "blocked"
+                ? `AnchorClaw memory is blocked (${base.reason ?? "durable memory unavailable"}).`
+                : base.overall === "degraded"
+                  ? `AnchorClaw memory is degraded (${base.reason ?? "legacy MEMORY.md cleanup failed"}).`
+                  : ctx.sdkHealth.degraded
+                    ? `AnchorClaw memory is degraded (${ctx.sdkHealth.reason ?? "unknown error"}).`
+                    : activeCheck && !base.ok
+                      ? "AnchorClaw memory active check failed."
+                      : "AnchorClaw memory is healthy.",
           },
         ],
         details: base,

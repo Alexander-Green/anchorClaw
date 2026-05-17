@@ -106,25 +106,52 @@ export default definePluginEntry({
       const importCfg = ctx.cfg;
       (async () => {
         ctx.setStartupCriticalFailure(undefined);
+        ctx.setDurableState({
+          overall: "pending",
+          database: "pending",
+          migrations: "pending",
+          import: "pending",
+          cleanup: "not_needed",
+          reason: null,
+          lastImportRunId: null,
+          lastSourceSha256: null,
+        });
         api.logger.info("anchorclaw: startup step db-readiness started");
         try {
           await ctx.ensureConnectionReady();
+          ctx.setDurableState({ database: "ready" });
           api.logger.info("anchorclaw: startup step db-readiness succeeded");
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           api.logger.warn(`anchorclaw: startup step db-readiness failed (${message})`);
           ctx.setStartupCriticalFailure(`db_readiness_failed: ${message}`);
+          ctx.setDurableState({
+            overall: "blocked",
+            database: "failed",
+            migrations: "failed",
+            import: "failed_retryable",
+            cleanup: "not_needed",
+            reason: `db_readiness_failed: ${message}`,
+          });
           return;
         }
 
         api.logger.info("anchorclaw: startup step migrations started");
         try {
           await ctx.ensureReady();
+          ctx.setDurableState({ database: "ready", migrations: "ready" });
           api.logger.info("anchorclaw: startup step migrations succeeded");
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           api.logger.warn(`anchorclaw: startup step migrations failed (${message})`);
           ctx.setStartupCriticalFailure(`migrations_failed: ${message}`);
+          ctx.setDurableState({
+            overall: "blocked",
+            migrations: "failed",
+            import: "failed_retryable",
+            cleanup: "not_needed",
+            reason: `migrations_failed: ${message}`,
+          });
           return;
         }
 
@@ -150,7 +177,7 @@ export default definePluginEntry({
             typeof (api as any)?.runtime?.workspaceDir === "string" && (api as any).runtime.workspaceDir.trim()
               ? String((api as any).runtime.workspaceDir)
               : process.cwd();
-          await runOneTimeWorkspaceImport({
+          const importResult = await runOneTimeWorkspaceImport({
             api,
             cfg: importCfg,
             pool: ctx.getPool(),
@@ -158,17 +185,46 @@ export default definePluginEntry({
             agentId: (api as any)?.runtime?.agentId,
             sessionKey: (api as any)?.runtime?.sessionKey,
           });
+          ctx.setDurableState({
+            overall: importResult.overall,
+            database: "ready",
+            migrations: "ready",
+            import: importResult.import,
+            cleanup: importResult.cleanup,
+            reason: importResult.reason ?? null,
+            lastImportRunId: importResult.lastImportRunId ?? null,
+            lastSourceSha256: importResult.lastSourceSha256 ?? null,
+          });
+          if (importResult.overall === "blocked") {
+            ctx.setStartupCriticalFailure(importResult.reason ?? "workspace_import_failed");
+          } else {
+            ctx.setStartupCriticalFailure(undefined);
+          }
           api.logger.info("anchorclaw: startup step workspace-import succeeded");
+          if (importResult.cleanup === "failed" && importResult.reason) {
+            api.logger.warn(`anchorclaw: workspace import cleanup warning (${importResult.reason})`);
+          }
           refreshPromptCache();
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.setDurableState({
+            overall: "blocked",
+            import: "failed_retryable",
+            cleanup: "not_needed",
+            reason: `workspace_import_failed: ${message}`,
+          });
+          ctx.setStartupCriticalFailure(`workspace_import_failed: ${message}`);
           api.logger.warn(
-            `anchorclaw: workspace import failed (${error instanceof Error ? error.message : String(error)})`,
+            `anchorclaw: workspace import failed (${message})`,
           );
           api.logger.warn(
-            `anchorclaw: startup step workspace-import failed (${error instanceof Error ? error.message : String(error)})`,
+            `anchorclaw: startup step workspace-import failed (${message})`,
           );
+          return;
         }
-        ensureSessionDeltaListener();
+        if (ctx.durableState.overall !== "blocked") {
+          ensureSessionDeltaListener();
+        }
       })();
     }
     registerSessionDeltaLifecycle({ api, cleanupSessionDelta });

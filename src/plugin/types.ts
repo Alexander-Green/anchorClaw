@@ -4,6 +4,23 @@ export type SessionDeltaState = {
   pendingMessages: number;
 };
 
+export type DurableOverallState = "pending" | "ready" | "blocked" | "degraded";
+export type DurableStepState = "pending" | "ready" | "failed";
+export type DurableImportState = "pending" | "not_needed" | "ready" | "failed_retryable" | "failed_permanent";
+export type DurableCleanupState = "not_needed" | "completed" | "failed";
+
+export type DurableMemoryState = {
+  backend: "anchorclaw";
+  overall: DurableOverallState;
+  database: DurableStepState;
+  migrations: DurableStepState;
+  import: DurableImportState;
+  cleanup: DurableCleanupState;
+  reason?: string | null;
+  lastImportRunId?: string | null;
+  lastSourceSha256?: string | null;
+};
+
 export type SdkHealthState = {
   degraded: boolean;
   reason?: string;
@@ -19,6 +36,13 @@ export type SessionDeltaThresholds = {
 
 export type MemoryStatusCheckResult = {
   ok: boolean;
+  backend: "anchorclaw";
+  overall: DurableOverallState;
+  databaseState: DurableStepState;
+  migrationsState: DurableStepState;
+  importState: DurableImportState;
+  cleanupState: DurableCleanupState;
+  reason?: string | null;
   mode: "cached" | "active";
   sdk: SdkHealthState;
   database?: {

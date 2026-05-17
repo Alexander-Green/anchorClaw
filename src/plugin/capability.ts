@@ -19,6 +19,15 @@ export function registerAnchorClawMemoryCapability(params: {
         return [`AnchorClaw memory is disabled until configured (${ctx.disabledReason}).`];
       }
 
+      const durableState = ctx.durableState ?? {
+        overall: "ready",
+        database: "ready",
+        migrations: "ready",
+        import: "ready",
+        cleanup: "not_needed",
+        reason: null,
+      };
+
       if (!ctx.promptCache.lines && !ctx.promptCache.error) {
         refreshPromptCache();
       }
@@ -32,8 +41,23 @@ export function registerAnchorClawMemoryCapability(params: {
         ? [
             `[AnchorClaw sessions SDK is degraded: ${ctx.sdkHealth.reason ?? "unknown error"}; operation=${ctx.sdkHealth.affectedOperation ?? "unknown"}]`,
             "",
-          ]
-        : [];
+              ]
+            : [];
+      const durableNotice =
+        durableState.overall === "pending" || durableState.overall === "blocked"
+          ? [
+              "[AnchorClaw durable memory is currently unavailable or incomplete.]",
+              "Do not treat missing results from MEMORY.md, USER.md, or workspace fallback files as proof that no memory exists.",
+              "If the user asks about remembered facts, say that durable memory is unavailable and avoid claiming that no record exists.",
+              "",
+            ]
+          : durableState.overall === "degraded" && durableState.cleanup === "failed"
+            ? [
+                `[AnchorClaw durable memory imported successfully, but legacy MEMORY.md cleanup failed${durableState.reason ? `: ${durableState.reason}` : ""}]`,
+                "OpenClaw may still inject the legacy MEMORY.md separately, so duplicate memory context may be present until cleanup is resolved.",
+                "",
+              ]
+            : [];
 
       const hasMemorySearch = Boolean(params?.availableTools?.has?.("memory_search"));
       const hasMemoryGet = Boolean(params?.availableTools?.has?.("memory_get"));
@@ -59,6 +83,7 @@ export function registerAnchorClawMemoryCapability(params: {
       return [
         "AnchorClaw durable memory is enabled (Postgres-backed).",
         "",
+        ...durableNotice,
         ...(toolGuidance ? ["## Memory Recall", toolGuidance, citationsLine, ""] : []),
         "MVP usage rules:",
         "- Save durable memory with memory_store({ content, canonicalKey?, type? }).",

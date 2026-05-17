@@ -24,6 +24,7 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     const ctx = {
       api: {},
       disabledReason: null,
+      durableState: { overall: "ready", cleanup: "not_needed" },
       promptCache: { lines: ["(cached memory block)"], error: null },
       sdkHealth: { degraded: false },
       cfg: {},
@@ -58,6 +59,7 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     const ctx = {
       api: {},
       disabledReason: null,
+      durableState: { overall: "ready", cleanup: "not_needed" },
       promptCache: { lines: ["(cached memory block)"], error: null },
       sdkHealth: { degraded: false },
       cfg: {},
@@ -83,5 +85,71 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     expect(text).toContain("For broad agreement/policy/decision questions, use memory_search/memory_recall to gather closest evidence");
     expect(text).toContain("if no direct agreement record is found, report not found with a brief summary of closest evidence.");
     expect(text).not.toContain("cap retrieval at two memory_search queries plus at most one memory_recall fallback");
+  });
+
+  it("injects explicit durable-memory unavailable notice when blocked", () => {
+    const ctx = {
+      api: {},
+      disabledReason: null,
+      durableState: {
+        overall: "blocked",
+        cleanup: "not_needed",
+        reason: "workspace_import_failed: connection timeout",
+      },
+      promptCache: { lines: ["(cached memory block)"], error: null },
+      sdkHealth: { degraded: false },
+      cfg: {},
+      ensureReady: vi.fn(async () => undefined),
+      getPool: vi.fn(() => ({ query: vi.fn() })),
+    } as any;
+
+    registerAnchorClawMemoryCapability({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+
+    const capabilityDef = registerMemoryCapabilityMock.mock.calls[0]?.[1];
+    const lines: string[] = capabilityDef.promptBuilder({
+      availableTools: new Set(["memory_search", "memory_get"]),
+      citationsMode: "inline",
+    });
+    const text = lines.join("\n");
+
+    expect(text).toContain("AnchorClaw durable memory is currently unavailable or incomplete.");
+    expect(text).toContain("Do not treat missing results from MEMORY.md, USER.md, or workspace fallback files as proof that no memory exists.");
+  });
+
+  it("injects duplicate-context warning when cleanup failed", () => {
+    const ctx = {
+      api: {},
+      disabledReason: null,
+      durableState: {
+        overall: "degraded",
+        cleanup: "failed",
+        reason: "legacy MEMORY.md cleanup failed; duplicate prompt injection risk remains",
+      },
+      promptCache: { lines: ["(cached memory block)"], error: null },
+      sdkHealth: { degraded: false },
+      cfg: {},
+      ensureReady: vi.fn(async () => undefined),
+      getPool: vi.fn(() => ({ query: vi.fn() })),
+    } as any;
+
+    registerAnchorClawMemoryCapability({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+
+    const capabilityDef = registerMemoryCapabilityMock.mock.calls[0]?.[1];
+    const lines: string[] = capabilityDef.promptBuilder({
+      availableTools: new Set(["memory_search", "memory_get"]),
+      citationsMode: "inline",
+    });
+    const text = lines.join("\n");
+
+    expect(text).toContain("legacy MEMORY.md cleanup failed");
+    expect(text).toContain("duplicate memory context may be present");
   });
 });

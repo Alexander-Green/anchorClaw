@@ -8,7 +8,9 @@ import {
 import { loadBundledMigrationsFromDisk } from "../migrations-fs.js";
 import { applyMigrations } from "../migrations.js";
 import { listKnownAgentIds } from "../memory/sessions.js";
+import { isTransientDbError } from "../db-errors.js";
 import type {
+  DurableMemoryState,
   PromptCacheState,
   SdkHealthState,
   SessionDeltaRuntimeState,
@@ -24,6 +26,7 @@ export type PluginRuntimeContext = {
   cfg: AnchorClawConfig | undefined;
   disabledReason: string | undefined;
   startupCriticalFailure: string | undefined;
+  durableState: DurableMemoryState;
   pool: PostgresPool | undefined;
   migrationsApplied: Promise<void> | undefined;
   promptCache: PromptCacheState;
@@ -34,6 +37,7 @@ export type PluginRuntimeContext = {
   getPool: () => PostgresPool;
   ensureConnectionReady: () => Promise<void>;
   ensureReady: () => Promise<void>;
+  setDurableState: (next: Partial<DurableMemoryState>) => void;
   setStartupCriticalFailure: (reason: string | undefined) => void;
   markSdkError: (operation: string, error: unknown) => void;
   markSdkSuccess: () => void;
@@ -50,6 +54,17 @@ export function createPluginRuntimeContext(params: {
     cfg: params.cfg,
     disabledReason: params.disabledReason,
     startupCriticalFailure: undefined,
+    durableState: {
+      backend: "anchorclaw",
+      overall: params.disabledReason ? "blocked" : "pending",
+      database: "pending",
+      migrations: "pending",
+      import: "pending",
+      cleanup: "not_needed",
+      reason: params.disabledReason ?? null,
+      lastImportRunId: null,
+      lastSourceSha256: null,
+    },
     pool: undefined,
     migrationsApplied: undefined,
     promptCache: {
@@ -87,6 +102,12 @@ export function createPluginRuntimeContext(params: {
     ensureConnectionReady: async () => {
       const pool = ctx.getPool();
       await pool.query("SELECT 1");
+    },
+    setDurableState: (next: Partial<DurableMemoryState>) => {
+      ctx.durableState = {
+        ...ctx.durableState,
+        ...next,
+      };
     },
     setStartupCriticalFailure: (reason: string | undefined) => {
       ctx.startupCriticalFailure = reason;
@@ -166,16 +187,4 @@ export function createPluginRuntimeContext(params: {
   };
 
   return ctx;
-}
-
-function isTransientDbError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("connection terminated due to connection timeout") ||
-    lower.includes("timeout") ||
-    lower.includes("econnreset") ||
-    lower.includes("econnrefused") ||
-    lower.includes("could not connect") ||
-    lower.includes("server closed the connection unexpectedly")
-  );
 }
