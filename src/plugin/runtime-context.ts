@@ -16,11 +16,14 @@ import type {
 } from "./types.js";
 
 const SDK_RECOVERY_SUCCESS_THRESHOLD = 3;
+const STARTUP_RETRY_ATTEMPTS = 3;
+const STARTUP_RETRY_BASE_DELAY_MS = 500;
 
 export type PluginRuntimeContext = {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig | undefined;
   disabledReason: string | undefined;
+  startupCriticalFailure: string | undefined;
   pool: PostgresPool | undefined;
   migrationsApplied: Promise<void> | undefined;
   promptCache: PromptCacheState;
@@ -29,7 +32,9 @@ export type PluginRuntimeContext = {
   sdkHealth: SdkHealthState;
   resolveActor: () => string;
   getPool: () => PostgresPool;
+  ensureConnectionReady: () => Promise<void>;
   ensureReady: () => Promise<void>;
+  setStartupCriticalFailure: (reason: string | undefined) => void;
   markSdkError: (operation: string, error: unknown) => void;
   markSdkSuccess: () => void;
   listVisibleAgentIds: () => Promise<string[]>;
@@ -44,6 +49,7 @@ export function createPluginRuntimeContext(params: {
     api: params.api,
     cfg: params.cfg,
     disabledReason: params.disabledReason,
+    startupCriticalFailure: undefined,
     pool: undefined,
     migrationsApplied: undefined,
     promptCache: {
@@ -76,29 +82,60 @@ export function createPluginRuntimeContext(params: {
         );
       }
       ctx.pool ??= createPostgresPool({ cfg: ctx.cfg });
-      ctx.migrationsApplied ??= (async () => {
-        if (ctx.cfg?.postgres?.schema) {
-          const schema = ctx.cfg.postgres.schema.trim();
-          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
-            throw new Error(
-              "postgres.schema must be a simple identifier (letters/numbers/underscore)",
-            );
-          }
-          await ctx.pool!.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
-        }
-        const migrations = await loadBundledMigrationsFromDisk();
-        const result = await applyMigrations({ pool: ctx.pool!, migrations });
-        if (result.applied.length > 0) {
-          params.api.logger.info(
-            `anchorclaw: applied migrations: ${result.applied.join(", ")}`,
-          );
-        }
-      })();
       return ctx.pool!;
     },
+    ensureConnectionReady: async () => {
+      const pool = ctx.getPool();
+      await pool.query("SELECT 1");
+    },
+    setStartupCriticalFailure: (reason: string | undefined) => {
+      ctx.startupCriticalFailure = reason;
+    },
     ensureReady: async () => {
-      ctx.getPool();
-      await ctx.migrationsApplied;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= STARTUP_RETRY_ATTEMPTS; attempt += 1) {
+        try {
+          await ctx.ensureConnectionReady();
+          ctx.migrationsApplied ??= (async () => {
+            if (ctx.cfg?.postgres?.schema) {
+              const schema = ctx.cfg.postgres.schema.trim();
+              if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+                throw new Error(
+                  "postgres.schema must be a simple identifier (letters/numbers/underscore)",
+                );
+              }
+              await ctx.pool!.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
+            }
+            const migrations = await loadBundledMigrationsFromDisk();
+            const result = await applyMigrations({ pool: ctx.pool!, migrations });
+            if (result.applied.length > 0) {
+              params.api.logger.info(
+                `anchorclaw: applied migrations: ${result.applied.join(", ")}`,
+              );
+            }
+          })();
+          try {
+            await ctx.migrationsApplied;
+          } catch (error) {
+            ctx.migrationsApplied = undefined;
+            throw error;
+          }
+          return;
+        } catch (error) {
+          lastError = error;
+          const message = error instanceof Error ? error.message : String(error);
+          const transient = isTransientDbError(message);
+          if (!transient || attempt >= STARTUP_RETRY_ATTEMPTS) {
+            throw error;
+          }
+          const delay = STARTUP_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+          params.api.logger.warn(
+            `anchorclaw: ensureReady transient failure (attempt ${attempt}/${STARTUP_RETRY_ATTEMPTS}, retrying in ${delay}ms: ${message})`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
     },
     markSdkError: (operation: string, error: unknown) => {
       ctx.sdkHealth.degraded = true;
@@ -129,4 +166,16 @@ export function createPluginRuntimeContext(params: {
   };
 
   return ctx;
+}
+
+function isTransientDbError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("connection terminated due to connection timeout") ||
+    lower.includes("timeout") ||
+    lower.includes("econnreset") ||
+    lower.includes("econnrefused") ||
+    lower.includes("could not connect") ||
+    lower.includes("server closed the connection unexpectedly")
+  );
 }

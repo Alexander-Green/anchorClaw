@@ -102,19 +102,50 @@ export default definePluginEntry({
         : "anchorclaw: plugin registered (disabled until configured)",
     );
 
-    // Best-effort warm-up so the very first prompt often has durable memory available.
-    if (ctx.cfg) {
-      refreshPromptCache();
-      ensureSessionDeltaListener();
-    }
-
-    // Best-effort one-time import of legacy memory files from the workspace into Postgres.
-    // This does not remove/disable file-based behavior in OpenClaw core; it only populates DB state.
     if (ctx.cfg) {
       const importCfg = ctx.cfg;
       (async () => {
+        ctx.setStartupCriticalFailure(undefined);
+        api.logger.info("anchorclaw: startup step db-readiness started");
+        try {
+          await ctx.ensureConnectionReady();
+          api.logger.info("anchorclaw: startup step db-readiness succeeded");
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`anchorclaw: startup step db-readiness failed (${message})`);
+          ctx.setStartupCriticalFailure(`db_readiness_failed: ${message}`);
+          return;
+        }
+
+        api.logger.info("anchorclaw: startup step migrations started");
         try {
           await ctx.ensureReady();
+          api.logger.info("anchorclaw: startup step migrations succeeded");
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`anchorclaw: startup step migrations failed (${message})`);
+          ctx.setStartupCriticalFailure(`migrations_failed: ${message}`);
+          return;
+        }
+
+        api.logger.info("anchorclaw: startup step prompt-cache-warmup started");
+        refreshPromptCache();
+        try {
+          if (ctx.promptCache.refreshPromise) {
+            await ctx.promptCache.refreshPromise;
+          }
+          if (ctx.promptCache.error) {
+            api.logger.warn(`anchorclaw: startup step prompt-cache-warmup failed (${ctx.promptCache.error})`);
+          } else {
+            api.logger.info("anchorclaw: startup step prompt-cache-warmup succeeded");
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`anchorclaw: startup step prompt-cache-warmup failed (${message})`);
+        }
+
+        api.logger.info("anchorclaw: startup step workspace-import started");
+        try {
           const workspaceDir =
             typeof (api as any)?.runtime?.workspaceDir === "string" && (api as any).runtime.workspaceDir.trim()
               ? String((api as any).runtime.workspaceDir)
@@ -127,12 +158,17 @@ export default definePluginEntry({
             agentId: (api as any)?.runtime?.agentId,
             sessionKey: (api as any)?.runtime?.sessionKey,
           });
+          api.logger.info("anchorclaw: startup step workspace-import succeeded");
           refreshPromptCache();
         } catch (error) {
           api.logger.warn(
             `anchorclaw: workspace import failed (${error instanceof Error ? error.message : String(error)})`,
           );
+          api.logger.warn(
+            `anchorclaw: startup step workspace-import failed (${error instanceof Error ? error.message : String(error)})`,
+          );
         }
+        ensureSessionDeltaListener();
       })();
     }
     registerSessionDeltaLifecycle({ api, cleanupSessionDelta });

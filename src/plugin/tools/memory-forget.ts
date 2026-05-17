@@ -1,6 +1,6 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { memoryForgetDb } from "../../memory/forget.js";
-import type { ToolRegistrationParams } from "./common.js";
+import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
 
 export function registerMemoryForgetTool({ ctx, refreshPromptCache }: ToolRegistrationParams) {
   const api = ctx.api;
@@ -26,12 +26,8 @@ export function registerMemoryForgetTool({ ctx, refreshPromptCache }: ToolRegist
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      if (ctx.disabledReason) {
-        return {
-          content: [{ type: "text", text: `anchorclaw: disabled until configured (${ctx.disabledReason})` }],
-          details: { disabled: true, error: ctx.disabledReason },
-        };
-      }
+      const unavailable = getToolUnavailableResponse(ctx);
+      if (unavailable) return unavailable;
       await ctx.ensureReady();
       const scope = await resolveUserAndWorkspaceScope({
         api,

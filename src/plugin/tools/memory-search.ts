@@ -4,7 +4,7 @@ import { memorySearchDb } from "../../memory/search.js";
 import { memorySearchSessions } from "../../memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/sessions-index.js";
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
-import type { ToolRegistrationParams } from "./common.js";
+import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
 import { formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
 
 function normalizeExact(value: unknown): string {
@@ -98,12 +98,8 @@ export function registerMemorySearchTool({
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      if (ctx.disabledReason) {
-        return {
-          content: [{ type: "text", text: `anchorclaw: disabled until configured (${ctx.disabledReason})` }],
-          details: { disabled: true, error: ctx.disabledReason },
-        };
-      }
+      const unavailable = getToolUnavailableResponse(ctx);
+      if (unavailable) return unavailable;
       await ctx.ensureReady();
       const scope = await resolveUserAndWorkspaceScope({
         api,

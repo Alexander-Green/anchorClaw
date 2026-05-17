@@ -319,10 +319,15 @@ describe("cli registration", () => {
 });
 
 describe("phase2 session delta listener", () => {
+  async function registerAndWaitStartup(api: any) {
+    (plugin as any).register(api);
+    await vi.runAllTimersAsync();
+  }
+
   it("filters out non-current-agent transcript updates in current visibility", async () => {
     isSessionFileForAgent.mockResolvedValue(false);
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     expect(listener).toBeTypeOf("function");
@@ -340,7 +345,7 @@ describe("phase2 session delta listener", () => {
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockRejectedValue(new Error("ENOENT"));
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -362,7 +367,7 @@ describe("phase2 session delta listener", () => {
   it("unsubscribes and cancels pending debounce on lifecycle cleanup", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
     const { api, getTranscriptListener, runCleanup, unsub } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -384,7 +389,7 @@ describe("phase2 session delta listener", () => {
     isSessionFileForAnyKnownAgent.mockResolvedValue(true);
     statFs.mockRejectedValue(new Error("ENOENT"));
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/other/sessions/a.jsonl" });
@@ -403,7 +408,7 @@ describe("phase2 session delta listener", () => {
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockResolvedValue({ size: 100 });
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -427,7 +432,7 @@ describe("phase2 session delta listener", () => {
       close: vi.fn(async () => undefined),
     });
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -460,7 +465,7 @@ describe("phase2 session delta listener", () => {
       close: vi.fn(async () => undefined),
     });
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/no-trailing-newline.jsonl" });
@@ -482,7 +487,7 @@ describe("phase2 session delta listener", () => {
       close: vi.fn(async () => undefined),
     });
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -498,7 +503,7 @@ describe("phase2 session delta listener", () => {
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockRejectedValueOnce(new Error("ENOENT"));
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl.reset.2026-05-14T10-00-00Z" });
@@ -531,7 +536,7 @@ describe("phase2 session delta listener", () => {
       close: vi.fn(async () => undefined),
     });
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/mixed.jsonl" });
@@ -570,7 +575,7 @@ describe("phase2 session delta listener", () => {
       close: vi.fn(async () => undefined),
     });
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/one-message.jsonl" });
@@ -596,7 +601,7 @@ describe("phase2 session delta listener", () => {
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockResolvedValue({ size: 1 });
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/changed.jsonl" });
     await vi.advanceTimersByTimeAsync(5_000);
@@ -617,7 +622,7 @@ describe("phase2 session delta listener", () => {
     });
     isSessionFileForAnyKnownAgent.mockResolvedValue(false);
     const { api, getTranscriptListener } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/not-a-session-file.jsonl" });
@@ -640,7 +645,7 @@ describe("phase2 session delta listener", () => {
       reason: "blocked by visibility policy",
     } as any);
     const { api } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const getRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -665,7 +670,7 @@ describe("phase2 session delta listener", () => {
       reason: "blocked by visibility policy",
     } as any);
     const { api } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const getRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -682,7 +687,7 @@ describe("phase2 session delta listener", () => {
   it("registers lifecycle cleanup through legacy api.registerRuntimeLifecycle when grouped lifecycle API is unavailable", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
     const { api, getTranscriptListener, runCleanup, unsub } = buildApiLegacyLifecycle();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     expect(api.registerRuntimeLifecycle).toHaveBeenCalledTimes(1);
     expect(api.logger.warn).toHaveBeenCalledWith(
@@ -702,7 +707,7 @@ describe("phase2 session delta listener", () => {
     const { api } = buildApi();
     delete (api as any).runtime.events.onSessionTranscriptUpdate;
 
-    expect(() => (plugin as any).register(api)).not.toThrow();
+    await registerAndWaitStartup(api);
     expect(api.logger.warn).toHaveBeenCalledWith(
       "anchorclaw: runtime.events.onSessionTranscriptUpdate unavailable; sessions delta sync disabled",
     );
@@ -728,7 +733,7 @@ describe("phase2 session delta listener", () => {
     });
     filterSessionHitsByVisibility.mockRejectedValueOnce(new Error("visibility helper failed"));
     const { api } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const searchRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -767,7 +772,7 @@ describe("phase2 session delta listener", () => {
       lineCount: 1,
     });
     const { api } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const searchRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -819,7 +824,7 @@ describe("phase2 session delta listener", () => {
       lineCount: 1,
     });
     const { api } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
 
     const searchRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -850,30 +855,35 @@ describe("phase2 session delta listener", () => {
 
   it("runs active checks via memory_status when check=true", async () => {
     const pool = {
-      query: vi.fn(async () => ({ rows: [] })),
+      query: vi.fn(async (sql?: string) => {
+        const queryText = String(sql ?? "");
+        if (queryText.includes("to_regclass(")) {
+          return {
+            rows: [
+              {
+                memory_items: "memory_items",
+                session_index_files: "session_index_files",
+                session_index_chunks: "session_index_chunks",
+                schema_migrations: "schema_migrations",
+              },
+            ],
+          };
+        }
+        if (queryText.includes("schema_migrations")) {
+          return { rows: [{ id: "0002" }] };
+        }
+        return { rows: [] };
+      }),
       connect: vi.fn(async () => ({
         query: vi.fn(async () => ({ rows: [] })),
         release: vi.fn(),
       })),
     };
     createPool.mockReturnValue(pool);
-    (pool.query as any)
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({
-        rows: [
-          {
-            memory_items: "memory_items",
-            session_index_files: "session_index_files",
-            session_index_chunks: "session_index_chunks",
-            schema_migrations: "schema_migrations",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({ rows: [{ id: "0002" }] });
     statFs.mockResolvedValueOnce({ size: 1 });
 
     const { api } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
     const statusRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
       .find((tool: any) => tool?.name === "memory_status");
@@ -900,31 +910,36 @@ describe("phase2 session delta listener", () => {
 
   it("reports readable=false when sessions dir exists but read access is denied", async () => {
     const pool = {
-      query: vi.fn(async () => ({ rows: [] })),
+      query: vi.fn(async (sql?: string) => {
+        const queryText = String(sql ?? "");
+        if (queryText.includes("to_regclass(")) {
+          return {
+            rows: [
+              {
+                memory_items: "memory_items",
+                session_index_files: "session_index_files",
+                session_index_chunks: "session_index_chunks",
+                schema_migrations: "schema_migrations",
+              },
+            ],
+          };
+        }
+        if (queryText.includes("schema_migrations")) {
+          return { rows: [{ id: "0002" }] };
+        }
+        return { rows: [] };
+      }),
       connect: vi.fn(async () => ({
         query: vi.fn(async () => ({ rows: [] })),
         release: vi.fn(),
       })),
     };
     createPool.mockReturnValue(pool);
-    (pool.query as any)
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({
-        rows: [
-          {
-            memory_items: "memory_items",
-            session_index_files: "session_index_files",
-            session_index_chunks: "session_index_chunks",
-            schema_migrations: "schema_migrations",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({ rows: [{ id: "0002" }] });
     statFs.mockResolvedValueOnce({ size: 1 });
     accessFs.mockRejectedValueOnce(new Error("EACCES"));
 
     const { api } = buildApi();
-    (plugin as any).register(api);
+    await registerAndWaitStartup(api);
     const statusRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
       .find((tool: any) => tool?.name === "memory_status");

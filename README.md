@@ -68,43 +68,78 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
 openclaw plugins install @alexandrgreen/anchorclaw
 ```
 
-### 2) Configure
+### 2) Provision Postgres and write required config
 
-Select the memory slot and configure Postgres:
+```bash
+openclaw anchorclaw setup
+```
+
+By default, setup updates `~/.openclaw/openclaw.json` with the required runtime config:
+
+- `plugins.slots.memory = "anchorclaw"`
+- `plugins.entries.anchorclaw.enabled = true`
+- `plugins.entries.anchorclaw.config.postgres` (`host`, `port`, `database`, `schema`, `user`, `password`)
+
+For the default local setup, no additional config is required.
+
+### 3) Optional config overrides
+
+For Docker/production or non-default behavior, merge the relevant overrides into the existing
+`plugins.entries.anchorclaw.config` object written by setup.
+
+Common overrides:
 
 ```json
 {
-  "plugins": {
-    "slots": { "memory": "anchorclaw" },
-    "entries": {
-      "anchorclaw": {
-        "enabled": true,
-        "config": {
-          "sessions": {
-            "visibility": "current",
-            "sync": {
-              "deltaBytes": 100000,
-              "deltaMessages": 50
-            }
-          },
-          "identity": {
-            "externalId": "family-main-01"
-          },
-          "postgres": {
-            "host": "localhost",
-            "database": "anchorclaw",
-            "schema": "memory",
-            "user": "postgres",
-            "password": "${ANCHORCLAW_DB_PASSWORD}"
-          }
-        }
-      }
+  "identity": {
+    "externalId": "family-main-01"
+  },
+  "sessions": {
+    "visibility": "current",
+    "sync": {
+      "deltaBytes": 100000,
+      "deltaMessages": 50
     }
+  },
+  "import": {
+    "cleanupMemoryMdAfterImport": true
+  },
+  "limits": {
+    "maxResults": 10,
+    "getMaxChars": 12000,
+    "getDefaultLines": 120
   }
 }
 ```
 
-### 3) Restart
+`sessions.visibility` controls which transcript updates can enter the sessions index:
+
+- `current` (default): index only the current agent/session scope; cross-agent delta updates are ignored
+- `visible`: accept visible cross-agent transcript updates
+- `off`: disable sessions indexing/listener behavior
+
+`sessions.sync.deltaBytes` and `sessions.sync.deltaMessages` control when transcript deltas trigger a
+targeted sessions reindex. `import.cleanupMemoryMdAfterImport` controls the default post-import `MEMORY.md`
+stub cleanup, and `limits` can reduce search/read caps below the built-in maximums.
+
+Optional Postgres runtime settings belong inside the existing `postgres` block. Setup writes the required
+connection fields; add these only when needed:
+
+```json
+{
+  "sslMode": "verify-full",
+  "sslCa": "${ANCHORCLAW_DB_SSL_CA_PEM}",
+  "pool": {
+    "max": 10,
+    "connectionTimeoutMs": 5000,
+    "idleTimeoutMs": 30000
+  }
+}
+```
+
+The setup command rewrites `anchorclaw.config.postgres`; add SSL or pool overrides after setup if you use them.
+
+### 4) Restart
 
 ```bash
 openclaw gateway restart
@@ -112,13 +147,22 @@ openclaw gateway restart
 
 ---
 
-## Recommended DB Setup (Automatic)
+## CLI DB Setup Details
 
-AnchorClaw now supports explicit setup via CLI:
+AnchorClaw supports explicit setup via CLI:
 
 ```bash
 openclaw anchorclaw setup
 ```
+
+By default this runs in interactive mode. It prompts for:
+
+- Postgres admin URL
+- database name
+- app user
+- schema name (`none` uses the default PostgreSQL `search_path`)
+- app password (or auto-generate)
+- whether to update `~/.openclaw/openclaw.json`
 
 Non-interactive example:
 
@@ -145,6 +189,14 @@ Defaults (when omitted):
 - `--db-password`: auto-generated
 - `--schema`: `memory`
 - config update: enabled by default
+
+Config update behavior:
+
+- writes `plugins.slots.memory = "anchorclaw"` even if install already selected the memory slot
+- writes `plugins.entries.anchorclaw.enabled = true`
+- writes the required `postgres` connection block
+- preserves unrelated top-level `anchorclaw.config` keys such as `identity`, `sessions`, `import`, and `limits`
+- rewrites `anchorclaw.config.postgres`; re-add `postgres.sslMode`, `postgres.sslCa`, or `postgres.pool` after setup if you use them
 
 Safety behavior:
 

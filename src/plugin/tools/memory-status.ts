@@ -1,6 +1,6 @@
 import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
 import type { MemoryStatusCheckResult } from "../types.js";
-import type { ToolRegistrationParams } from "./common.js";
+import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -24,12 +24,8 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      if (ctx.disabledReason) {
-        return {
-          content: [{ type: "text", text: `anchorclaw: disabled until configured (${ctx.disabledReason})` }],
-          details: { disabled: true, error: ctx.disabledReason },
-        };
-      }
+      const unavailable = getToolUnavailableResponse(ctx);
+      if (unavailable) return unavailable;
       const record = (params ?? {}) as { check?: unknown };
       const activeCheck = record.check === true;
       const base: MemoryStatusCheckResult = {
