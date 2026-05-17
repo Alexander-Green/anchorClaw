@@ -34,7 +34,7 @@ export default definePluginEntry({
           .option("--db-user <user>", "App user name (default: anchorclaw)")
           .option("--db-password <pass>", "App user password (auto-generated if omitted)")
           .option("--schema <name>", 'Schema name (default: memory, use "none" for search_path/public fallback)')
-          .option("--no-schema", "Disable dedicated schema and use default PostgreSQL search_path")
+          .option("--schema-none", "Disable dedicated schema and use default PostgreSQL search_path")
           .option("--skip-config", "Do not update ~/.openclaw/openclaw.json")
           .option("--non-interactive", "Disable prompts and use defaults/flags only")
           .action(async (opts: {
@@ -43,7 +43,7 @@ export default definePluginEntry({
             dbUser?: string;
             dbPassword?: string;
             schema?: string;
-            noSchema?: boolean;
+            schemaNone?: boolean;
             skipConfig?: boolean;
             nonInteractive?: boolean;
           }) => {
@@ -53,7 +53,7 @@ export default definePluginEntry({
               dbUser: opts.dbUser,
               dbPassword: opts.dbPassword,
               schema: opts.schema,
-              noSchema: opts.noSchema,
+              schemaNone: opts.schemaNone,
               skipConfig: opts.skipConfig,
               nonInteractive: opts.nonInteractive,
             });

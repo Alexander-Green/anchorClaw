@@ -57,7 +57,7 @@ describe("runAnchorClawSetup", () => {
     pgState.userExists = false;
   });
 
-  it("supports no-schema fallback without schema SQL", async () => {
+  it("supports schema-none fallback without schema SQL", async () => {
     await runAnchorClawSetup({
       nonInteractive: true,
       skipConfig: true,
@@ -65,7 +65,7 @@ describe("runAnchorClawSetup", () => {
       dbName: "anchorclaw",
       dbUser: "anchorclaw",
       dbPassword: "secret",
-      noSchema: true,
+      schemaNone: true,
     });
 
     const allSql = pgState.clients.flatMap((c) => c.queries.map((q) => q.text)).join("\n");
@@ -90,5 +90,22 @@ describe("runAnchorClawSetup", () => {
       }),
     ).rejects.toThrow(/Refusing to proceed/);
   });
-});
 
+  it("applies database/schema ownership and create grants for runtime user", async () => {
+    await runAnchorClawSetup({
+      nonInteractive: true,
+      skipConfig: true,
+      adminUrl: "postgres://localhost/postgres",
+      dbName: "anchorclaw",
+      dbUser: "anchorclaw",
+      dbPassword: "secret",
+      schema: "memory",
+    });
+
+    const allSql = pgState.clients.flatMap((c) => c.queries.map((q) => q.text)).join("\n");
+    expect(allSql).toContain('ALTER DATABASE "anchorclaw" OWNER TO "anchorclaw"');
+    expect(allSql).toContain('GRANT CREATE ON DATABASE "anchorclaw" TO "anchorclaw"');
+    expect(allSql).toContain('CREATE SCHEMA IF NOT EXISTS "memory" AUTHORIZATION "anchorclaw"');
+    expect(allSql).toContain('ALTER SCHEMA "memory" OWNER TO "anchorclaw"');
+  });
+});

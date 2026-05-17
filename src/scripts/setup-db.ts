@@ -11,7 +11,7 @@ export type AnchorClawSetupOptions = {
   dbUser?: string;
   dbPassword?: string;
   schema?: string;
-  noSchema?: boolean;
+  schemaNone?: boolean;
   skipConfig?: boolean;
   nonInteractive?: boolean;
 };
@@ -66,7 +66,7 @@ async function promptIfNeeded(params: {
   let dbUser = params.options.dbUser?.trim() || defaults.dbUser;
   let schema: string | undefined;
 
-  if (params.options.noSchema) {
+  if (params.options.schemaNone) {
     schema = undefined;
   } else if (typeof params.options.schema === "string") {
     const rawSchema = params.options.schema.trim();
@@ -158,7 +158,9 @@ async function ensureDatabaseAndRole(params: {
     } else {
       await client.query(`ALTER USER ${quoteIdentifier(params.dbUser)} WITH PASSWORD '${params.dbPassword.replaceAll("'", "''")}'`);
     }
+    await client.query(`ALTER DATABASE ${quoteIdentifier(params.dbName)} OWNER TO ${quoteIdentifier(params.dbUser)}`);
     await client.query(`GRANT CONNECT ON DATABASE ${quoteIdentifier(params.dbName)} TO ${quoteIdentifier(params.dbUser)}`);
+    await client.query(`GRANT CREATE ON DATABASE ${quoteIdentifier(params.dbName)} TO ${quoteIdentifier(params.dbUser)}`);
 
     return { databaseExists, userExists };
   } finally {
@@ -213,7 +215,10 @@ async function ensureSchemaAndGrants(params: {
       return;
     }
     await detectUnsafeSchemaConflict({ client, schema: params.schema });
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(params.schema)}`);
+    await client.query(
+      `CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(params.schema)} AUTHORIZATION ${quoteIdentifier(params.dbUser)}`,
+    );
+    await client.query(`ALTER SCHEMA ${quoteIdentifier(params.schema)} OWNER TO ${quoteIdentifier(params.dbUser)}`);
     await client.query(`GRANT USAGE, CREATE ON SCHEMA ${quoteIdentifier(params.schema)} TO ${quoteIdentifier(params.dbUser)}`);
     await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${quoteIdentifier(params.schema)} GRANT ALL ON TABLES TO ${quoteIdentifier(params.dbUser)}`);
     await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA ${quoteIdentifier(params.schema)} GRANT ALL ON SEQUENCES TO ${quoteIdentifier(params.dbUser)}`);

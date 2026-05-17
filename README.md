@@ -134,7 +134,7 @@ openclaw anchorclaw setup \
 Useful flags:
 
 - `--skip-config`: do not update `~/.openclaw/openclaw.json`
-- `--no-schema`: do not create/use a dedicated schema (fallback to PostgreSQL default `search_path`, commonly `public`)
+- `--schema-none`: do not create/use a dedicated schema (fallback to PostgreSQL default `search_path`, commonly `public`)
 - `--db-password <pass>`: set explicit app user password (otherwise generated)
 
 Safety behavior:
