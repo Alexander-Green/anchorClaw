@@ -137,6 +137,16 @@ Useful flags:
 - `--schema-none`: do not create/use a dedicated schema (fallback to PostgreSQL default `search_path`, commonly `public`)
 - `--db-password <pass>`: set explicit app user password (otherwise generated)
 
+Setup defaults (when flags are omitted):
+
+- `--admin-url`: `postgres://localhost/postgres`
+- `--db-name`: `anchorclaw`
+- `--db-user`: `anchorclaw`
+- `--db-password`: auto-generated
+- `--schema`: `memory`
+  - to disable dedicated schema, use `--schema-none` or `--schema none`
+- config update is enabled by default (use `--skip-config` to disable)
+
 Safety behavior:
 
 - idempotent setup for existing database/user/schema
