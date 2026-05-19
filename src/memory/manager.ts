@@ -14,6 +14,7 @@ import {
 import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "./sessions-index-sync.js";
 import { canAccessSessionPathByVisibility, filterSessionHitsByVisibility } from "./sessions-visibility.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
+import { resolveConfiguredWorkspaceDir } from "../workspace.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -144,12 +145,9 @@ export function createAnchorClawMemorySearchManager(
   const sessionsVisibility = cfg.sessions?.visibility ?? "current";
   const sessionsEnabled = sessionsVisibility !== "off";
 
-  const resolveWorkspaceDir = (): string => {
-    const candidate = (api as any)?.runtime?.workspaceDir;
-    if (typeof candidate === "string" && candidate.trim()) {
-      return path.resolve(candidate);
-    }
-    return path.resolve(process.cwd());
+  const resolveWorkspaceDir = (): string | undefined => resolveConfiguredWorkspaceDir(cfg);
+  const warnWorkspaceUnavailable = (operation: "search" | "readFile" | "sync") => {
+    api.logger.warn(`anchorclaw: manager ${operation} skipped (${operation === "sync" ? "workspace unavailable" : "workspace_dir_unavailable"})`);
   };
 
   const resolveWorkspaceRelativePath = (relPath: string): string | null => {
@@ -181,10 +179,16 @@ export function createAnchorClawMemorySearchManager(
       if (!q) {
         return [];
       }
+      const workspaceDir = resolveWorkspaceDir();
+      if (!workspaceDir) {
+        warnWorkspaceUnavailable("search");
+        return [];
+      }
       await params.ensureReady();
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: params.getPool(),
+        workspaceDir,
         agentId: params.agentId,
         sessionKey: opts?.sessionKey ?? (api as any)?.runtime?.sessionKey,
         configuredExternalId: cfg.identity?.externalId,
@@ -262,11 +266,17 @@ export function createAnchorClawMemorySearchManager(
     },
 
     async readFile(readParams) {
+      const workspaceDir = resolveWorkspaceDir();
+      if (!workspaceDir) {
+        warnWorkspaceUnavailable("readFile");
+        return { text: "", path: readParams.relPath };
+      }
       await params.ensureReady();
       const relPath = readParams.relPath.trim();
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: params.getPool(),
+        workspaceDir,
         agentId: params.agentId,
         sessionKey: (api as any)?.runtime?.sessionKey,
         configuredExternalId: cfg.identity?.externalId,
@@ -333,7 +343,6 @@ export function createAnchorClawMemorySearchManager(
 
       const workspaceRelative = resolveWorkspaceRelativePath(relPath);
       if (workspaceRelative) {
-        const workspaceDir = resolveWorkspaceDir();
         const absPath = path.resolve(workspaceDir, workspaceRelative);
         const relative = path.relative(workspaceDir, absPath);
         if (relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -386,11 +395,11 @@ export function createAnchorClawMemorySearchManager(
 
     status() {
       const limits = resolveMemoryLimits(cfg);
-      const workspaceDir = resolveWorkspaceDir();
+      const workspaceDir = resolveConfiguredWorkspaceDir(cfg);
       return {
         backend: "builtin",
         provider: "anchorclaw-postgres",
-        workspaceDir,
+        ...(workspaceDir ? { workspaceDir } : {}),
         sources: sessionsEnabled ? ["memory", "sessions"] : ["memory"],
         custom: {
           backend: "postgres",
@@ -400,6 +409,7 @@ export function createAnchorClawMemorySearchManager(
           sessionsMaxFileBytes: limits.sessionsMaxFileBytes,
           sessionsVisibility,
           purpose: params.purpose ?? "default",
+          ...(!workspaceDir ? { degraded: true, error: "workspace_dir_unavailable" } : {}),
         },
       };
     },
@@ -411,10 +421,19 @@ export function createAnchorClawMemorySearchManager(
         }
         return;
       }
+      const workspaceDir = resolveWorkspaceDir();
+      if (!workspaceDir) {
+        warnWorkspaceUnavailable("sync");
+        if (typeof syncParams?.progress === "function") {
+          syncParams.progress({ completed: 1, total: 1, label: "workspace unavailable" });
+        }
+        return;
+      }
       await params.ensureReady();
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: params.getPool(),
+        workspaceDir,
         agentId: params.agentId,
         sessionKey: (api as any)?.runtime?.sessionKey,
         configuredExternalId: cfg.identity?.externalId,

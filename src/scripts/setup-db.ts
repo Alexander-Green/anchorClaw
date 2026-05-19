@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Client } from "pg";
@@ -11,8 +12,10 @@ export type AnchorClawSetupOptions = {
   dbUser?: string;
   dbPassword?: string;
   schema?: string;
+  workspaceDir?: string;
   schemaNone?: boolean;
   skipConfig?: boolean;
+  skipAgentsPatch?: boolean;
   nonInteractive?: boolean;
 };
 
@@ -22,9 +25,18 @@ type ResolvedSetupOptions = {
   dbUser: string;
   dbPassword: string;
   schema: string | undefined;
+  workspaceDir: string | undefined;
   skipConfig: boolean;
+  skipAgentsPatch: boolean;
   nonInteractive: boolean;
 };
+
+export type AgentsInstructionPatchResult =
+  | { status: "skipped"; reason: string }
+  | { status: "not_found"; path: string }
+  | { status: "unchanged"; path: string }
+  | { status: "patched"; path: string; backupPath: string }
+  | { status: "failed"; path: string; reason: string };
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -49,6 +61,155 @@ function generatePassword(length = 24): string {
   return Array.from(bytes, (byte) => chars[byte % chars.length]).join("");
 }
 
+function normalizeEnvPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function resolveSafeOsHomedir(): string | undefined {
+  try {
+    return normalizeEnvPath(homedir());
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveOsHomeDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return normalizeEnvPath(env.HOME) ?? normalizeEnvPath(env.USERPROFILE) ?? resolveSafeOsHomedir();
+}
+
+function resolveOpenClawHomeDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const explicitHome = normalizeEnvPath(env.OPENCLAW_HOME);
+  if (!explicitHome) {
+    return resolveOsHomeDir(env);
+  }
+  if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
+    const osHome = resolveOsHomeDir(env);
+    return osHome ? explicitHome.replace(/^~(?=$|[\\/])/, osHome) : undefined;
+  }
+  return explicitHome;
+}
+
+function resolveWorkspaceDefault(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const explicitWorkspace = normalizeEnvPath(env.OPENCLAW_WORKSPACE_DIR);
+  if (explicitWorkspace) {
+    return resolve(explicitWorkspace);
+  }
+  const home = resolveOpenClawHomeDir(env);
+  if (!home) {
+    return undefined;
+  }
+  const profile = normalizeEnvPath(env.OPENCLAW_PROFILE);
+  const workspaceName = profile && profile.toLowerCase() !== "default" ? `workspace-${profile}` : "workspace";
+  return resolve(home, ".openclaw", workspaceName);
+}
+
+function resolveOpenClawConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  const explicitPath = normalizeEnvPath(env.OPENCLAW_CONFIG_PATH);
+  if (explicitPath) {
+    return resolve(explicitPath);
+  }
+  const explicitDir = normalizeEnvPath(env.OPENCLAW_CONFIG_DIR);
+  if (explicitDir) {
+    return resolve(explicitDir, "openclaw.json");
+  }
+  const home = resolveOpenClawHomeDir(env) ?? ".";
+  return resolve(home, ".openclaw", "openclaw.json");
+}
+
+function resolveOptionalWorkspaceDir(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? resolve(trimmed) : undefined;
+}
+
+function removeKnownSection(content: string, pattern: RegExp, requiredMarkers: string[]): string {
+  return content.replace(pattern, (match, prefix = "") => {
+    if (!requiredMarkers.every((marker) => match.includes(marker))) {
+      return match;
+    }
+    return prefix;
+  });
+}
+
+function removeKnownOpenClawFileMemoryInstructions(content: string): string {
+  let updated = content;
+
+  updated = removeKnownSection(
+    updated,
+    /(^|\r?\n)## Memory\r?\n[\s\S]*?(?=\r?\n## Red Lines\r?\n)/,
+    [
+      "### MEMORY.md - Your Long-Term Memory",
+      "Write It Down - No \"Mental Notes\"!",
+      "- **Long-term:** `MEMORY.md`",
+    ],
+  );
+  updated = removeKnownSection(
+    updated,
+    /(^|\r?\n)(?:- \*\*Review and update MEMORY\.md\*\* \(see below\)\r?\n(?:\r?\n)?)?### [^\r\n]*Memory Maintenance \(During Heartbeats\)\r?\n[\s\S]*?(?=\r?\nThe goal: Be helpful without being annoying\.)/,
+    [
+      "- **Review and update MEMORY.md** (see below)",
+      "1. Read through recent `memory/YYYY-MM-DD.md` files",
+      "2. Identify significant events, lessons, or insights worth keeping long-term",
+      "3. Update `MEMORY.md` with distilled learnings",
+    ],
+  );
+
+  return updated;
+}
+
+function backupStamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+export function patchWorkspaceAgentsInstructions(params: {
+  workspaceDir: string | undefined;
+}): AgentsInstructionPatchResult {
+  if (!params.workspaceDir) {
+    return { status: "skipped", reason: "workspaceDir is not configured" };
+  }
+
+  const agentsPath = resolve(params.workspaceDir, "AGENTS.md");
+  if (!existsSync(agentsPath)) {
+    return { status: "not_found", path: agentsPath };
+  }
+
+  try {
+    const original = readFileSync(agentsPath, "utf-8");
+    const updated = removeKnownOpenClawFileMemoryInstructions(original);
+    if (updated === original) {
+      return { status: "unchanged", path: agentsPath };
+    }
+
+    const backupDir = resolve(params.workspaceDir, ".openclaw-repair", "anchorclaw");
+    mkdirSync(backupDir, { recursive: true });
+    const backupPath = join(backupDir, `AGENTS.md.anchorclaw-backup.${backupStamp()}.md`);
+    writeFileSync(backupPath, original);
+    writeFileSync(agentsPath, updated);
+    return { status: "patched", path: agentsPath, backupPath };
+  } catch (error) {
+    return {
+      status: "failed",
+      path: agentsPath,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function ensureWorkspaceDirForConfig(params: {
+  workspaceDir: string | undefined;
+  skipConfig: boolean;
+}): void {
+  if (params.skipConfig || params.workspaceDir) {
+    return;
+  }
+  throw new Error(
+    "workspaceDir could not be resolved for config update; pass --workspace-dir, set OPENCLAW_WORKSPACE_DIR, or use --skip-config",
+  );
+}
+
 async function promptIfNeeded(params: {
   options: AnchorClawSetupOptions;
 }): Promise<ResolvedSetupOptions> {
@@ -60,6 +221,7 @@ async function promptIfNeeded(params: {
   };
   const nonInteractive = Boolean(params.options.nonInteractive);
   const skipConfig = Boolean(params.options.skipConfig);
+  let skipAgentsPatch = Boolean(params.options.skipAgentsPatch);
 
   let adminUrl = params.options.adminUrl?.trim() || defaults.adminUrl;
   let dbName = params.options.dbName?.trim() || defaults.dbName;
@@ -76,6 +238,7 @@ async function promptIfNeeded(params: {
   }
 
   let dbPassword = params.options.dbPassword?.trim() || "";
+  let workspaceDir = resolveOptionalWorkspaceDir(params.options.workspaceDir) ?? resolveWorkspaceDefault();
 
   if (!nonInteractive) {
     const rl = createInterface({ input, output });
@@ -104,12 +267,31 @@ async function promptIfNeeded(params: {
         dbPassword = passwordAnswer;
       }
 
+      if (!skipConfig) {
+        const workspacePrompt = workspaceDir
+          ? `Workspace directory [${workspaceDir}]: `
+          : "Workspace directory [leave empty to configure later]: ";
+        const workspaceAnswer = (await rl.question(workspacePrompt)).trim();
+        if (workspaceAnswer) {
+          workspaceDir = resolve(workspaceAnswer);
+        }
+      }
+
       const shouldUpdateByDefault = !skipConfig;
       const updateAnswer = (await rl.question(`Update openclaw.json? [${shouldUpdateByDefault ? "Y/n" : "y/N"}]: `)).trim().toLowerCase();
       const update = updateAnswer
         ? !["n", "no"].includes(updateAnswer)
         : shouldUpdateByDefault;
       params.options.skipConfig = !update;
+      if (update && !skipAgentsPatch) {
+        const patchAnswer = (await rl.question("Patch workspace AGENTS.md to remove default MEMORY.md writer instructions? [Y/n]: "))
+          .trim()
+          .toLowerCase();
+        const patch = patchAnswer ? !["n", "no"].includes(patchAnswer) : true;
+        skipAgentsPatch = !patch;
+      } else if (!update) {
+        skipAgentsPatch = true;
+      }
     } finally {
       rl.close();
     }
@@ -131,7 +313,9 @@ async function promptIfNeeded(params: {
     dbUser,
     dbPassword,
     schema,
+    workspaceDir,
     skipConfig: Boolean(params.options.skipConfig),
+    skipAgentsPatch,
     nonInteractive,
   };
 }
@@ -233,8 +417,9 @@ function updateOpenClawConfig(params: {
   dbPassword: string;
   adminUrl: string;
   schema: string | undefined;
+  workspaceDir: string | undefined;
 }): { path: string; updated: boolean } {
-  const cfgPath = resolve(process.env.HOME || "~", ".openclaw", "openclaw.json");
+  const cfgPath = resolveOpenClawConfigPath();
   if (!existsSync(cfgPath)) {
     return { path: cfgPath, updated: false };
   }
@@ -260,6 +445,9 @@ function updateOpenClawConfig(params: {
     password: params.dbPassword,
     ...(params.schema ? { schema: params.schema } : {}),
   };
+  if (params.workspaceDir) {
+    cfg.plugins.entries.anchorclaw.config.workspaceDir = params.workspaceDir;
+  }
 
   writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
   return { path: cfgPath, updated: true };
@@ -267,6 +455,10 @@ function updateOpenClawConfig(params: {
 
 export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Promise<void> {
   const options = await promptIfNeeded({ options: opts });
+  ensureWorkspaceDirForConfig({
+    workspaceDir: options.workspaceDir,
+    skipConfig: options.skipConfig,
+  });
   const dbState = await ensureDatabaseAndRole({
     adminUrl: options.adminUrl,
     dbName: options.dbName,
@@ -288,8 +480,14 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
       dbPassword: options.dbPassword,
       adminUrl: options.adminUrl,
       schema: options.schema,
+      workspaceDir: options.workspaceDir,
     });
   }
+
+  const agentsPatch =
+    !options.skipConfig && configUpdate?.updated && !options.skipAgentsPatch
+      ? patchWorkspaceAgentsInstructions({ workspaceDir: options.workspaceDir })
+      : undefined;
 
   console.log("\nAnchorClaw setup complete");
   console.log(`- database: ${options.dbName} (${dbState.databaseExists ? "already existed" : "created"})`);
@@ -307,5 +505,24 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     console.log(`- config: updated ${configUpdate.path}`);
   } else if (configUpdate) {
     console.log(`- config: not found (${configUpdate.path})`);
+  }
+  if (options.skipConfig) {
+    console.log("- AGENTS.md patch: skipped (config update disabled)");
+  } else if (options.skipAgentsPatch) {
+    console.log("- AGENTS.md patch: skipped (user choice or --skip-agents-patch)");
+  } else if (agentsPatch?.status === "patched") {
+    console.log(`- AGENTS.md patch: updated ${agentsPatch.path}`);
+    console.log(`- AGENTS.md backup: ${agentsPatch.backupPath}`);
+  } else if (agentsPatch?.status === "unchanged") {
+    console.log(`- AGENTS.md patch: no matching OpenClaw file-memory instructions found (${agentsPatch.path})`);
+  } else if (agentsPatch?.status === "not_found") {
+    console.log(`- AGENTS.md patch: not found (${agentsPatch.path})`);
+  } else if (agentsPatch?.status === "failed") {
+    console.warn(`- AGENTS.md patch: failed (${agentsPatch.reason}); AGENTS.md was left unchanged`);
+  }
+  if (options.workspaceDir) {
+    console.log(`- workspaceDir: ${options.workspaceDir}`);
+  } else if (!options.skipConfig) {
+    console.warn("- workspaceDir: not configured; set plugins.entries.anchorclaw.config.workspaceDir before enabling import");
   }
 }

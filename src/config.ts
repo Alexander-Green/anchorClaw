@@ -1,5 +1,5 @@
 export type AnchorClawConfig = {
-  workspaceDir?: string;
+  workspaceDir: string;
   sessions?: {
     visibility?: "current" | "off" | "visible";
     sync?: {
@@ -32,6 +32,18 @@ export type AnchorClawConfig = {
      * (to prevent duplicate prompt injection from OpenClaw bootstrap + AnchorClaw DB injection).
      */
     cleanupMemoryMdAfterImport?: boolean;
+  };
+  maintenance?: {
+    enabled?: boolean;
+    dryRun?: boolean;
+    intervalMinutes?: number;
+    batchSize?: number;
+    extractor?: {
+      enabled?: boolean;
+      agentId?: string;
+      maxCandidates?: number;
+      maxCharsPerRun?: number;
+    };
   };
   limits?: {
     maxResults?: number;
@@ -166,8 +178,8 @@ export const anchorClawConfigSchema = {
     if (!obj) {
       throw new Error("anchorclaw config required");
     }
-    assertAllowedKeys(obj, ["workspaceDir", "sessions", "identity", "postgres", "import", "limits"], "anchorclaw config");
-    const workspaceDir = readOptionalNonEmptyString(obj.workspaceDir, "workspaceDir");
+    assertAllowedKeys(obj, ["workspaceDir", "sessions", "identity", "postgres", "import", "maintenance", "limits"], "anchorclaw config");
+    const workspaceDir = readRequiredString(obj.workspaceDir, "workspaceDir");
 
     const sessionsObj = asRecord(obj.sessions);
     if (obj.sessions !== undefined && !sessionsObj) {
@@ -305,6 +317,69 @@ export const anchorClawConfigSchema = {
       ? readOptionalBoolean(importObj.cleanupMemoryMdAfterImport, "import.cleanupMemoryMdAfterImport")
       : undefined;
 
+    const maintenanceObj = asRecord(obj.maintenance);
+    if (obj.maintenance !== undefined && !maintenanceObj) {
+      throw new Error("maintenance must be an object");
+    }
+    if (maintenanceObj) {
+      assertAllowedKeys(maintenanceObj, ["enabled", "dryRun", "intervalMinutes", "batchSize", "extractor"], "maintenance");
+    }
+    const maintenanceEnabled = maintenanceObj
+      ? readOptionalBoolean(maintenanceObj.enabled, "maintenance.enabled")
+      : undefined;
+    const maintenanceDryRun = maintenanceObj
+      ? readOptionalBoolean(maintenanceObj.dryRun, "maintenance.dryRun")
+      : undefined;
+    const maintenanceIntervalMinutes = maintenanceObj
+      ? readOptionalIntegerInRange({
+          value: maintenanceObj.intervalMinutes,
+          label: "maintenance.intervalMinutes",
+          min: 1,
+          max: 24 * 60,
+        })
+      : undefined;
+    const maintenanceBatchSize = maintenanceObj
+      ? readOptionalIntegerInRange({
+          value: maintenanceObj.batchSize,
+          label: "maintenance.batchSize",
+          min: 1,
+          max: 2000,
+        })
+      : undefined;
+    const maintenanceExtractorObj = maintenanceObj ? asRecord(maintenanceObj.extractor) : null;
+    if (maintenanceObj?.extractor !== undefined && !maintenanceExtractorObj) {
+      throw new Error("maintenance.extractor must be an object");
+    }
+    if (maintenanceExtractorObj) {
+      assertAllowedKeys(
+        maintenanceExtractorObj,
+        ["enabled", "agentId", "maxCandidates", "maxCharsPerRun"],
+        "maintenance.extractor",
+      );
+    }
+    const maintenanceExtractorEnabled = maintenanceExtractorObj
+      ? readOptionalBoolean(maintenanceExtractorObj.enabled, "maintenance.extractor.enabled")
+      : undefined;
+    const maintenanceExtractorAgentId = maintenanceExtractorObj
+      ? readOptionalNonEmptyString(maintenanceExtractorObj.agentId, "maintenance.extractor.agentId")
+      : undefined;
+    const maintenanceExtractorMaxCandidates = maintenanceExtractorObj
+      ? readOptionalIntegerInRange({
+          value: maintenanceExtractorObj.maxCandidates,
+          label: "maintenance.extractor.maxCandidates",
+          min: 1,
+          max: 100,
+        })
+      : undefined;
+    const maintenanceExtractorMaxCharsPerRun = maintenanceExtractorObj
+      ? readOptionalIntegerInRange({
+          value: maintenanceExtractorObj.maxCharsPerRun,
+          label: "maintenance.extractor.maxCharsPerRun",
+          min: 1000,
+          max: 200_000,
+        })
+      : undefined;
+
     const limitsObj = asRecord(obj.limits);
     if (obj.limits !== undefined && !limitsObj) {
       throw new Error("limits must be an object");
@@ -370,6 +445,18 @@ export const anchorClawConfigSchema = {
           : {}),
       },
       import: { cleanupMemoryMdAfterImport: cleanupMemoryMdAfterImport ?? true },
+      maintenance: {
+        enabled: maintenanceEnabled ?? false,
+        dryRun: maintenanceDryRun ?? true,
+        intervalMinutes: maintenanceIntervalMinutes ?? 12 * 60,
+        batchSize: maintenanceBatchSize ?? 200,
+        extractor: {
+          enabled: maintenanceExtractorEnabled ?? false,
+          agentId: maintenanceExtractorAgentId ?? "main",
+          maxCandidates: maintenanceExtractorMaxCandidates ?? 20,
+          maxCharsPerRun: maintenanceExtractorMaxCharsPerRun ?? 12_000,
+        },
+      },
       ...(limitMaxResults || limitGetMaxChars || limitGetDefaultLines
         ? {
             limits: {

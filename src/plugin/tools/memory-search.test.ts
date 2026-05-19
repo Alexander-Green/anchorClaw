@@ -53,7 +53,7 @@ function buildCtx() {
         runtime: { agentId: "main", sessionKey: "agent:main:main" },
       },
       disabledReason: null,
-      cfg: { sessions: { visibility: "current" } },
+      cfg: { workspaceDir: "/workspace", sessions: { visibility: "current" } },
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
       sdkHealth: { degraded: false, reason: null, affectedOperation: null },

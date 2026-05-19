@@ -1,4 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+const readlineState = vi.hoisted(() => ({
+  answers: [] as string[],
+}));
 
 const pgState = vi.hoisted(() => ({
   clients: [] as Array<{
@@ -47,10 +54,18 @@ vi.mock("pg", () => {
   return { Client: MockClient };
 });
 
-import { runAnchorClawSetup } from "./setup-db.js";
+vi.mock("node:readline/promises", () => ({
+  createInterface: vi.fn(() => ({
+    question: vi.fn(async () => readlineState.answers.shift() ?? ""),
+    close: vi.fn(),
+  })),
+}));
+
+import { patchWorkspaceAgentsInstructions, runAnchorClawSetup } from "./setup-db.js";
 
 describe("runAnchorClawSetup", () => {
   beforeEach(() => {
+    readlineState.answers = [];
     pgState.clients = [];
     pgState.tableRows = [];
     pgState.dbExists = false;
@@ -107,5 +122,375 @@ describe("runAnchorClawSetup", () => {
     expect(allSql).toContain('GRANT CREATE ON DATABASE "anchorclaw" TO "anchorclaw"');
     expect(allSql).toContain('CREATE SCHEMA IF NOT EXISTS "memory" AUTHORIZATION "anchorclaw"');
     expect(allSql).toContain('ALTER SCHEMA "memory" OWNER TO "anchorclaw"');
+  });
+
+  it("writes workspaceDir into openclaw config from explicit setup option", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    const workspaceDir = resolve(home, "workspace");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ plugins: {} }, null, 2) + "\n");
+
+      await runAnchorClawSetup({
+        nonInteractive: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+        workspaceDir,
+      });
+
+      const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(cfg.plugins.slots.memory).toBe("anchorclaw");
+      expect(cfg.plugins.entries.anchorclaw.enabled).toBe(true);
+      expect(cfg.plugins.entries.anchorclaw.config.workspaceDir).toBe(workspaceDir);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("backs up AGENTS.md before removing known OpenClaw file-memory instructions", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    const workspaceDir = resolve(home, "workspace");
+    const agentsPath = join(workspaceDir, "AGENTS.md");
+    const originalAgents = [
+      "# AGENTS.md - Your Workspace",
+      "",
+      "## Memory",
+      "",
+      "You wake up fresh each session. These files are your continuity:",
+      "",
+      "- **Daily notes:** `memory/YYYY-MM-DD.md`",
+      "- **Long-term:** `MEMORY.md`",
+      "",
+      "### MEMORY.md - Your Long-Term Memory",
+      "",
+      "- You can **read, edit, and update** MEMORY.md freely in main sessions",
+      "",
+      "### Write It Down - No \"Mental Notes\"!",
+      "",
+      "- When someone says \"remember this\" -> update `memory/YYYY-MM-DD.md` or relevant file",
+      "",
+      "## Red Lines",
+      "",
+      "- Don't run destructive commands without asking.",
+      "",
+      "## Heartbeats - Be Proactive!",
+      "",
+      "**Proactive work you can do without asking:**",
+      "",
+      "- Read and organize memory files",
+      "- **Review and update MEMORY.md** (see below)",
+      "",
+      "### Memory Maintenance (During Heartbeats)",
+      "",
+      "Periodically (every few days), use a heartbeat to:",
+      "",
+      "1. Read through recent `memory/YYYY-MM-DD.md` files",
+      "2. Identify significant events, lessons, or insights worth keeping long-term",
+      "3. Update `MEMORY.md` with distilled learnings",
+      "",
+      "The goal: Be helpful without being annoying.",
+      "",
+    ].join("\n");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      mkdirSync(workspaceDir, { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ plugins: {} }, null, 2) + "\n");
+      writeFileSync(agentsPath, originalAgents);
+
+      await runAnchorClawSetup({
+        nonInteractive: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+        workspaceDir,
+      });
+
+      const patchedAgents = readFileSync(agentsPath, "utf-8");
+      expect(patchedAgents).not.toContain("## Memory");
+      expect(patchedAgents).not.toContain("Review and update MEMORY.md");
+      expect(patchedAgents).not.toContain("Memory Maintenance (During Heartbeats)");
+      expect(patchedAgents).toContain("## Red Lines");
+      expect(patchedAgents).toContain("The goal: Be helpful without being annoying.");
+
+      const backupDir = join(workspaceDir, ".openclaw-repair", "anchorclaw");
+      const backups = readdirSync(backupDir).filter((name) => name.startsWith("AGENTS.md.anchorclaw-backup."));
+      expect(backups).toHaveLength(1);
+      const backup = readFileSync(join(backupDir, backups[0]!), "utf-8");
+      expect(backup).toBe(originalAgents);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not patch custom AGENTS.md memory sections that do not match known OpenClaw defaults", () => {
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const workspaceDir = resolve(home, "workspace");
+    const agentsPath = join(workspaceDir, "AGENTS.md");
+    const customAgents = [
+      "# AGENTS.md",
+      "",
+      "## Memory",
+      "",
+      "This section is custom and should stay intact.",
+      "",
+      "## Red Lines",
+      "",
+      "Keep it simple.",
+      "",
+    ].join("\n");
+
+    try {
+      mkdirSync(workspaceDir, { recursive: true });
+      writeFileSync(agentsPath, customAgents);
+
+      const result = patchWorkspaceAgentsInstructions({ workspaceDir });
+
+      expect(result.status).toBe("unchanged");
+      expect(readFileSync(agentsPath, "utf-8")).toBe(customAgents);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not remove the MEMORY.md review bullet from unrelated custom AGENTS.md sections", () => {
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const workspaceDir = resolve(home, "workspace");
+    const agentsPath = join(workspaceDir, "AGENTS.md");
+    const customAgents = [
+      "# AGENTS.md",
+      "",
+      "## Heartbeats",
+      "",
+      "- **Review and update MEMORY.md** (see below)",
+      "",
+      "This is a custom workflow note and should stay intact.",
+      "",
+    ].join("\n");
+
+    try {
+      mkdirSync(workspaceDir, { recursive: true });
+      writeFileSync(agentsPath, customAgents);
+
+      const result = patchWorkspaceAgentsInstructions({ workspaceDir });
+
+      expect(result.status).toBe("unchanged");
+      expect(readFileSync(agentsPath, "utf-8")).toBe(customAgents);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("uses OPENCLAW_WORKSPACE_DIR as setup config fallback", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const previousWorkspace = process.env.OPENCLAW_WORKSPACE_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    const workspaceDir = resolve(home, "env-workspace");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      process.env.OPENCLAW_WORKSPACE_DIR = workspaceDir;
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ plugins: {} }, null, 2) + "\n");
+
+      await runAnchorClawSetup({
+        nonInteractive: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+      });
+
+      const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(cfg.plugins.entries.anchorclaw.config.workspaceDir).toBe(workspaceDir);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      if (previousWorkspace === undefined) {
+        delete process.env.OPENCLAW_WORKSPACE_DIR;
+      } else {
+        process.env.OPENCLAW_WORKSPACE_DIR = previousWorkspace;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("respects interactive no-answer for AGENTS.md patch prompt", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    const workspaceDir = resolve(home, "workspace");
+    const agentsPath = join(workspaceDir, "AGENTS.md");
+    const originalAgents = [
+      "# AGENTS.md - Your Workspace",
+      "",
+      "## Memory",
+      "",
+      "- **Long-term:** `MEMORY.md`",
+      "",
+      "## Red Lines",
+      "",
+      "## Heartbeats - Be Proactive!",
+      "",
+      "- **Review and update MEMORY.md** (see below)",
+      "",
+      "### Memory Maintenance (During Heartbeats)",
+      "",
+      "The goal: Be helpful without being annoying.",
+      "",
+    ].join("\n");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      mkdirSync(workspaceDir, { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ plugins: {} }, null, 2) + "\n");
+      writeFileSync(agentsPath, originalAgents);
+
+      readlineState.answers = [
+        "", // admin url
+        "", // db name
+        "", // db user
+        "", // schema
+        "", // password
+        "", // workspace dir
+        "", // update config -> default yes
+        "n", // patch AGENTS -> no
+      ];
+
+      await runAnchorClawSetup({
+        nonInteractive: false,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+        workspaceDir,
+      });
+
+      const agentsAfter = readFileSync(agentsPath, "utf-8");
+      expect(agentsAfter).toBe(originalAgents);
+
+      const backupDir = join(workspaceDir, ".openclaw-repair", "anchorclaw");
+      expect(() => readdirSync(backupDir)).toThrow();
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

@@ -4,6 +4,7 @@ import type { AnchorClawConfig } from "./config.js";
 
 function cfg(overrides?: Partial<AnchorClawConfig>): AnchorClawConfig {
   return {
+    workspaceDir: "/workspace",
     postgres: {
       host: "localhost",
       database: "anchorclaw",

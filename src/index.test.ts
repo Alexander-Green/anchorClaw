@@ -173,7 +173,7 @@ import plugin from "./index.js";
 
 function buildApi() {
   let transcriptListener: ((update: { sessionFile?: unknown }) => void) | null = null;
-  let lifecycleCleanup: (() => Promise<void> | void) | null = null;
+  const lifecycleCleanups: Array<() => Promise<void> | void> = [];
   const unsub = vi.fn();
   const api = {
     pluginConfig: {},
@@ -197,7 +197,9 @@ function buildApi() {
     },
     lifecycle: {
       registerRuntimeLifecycle: vi.fn((registration: { cleanup?: () => Promise<void> | void }) => {
-        lifecycleCleanup = registration.cleanup ?? null;
+        if (registration.cleanup) {
+          lifecycleCleanups.push(registration.cleanup);
+        }
       }),
     },
     registerTool: vi.fn(),
@@ -213,8 +215,8 @@ function buildApi() {
     api,
     getTranscriptListener: () => transcriptListener,
     runCleanup: async () => {
-      if (lifecycleCleanup) {
-        await lifecycleCleanup();
+      for (const cleanup of lifecycleCleanups) {
+        await cleanup();
       }
     },
     unsub,
@@ -223,7 +225,7 @@ function buildApi() {
 
 function buildApiLegacyLifecycle() {
   let transcriptListener: ((update: { sessionFile?: unknown }) => void) | null = null;
-  let lifecycleCleanup: (() => Promise<void> | void) | null = null;
+  const lifecycleCleanups: Array<() => Promise<void> | void> = [];
   const unsub = vi.fn();
   const api = {
     pluginConfig: {},
@@ -246,7 +248,9 @@ function buildApiLegacyLifecycle() {
       },
     },
     registerRuntimeLifecycle: vi.fn((registration: { cleanup?: () => Promise<void> | void }) => {
-      lifecycleCleanup = registration.cleanup ?? null;
+      if (registration.cleanup) {
+        lifecycleCleanups.push(registration.cleanup);
+      }
     }),
     registerTool: vi.fn(),
     registerCli: vi.fn(),
@@ -261,8 +265,8 @@ function buildApiLegacyLifecycle() {
     api,
     getTranscriptListener: () => transcriptListener,
     runCleanup: async () => {
-      if (lifecycleCleanup) {
-        await lifecycleCleanup();
+      for (const cleanup of lifecycleCleanups) {
+        await cleanup();
       }
     },
     unsub,
@@ -286,6 +290,7 @@ beforeEach(() => {
     postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
     sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
     identity: { externalId: "test" },
+    workspaceDir: "/tmp/work",
   });
   memoryGetFromDb.mockResolvedValue({
     ok: true,
@@ -392,6 +397,7 @@ describe("phase2 session delta listener", () => {
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "visible" },
       identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
     });
     isSessionFileForAgent.mockResolvedValue(false);
     isSessionFileForAnyKnownAgent.mockResolvedValue(true);
@@ -568,6 +574,7 @@ describe("phase2 session delta listener", () => {
         sync: { deltaBytes: 100_000, deltaMessages: 1 },
       },
       identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
     });
     isSessionFileForAgent.mockResolvedValue(true);
     const content = "\n";
@@ -605,6 +612,7 @@ describe("phase2 session delta listener", () => {
         sync: { deltaBytes: 0, deltaMessages: 0 },
       },
       identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
     });
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockResolvedValue({ size: 1 });
@@ -627,6 +635,7 @@ describe("phase2 session delta listener", () => {
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "visible" },
       identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
     });
     isSessionFileForAnyKnownAgent.mockResolvedValue(false);
     const { api, getTranscriptListener } = buildApi();
@@ -647,6 +656,7 @@ describe("phase2 session delta listener", () => {
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "visible" },
       identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
     });
     canAccessSessionPathByVisibility.mockResolvedValueOnce({
       allowed: false,
@@ -672,6 +682,7 @@ describe("phase2 session delta listener", () => {
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "current" },
       identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
     });
     canAccessSessionPathByVisibility.mockResolvedValueOnce({
       allowed: false,
@@ -697,7 +708,7 @@ describe("phase2 session delta listener", () => {
     const { api, getTranscriptListener, runCleanup, unsub } = buildApiLegacyLifecycle();
     await registerAndWaitStartup(api);
 
-    expect(api.registerRuntimeLifecycle).toHaveBeenCalledTimes(1);
+    expect(api.registerRuntimeLifecycle).toHaveBeenCalledTimes(2);
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("using legacy runtime lifecycle API"),
     );
@@ -738,6 +749,7 @@ describe("phase2 session delta listener", () => {
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "visible" },
       identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
     });
     filterSessionHitsByVisibility.mockRejectedValueOnce(new Error("visibility helper failed"));
     const { api } = buildApi();
@@ -768,6 +780,7 @@ describe("phase2 session delta listener", () => {
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "visible" },
       identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
     });
     filterSessionHitsByVisibility.mockRejectedValueOnce(new Error("visibility helper failed"));
     memoryGetFromDb.mockResolvedValue({
@@ -820,6 +833,7 @@ describe("phase2 session delta listener", () => {
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "visible" },
       identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
     });
     filterSessionHitsByVisibility.mockRejectedValueOnce(new Error("visibility helper failed"));
     memoryGetFromDb.mockResolvedValue({
@@ -1000,7 +1014,7 @@ describe("phase2 session delta listener", () => {
     expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step workspace-import succeeded");
   });
 
-  it("uses cfg.workspaceDir when runtime.workspaceDir is unavailable", async () => {
+  it("uses cfg.workspaceDir as the startup import source of truth", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
@@ -1008,7 +1022,7 @@ describe("phase2 session delta listener", () => {
       workspaceDir: "/cfg/workspace",
     });
     const { api } = buildApi();
-    (api.runtime as any).workspaceDir = undefined;
+    (api.runtime as any).workspaceDir = "/runtime/workspace";
 
     await registerAndWaitStartup(api);
 
@@ -1019,14 +1033,14 @@ describe("phase2 session delta listener", () => {
     );
   });
 
-  it("blocks startup import when neither runtime.workspaceDir nor cfg.workspaceDir is set", async () => {
+  it("blocks startup import when cfg.workspaceDir is not set", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
       identity: { externalId: "test" },
     });
     const { api } = buildApi();
-    (api.runtime as any).workspaceDir = undefined;
+    (api.runtime as any).workspaceDir = "/runtime/workspace";
 
     await registerAndWaitStartup(api);
 

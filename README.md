@@ -49,6 +49,13 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
 - **Migration support**
   - One-time idempotent import of legacy `MEMORY.md` into Postgres (by file hash)
   - Optional (default on) cleanup of `MEMORY.md` after import to avoid duplicate prompt injection
+- **Phase 4 maintenance foundation (backend-owned)**
+  - Optional background maintenance scheduler (`maintenance.enabled`)
+  - DB-owned cycle over `memory_episodic` with `dryRun` support
+  - Extractor + dedupe checks before write into `memory_items`
+  - Archives processed episodic rows only after successful extractor cycle
+  - Non-dry-run maintenance waits for durable startup state to become `ready`
+  - `dryRun` reports heuristic candidate counts only; it does not run the extractor
 
 ---
 
@@ -79,9 +86,11 @@ By default, setup updates `~/.openclaw/openclaw.json` with the required runtime 
 - `plugins.slots.memory = "anchorclaw"`
 - `plugins.entries.anchorclaw.enabled = true`
 - `plugins.entries.anchorclaw.config.postgres` (`host`, `port`, `database`, `schema`, `user`, `password`)
-- `plugins.entries.anchorclaw.config.workspaceDir` should be set explicitly (for example: `"/root/.openclaw/workspace"`)
+- `plugins.entries.anchorclaw.config.workspaceDir`
 
-For stable startup import behavior (especially on legacy runtime lifecycle), set `workspaceDir` explicitly.
+`workspaceDir` is AnchorClaw's source of truth for startup import, workspace scoping, prompt cache, and `memory/*` reads. Setup accepts `--workspace-dir`; otherwise it uses `OPENCLAW_WORKSPACE_DIR` when present, then the OpenClaw default workspace path. If config update is enabled and no workspace path can be resolved, setup fails fast instead of writing a partial config.
+
+When setup successfully updates OpenClaw config, it also checks `<workspaceDir>/AGENTS.md` for the known default OpenClaw file-memory instructions that tell agents to write durable memory into `MEMORY.md`. If found, setup writes a backup first, then removes only those known default instruction blocks so AnchorClaw remains the single durable memory writer.
 
 ### 3) Optional config overrides
 
@@ -105,6 +114,18 @@ Common overrides:
   "import": {
     "cleanupMemoryMdAfterImport": true
   },
+  "maintenance": {
+    "enabled": false,
+    "dryRun": true,
+    "intervalMinutes": 720,
+    "batchSize": 200,
+    "extractor": {
+      "enabled": false,
+      "agentId": "main",
+      "maxCandidates": 20,
+      "maxCharsPerRun": 12000
+    }
+  },
   "limits": {
     "maxResults": 10,
     "getMaxChars": 12000,
@@ -121,7 +142,8 @@ Common overrides:
 
 `sessions.sync.deltaBytes` and `sessions.sync.deltaMessages` control when transcript deltas trigger a
 targeted sessions reindex. `import.cleanupMemoryMdAfterImport` controls the default post-import `MEMORY.md`
-stub cleanup, and `limits` can reduce search/read caps below the built-in maximums.
+stub cleanup. AnchorClaw maintenance source is episodic events (`memory_episodic`), and `limits` can reduce search/read caps below the built-in maximums.
+`maintenance.dryRun` currently reports heuristic candidate counts only; it is meant for cheap backlog visibility, not extractor-faithful validation.
 
 Optional Postgres runtime settings belong inside the existing `postgres` block. Setup writes the required
 connection fields; add these only when needed:
@@ -164,6 +186,8 @@ By default this runs in interactive mode. It prompts for:
 - schema name (`none` uses the default PostgreSQL `search_path`)
 - app password (or auto-generate)
 - whether to update `~/.openclaw/openclaw.json`
+- workspace directory when config update is enabled
+- whether to patch workspace `AGENTS.md` and remove known default `MEMORY.md` writer instructions (asked only when config update is enabled)
 
 Non-interactive example:
 
@@ -179,6 +203,7 @@ openclaw anchorclaw setup \
 Useful flags:
 
 - `--skip-config`: keep `~/.openclaw/openclaw.json` unchanged
+- `--skip-agents-patch`: do not patch workspace `AGENTS.md`
 - `--schema-none`: use PostgreSQL default `search_path` (no dedicated schema)
 - `--db-password <pass>`: set app user password explicitly
 
@@ -198,12 +223,15 @@ Config update behavior:
 - writes the required `postgres` connection block
 - preserves unrelated top-level `anchorclaw.config` keys such as `identity`, `sessions`, `import`, and `limits`
 - rewrites `anchorclaw.config.postgres`; re-add `postgres.sslMode`, `postgres.sslCa`, or `postgres.pool` after setup if you use them
+- when config update succeeds, patches known default `AGENTS.md` file-memory instructions unless `--skip-agents-patch` is used
+- fails fast if config update is enabled but `workspaceDir` cannot be resolved
 
 Safety behavior:
 
 - idempotent setup for existing database/user/schema
 - no destructive operations on existing databases/schemas
 - fail-fast on schema conflicts that look AnchorClaw-related but have no `schema_migrations`
+- before patching `AGENTS.md`, writes a backup under `.openclaw-repair/anchorclaw/`
 
 ---
 
@@ -241,6 +269,21 @@ To disable cleanup:
 ```json
 { "import": { "cleanupMemoryMdAfterImport": false } }
 ```
+
+### Workspace `AGENTS.md` Patch
+
+OpenClaw's default workspace `AGENTS.md` tells agents to maintain durable memory by editing `MEMORY.md`. With AnchorClaw enabled, that instruction creates a second writer path and can lead to split-brain memory.
+
+During setup, AnchorClaw therefore performs a narrow patch of the configured workspace `AGENTS.md`:
+
+- backs up the original file to `.openclaw-repair/anchorclaw/AGENTS.md.anchorclaw-backup.<timestamp>.md`
+- removes the known default `## Memory` file-memory section only when the expected OpenClaw markers are present
+- removes the known heartbeat `Memory Maintenance (During Heartbeats)` subsection only when the expected OpenClaw markers are present
+- removes the known proactive-work bullet that says to review/update `MEMORY.md`
+
+If you later uninstall or disable AnchorClaw and want to return to OpenClaw's file-based memory workflow, restore those instructions from the backup file or from OpenClaw's default `AGENTS.md` template.
+
+Note for uninstall/disable: after removing AnchorClaw, restore the removed `AGENTS.md` memory-maintenance block from `.openclaw-repair/anchorclaw/AGENTS.md.anchorclaw-backup.<timestamp>.md` so default OpenClaw file-memory behavior works as expected.
 
 ---
 

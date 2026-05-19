@@ -39,11 +39,13 @@ export function resolveIdentityBinding(params: {
 export async function resolveUserAndWorkspaceScope(params: {
   api: OpenClawPluginApi;
   pool: PostgresPool;
+  workspaceDir: string;
   agentId?: string;
   sessionKey?: string;
   configuredExternalId?: string;
 }): Promise<ResolvedScope> {
   const identity = resolveIdentityBinding({ configuredExternalId: params.configuredExternalId });
+  const workspaceDir = path.resolve(params.workspaceDir);
 
   const userId = await resolveOrCreateUserId(params.pool, params.api.logger, {
     channel: identity.channel,
@@ -52,28 +54,18 @@ export async function resolveUserAndWorkspaceScope(params: {
   });
   const workspaceId = await resolveOrCreateWorkspaceId(params.pool, {
     userId,
-    name: resolveWorkspaceName(params.api),
+    name: resolveWorkspaceName(workspaceDir),
     metadata: {
       agent_id: params.agentId,
       session_key: params.sessionKey,
-      workspace_dir_hash: sha256Hex(resolveWorkspaceDir(params.api)),
+      workspace_dir_hash: sha256Hex(workspaceDir),
     },
   });
 
   return { userId, workspaceId };
 }
 
-function resolveWorkspaceDir(api: OpenClawPluginApi): string {
-  // Best-effort: fall back to CWD if the plugin runtime doesn't expose workspaceDir.
-  const candidate = (api as any)?.runtime?.workspaceDir;
-  if (typeof candidate === "string" && candidate.trim()) {
-    return path.resolve(candidate);
-  }
-  return path.resolve(process.cwd());
-}
-
-function resolveWorkspaceName(api: OpenClawPluginApi): string {
-  const dir = resolveWorkspaceDir(api);
+function resolveWorkspaceName(dir: string): string {
   return `dir:${sha256Hex(dir)}`;
 }
 

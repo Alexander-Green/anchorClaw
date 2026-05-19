@@ -1,5 +1,6 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { memoryForgetDb } from "../../memory/forget.js";
+import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
 import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
 
 export function registerMemoryForgetTool({ ctx, refreshPromptCache }: ToolRegistrationParams) {
@@ -29,9 +30,17 @@ export function registerMemoryForgetTool({ ctx, refreshPromptCache }: ToolRegist
       const unavailable = getToolUnavailableResponse(ctx);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
+      const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
+      if (!workspaceDir) {
+        return {
+          content: [{ type: "text", text: `anchorclaw: memory_forget unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
+          details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
+        };
+      }
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: ctx.getPool(),
+        workspaceDir,
         agentId: (api as any)?.runtime?.agentId,
         sessionKey: (api as any)?.runtime?.sessionKey,
         configuredExternalId: ctx.cfg?.identity?.externalId,

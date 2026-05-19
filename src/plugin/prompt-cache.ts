@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { buildPromptMemorySection, queryPromptMemoryItems } from "../memory/prompt.js";
+import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 
 export type PromptCacheRuntime = {
@@ -28,6 +29,7 @@ export function createPromptCacheRuntime(params: {
         const scope = await resolveUserAndWorkspaceScope({
           api,
           pool: ctx.getPool(),
+          workspaceDir: requireConfiguredWorkspaceDir(ctx.cfg),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
           configuredExternalId: ctx.cfg?.identity?.externalId,

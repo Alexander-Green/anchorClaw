@@ -92,7 +92,11 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
 
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
-      cfg: { postgres: { host: "localhost", database: "db", user: "user" }, import: { cleanupMemoryMdAfterImport: true } },
+      cfg: {
+        workspaceDir: "/tmp/work",
+        postgres: { host: "localhost", database: "db", user: "user" },
+        import: { cleanupMemoryMdAfterImport: true },
+      },
       pool,
       workspaceDir: "/tmp/work",
       agentId: "main",
@@ -148,7 +152,11 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
 
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
-      cfg: { postgres: { host: "localhost", database: "db", user: "user" }, import: { cleanupMemoryMdAfterImport: true } },
+      cfg: {
+        workspaceDir: "/tmp/work",
+        postgres: { host: "localhost", database: "db", user: "user" },
+        import: { cleanupMemoryMdAfterImport: true },
+      },
       pool,
       workspaceDir: "/tmp/work",
       agentId: "main",
@@ -187,7 +195,11 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
 
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
-      cfg: { postgres: { host: "localhost", database: "db", user: "user" }, import: { cleanupMemoryMdAfterImport: true } },
+      cfg: {
+        workspaceDir: "/tmp/work",
+        postgres: { host: "localhost", database: "db", user: "user" },
+        import: { cleanupMemoryMdAfterImport: true },
+      },
       pool,
       workspaceDir: "/tmp/work",
       agentId: "main",
@@ -242,7 +254,11 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
 
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
-      cfg: { postgres: { host: "localhost", database: "db", user: "user" }, import: { cleanupMemoryMdAfterImport: true } },
+      cfg: {
+        workspaceDir: "/tmp/work",
+        postgres: { host: "localhost", database: "db", user: "user" },
+        import: { cleanupMemoryMdAfterImport: true },
+      },
       pool,
       workspaceDir: "/tmp/work",
       agentId: "main",

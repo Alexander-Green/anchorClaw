@@ -87,6 +87,7 @@ describe("createAnchorClawMemorySearchManager.sync", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        workspaceDir: "/workspace",
         sessions: { visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -134,6 +135,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        workspaceDir: "/workspace",
         sessions: { visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -169,6 +171,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        workspaceDir: "/workspace",
         sessions: { visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -195,6 +198,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        workspaceDir: "/workspace",
         sessions: { visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -221,6 +225,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        workspaceDir: "/workspace",
         sessions: { visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -231,5 +236,39 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     const got = await manager.readFile({ relPath: "sessions/main/a.jsonl" });
     expect(got).toEqual({ text: "", path: "sessions/main/a.jsonl" });
     expect(memoryGetFromDb).not.toHaveBeenCalled();
+  });
+
+  it("warns and exposes degraded status when workspaceDir is unavailable", async () => {
+    const logger = { warn: vi.fn() };
+    const manager = createAnchorClawMemorySearchManager({
+      api: {
+        logger,
+        runtime: {
+          sessionKey: "agent:main:main",
+        },
+      } as any,
+      cfg: {
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        workspaceDir: "   ",
+        sessions: { visibility: "current" },
+      } as any,
+      ensureReady: async () => undefined,
+      getPool: () => ({ query: vi.fn() }) as any,
+      agentId: "main",
+    });
+
+    await expect(manager.search("needle", { sources: ["memory"] })).resolves.toEqual([]);
+    await expect(manager.readFile({ relPath: "MEMORY.md" })).resolves.toEqual({ text: "", path: "MEMORY.md" });
+    await manager.sync?.({});
+
+    expect(logger.warn).toHaveBeenCalledWith("anchorclaw: manager search skipped (workspace_dir_unavailable)");
+    expect(logger.warn).toHaveBeenCalledWith("anchorclaw: manager readFile skipped (workspace_dir_unavailable)");
+    expect(logger.warn).toHaveBeenCalledWith("anchorclaw: manager sync skipped (workspace unavailable)");
+    expect(manager.status()).toMatchObject({
+      custom: {
+        degraded: true,
+        error: "workspace_dir_unavailable",
+      },
+    });
   });
 });

@@ -1,4 +1,3 @@
-import path from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   anchorClawConfigSchema,
@@ -11,11 +10,14 @@ import {
   type PluginRuntimeContext,
 } from "./plugin/runtime-context.js";
 import { createPromptCacheRuntime } from "./plugin/prompt-cache.js";
+import { createMaintenanceRuntime, registerMaintenanceLifecycle } from "./plugin/maintenance.js";
+import { registerEpisodicHooks } from "./plugin/episodic.js";
 import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
 import { registerSessionDeltaLifecycle } from "./plugin/lifecycle.js";
 import { createSessionDeltaRuntime } from "./plugin/session-delta.js";
 import { registerAnchorClawTools } from "./plugin/tools/index.js";
 import { runAnchorClawSetup } from "./scripts/setup-db.js";
+import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "./workspace.js";
 
 export default definePluginEntry({
   id: "anchorclaw",
@@ -35,8 +37,10 @@ export default definePluginEntry({
           .option("--db-user <user>", "App user name (default: anchorclaw)")
           .option("--db-password <pass>", "App user password (auto-generated if omitted)")
           .option("--schema <name>", 'Schema name (default: memory, use "none" for search_path/public fallback)')
+          .option("--workspace-dir <path>", "OpenClaw workspace directory for AnchorClaw import/scope")
           .option("--schema-none", "Disable dedicated schema and use default PostgreSQL search_path")
           .option("--skip-config", "Do not update ~/.openclaw/openclaw.json")
+          .option("--skip-agents-patch", "Do not patch workspace AGENTS.md file-memory instructions")
           .option("--non-interactive", "Disable prompts and use defaults/flags only")
           .action(async (opts: {
             adminUrl?: string;
@@ -44,8 +48,10 @@ export default definePluginEntry({
             dbUser?: string;
             dbPassword?: string;
             schema?: string;
+            workspaceDir?: string;
             schemaNone?: boolean;
             skipConfig?: boolean;
+            skipAgentsPatch?: boolean;
             nonInteractive?: boolean;
           }) => {
             await runAnchorClawSetup({
@@ -54,8 +60,10 @@ export default definePluginEntry({
               dbUser: opts.dbUser,
               dbPassword: opts.dbPassword,
               schema: opts.schema,
+              workspaceDir: opts.workspaceDir,
               schemaNone: opts.schemaNone,
               skipConfig: opts.skipConfig,
+              skipAgentsPatch: opts.skipAgentsPatch,
               nonInteractive: opts.nonInteractive,
             });
           });
@@ -94,6 +102,7 @@ export default definePluginEntry({
       disabledReason,
     });
     const { refreshPromptCache } = createPromptCacheRuntime({ api, ctx });
+    const { cleanupMaintenance } = createMaintenanceRuntime({ api, ctx });
     const { ensureSessionsIndexBootstrapped, ensureSessionDeltaListener, cleanupSessionDelta } =
       createSessionDeltaRuntime({ api, ctx });
 
@@ -174,17 +183,9 @@ export default definePluginEntry({
 
         api.logger.info("anchorclaw: startup step workspace-import started");
         try {
-          const runtimeWorkspaceDir =
-            typeof (api as any)?.runtime?.workspaceDir === "string" && (api as any).runtime.workspaceDir.trim()
-              ? path.resolve(String((api as any).runtime.workspaceDir))
-              : undefined;
-          const configWorkspaceDir =
-            typeof importCfg.workspaceDir === "string" && importCfg.workspaceDir.trim()
-              ? path.resolve(importCfg.workspaceDir)
-              : undefined;
-          const workspaceDir = runtimeWorkspaceDir ?? configWorkspaceDir;
+          const workspaceDir = resolveConfiguredWorkspaceDir(importCfg);
           if (!workspaceDir) {
-            const reason = "workspace_dir_unavailable";
+            const reason = WORKSPACE_DIR_UNAVAILABLE;
             ctx.setDurableState({
               overall: "blocked",
               import: "failed_retryable",
@@ -255,6 +256,8 @@ export default definePluginEntry({
       })();
     }
     registerSessionDeltaLifecycle({ api, cleanupSessionDelta });
+    registerMaintenanceLifecycle({ api, cleanupMaintenance });
+    registerEpisodicHooks({ api, ctx });
     registerAnchorClawMemoryCapability({
       ctx,
       refreshPromptCache,

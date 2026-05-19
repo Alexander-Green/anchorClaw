@@ -2,6 +2,7 @@ import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { memoryGetFromDb } from "../../memory/get.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { canAccessSessionPathByVisibility } from "../../memory/sessions-visibility.js";
+import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
 import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
 
 export function registerMemoryGetTool({ ctx }: ToolRegistrationParams) {
@@ -28,9 +29,17 @@ export function registerMemoryGetTool({ ctx }: ToolRegistrationParams) {
       const unavailable = getToolUnavailableResponse(ctx);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
+      const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
+      if (!workspaceDir) {
+        return {
+          content: [{ type: "text", text: `anchorclaw: memory_get unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
+          details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
+        };
+      }
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: ctx.getPool(),
+        workspaceDir,
         agentId: (api as any)?.runtime?.agentId,
         sessionKey: (api as any)?.runtime?.sessionKey,
         configuredExternalId: ctx.cfg?.identity?.externalId,
@@ -86,10 +95,7 @@ export function registerMemoryGetTool({ ctx }: ToolRegistrationParams) {
           workspaceId: scope.workspaceId,
           agentId: (api as any)?.runtime?.agentId,
           sessionsVisibility,
-          workspaceDir:
-            typeof (api as any)?.runtime?.workspaceDir === "string" && (api as any).runtime.workspaceDir.trim()
-              ? String((api as any).runtime.workspaceDir)
-              : process.cwd(),
+          workspaceDir,
           limits,
           lookup,
           ...(typeof fromLine === "number" ? { fromLine } : {}),

@@ -26,7 +26,7 @@ function buildCtx() {
       disabledReason: null,
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
-      cfg: {},
+      cfg: { workspaceDir: "/workspace" },
       resolveActor: vi.fn(() => "tester"),
     } as any,
     registerTool,
@@ -63,4 +63,3 @@ describe("memory_forget visible output", () => {
     });
   });
 });
-

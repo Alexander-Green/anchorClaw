@@ -51,6 +51,61 @@
       "help": "When true (default), after importing legacy MEMORY.md into Postgres AnchorClaw writes a backup into .openclaw-repair/anchorclaw/ and stubs MEMORY.md to avoid duplicate prompt injection.",
       "advanced": true
     },
+    "maintenance": {
+      "label": "Maintenance",
+      "help": "Background durable-memory maintenance cycle (Phase 4 foundation).",
+      "advanced": true
+    },
+    "maintenance.enabled": {
+      "label": "Enable Maintenance",
+      "help": "Enable periodic DB-owned maintenance cycle that processes session index chunks into maintenance events.",
+      "advanced": true
+    },
+    "maintenance.dryRun": {
+      "label": "Maintenance Dry Run",
+      "help": "When true (default), maintenance scans and classifies candidates but does not persist events.",
+      "advanced": true
+    },
+    "maintenance.intervalMinutes": {
+      "label": "Maintenance Interval (minutes)",
+      "placeholder": "720",
+      "help": "How often the maintenance cycle runs after maintenance.enabled is set. Defaults to 720 minutes (12 hours).",
+      "advanced": true
+    },
+    "maintenance.batchSize": {
+      "label": "Maintenance Batch Size",
+      "placeholder": "200",
+      "help": "Maximum number of indexed session chunks processed per cycle.",
+      "advanced": true
+    },
+    "maintenance.extractor": {
+      "label": "Maintenance Extractor",
+      "help": "Model-assisted JSON extractor settings for durable-memory promotion.",
+      "advanced": true
+    },
+    "maintenance.extractor.enabled": {
+      "label": "Enable Extractor",
+      "help": "When true, non-dry-run maintenance asks an agent for structured durable-memory candidates.",
+      "advanced": true
+    },
+    "maintenance.extractor.agentId": {
+      "label": "Extractor Agent Id",
+      "placeholder": "main",
+      "help": "Agent id used for internal extraction calls.",
+      "advanced": true
+    },
+    "maintenance.extractor.maxCandidates": {
+      "label": "Extractor Max Candidates",
+      "placeholder": "20",
+      "help": "Maximum candidate memories requested from extractor per source window.",
+      "advanced": true
+    },
+    "maintenance.extractor.maxCharsPerRun": {
+      "label": "Extractor Max Chars",
+      "placeholder": "12000",
+      "help": "Maximum transcript characters passed to extractor per source window.",
+      "advanced": true
+    },
     "identity": {
       "label": "Identity",
       "help": "Stable owner identity for memory scoping",
@@ -69,7 +124,7 @@
     "workspaceDir": {
       "label": "Workspace Directory",
       "placeholder": "/root/.openclaw/workspace",
-      "help": "Explicit workspace root used by startup legacy MEMORY.md import when runtime workspace context is unavailable.",
+      "help": "Explicit workspace root used by AnchorClaw for import, workspace scoping, prompt cache, and memory/* reads.",
       "advanced": true
     },
     "postgres.host": {
@@ -210,6 +265,58 @@
           "cleanupMemoryMdAfterImport": {
             "type": "boolean",
             "default": true
+          }
+        }
+      },
+      "maintenance": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": true
+          },
+          "intervalMinutes": {
+            "type": "number",
+            "default": 720,
+            "minimum": 1,
+            "maximum": 1440
+          },
+          "batchSize": {
+            "type": "number",
+            "default": 200,
+            "minimum": 1,
+            "maximum": 2000
+          },
+          "extractor": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "agentId": {
+                "type": "string",
+                "default": "main"
+              },
+              "maxCandidates": {
+                "type": "number",
+                "default": 20,
+                "minimum": 1,
+                "maximum": 100
+              },
+              "maxCharsPerRun": {
+                "type": "number",
+                "default": 12000,
+                "minimum": 1000,
+                "maximum": 200000
+              }
+            }
           }
         }
       },

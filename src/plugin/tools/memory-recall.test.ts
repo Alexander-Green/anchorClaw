@@ -28,7 +28,7 @@ function buildCtx() {
         runtime: { agentId: "main", sessionKey: "agent:main:main" },
       },
       disabledReason: null,
-      cfg: {},
+      cfg: { workspaceDir: "/workspace" },
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
     } as any,

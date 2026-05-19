@@ -539,6 +539,7 @@ async function importMemoryMd(params: {
   const scope = await resolveUserAndWorkspaceScope({
     api: params.api,
     pool: params.pool,
+    workspaceDir: params.workspaceDir,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     configuredExternalId: params.cfg.identity?.externalId,
@@ -574,7 +575,7 @@ async function importMemoryMd(params: {
     sourcePath: relPath,
     sourceSha256,
     parsedCount: items.length,
-    metadata: { legacy_file: relPath },
+    metadata: { legacy_file: relPath, absolute_path: absPath },
   });
 
   let insertedCount = 0;
@@ -724,6 +725,7 @@ async function importDailyMemory(params: {
   const scope = await resolveUserAndWorkspaceScope({
     api: params.api,
     pool: params.pool,
+    workspaceDir: params.workspaceDir,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     configuredExternalId: params.cfg.identity?.externalId,
@@ -752,7 +754,7 @@ async function importDailyMemory(params: {
       relPath,
       sha256: digest,
       sourceType: "daily-memory",
-      metadata: { legacy_file: relPath },
+      metadata: { legacy_file: relPath, absolute_path: absPath },
     });
     if (!shouldProceed) {
       continue;

@@ -4,6 +4,7 @@ import { memorySearchDb } from "../../memory/search.js";
 import { memorySearchSessions } from "../../memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/sessions-index.js";
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
+import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
 import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
 import { formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
 
@@ -101,9 +102,17 @@ export function registerMemorySearchTool({
       const unavailable = getToolUnavailableResponse(ctx);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
+      const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
+      if (!workspaceDir) {
+        return {
+          content: [{ type: "text", text: `anchorclaw: memory_search unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
+          details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
+        };
+      }
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: ctx.getPool(),
+        workspaceDir,
         agentId: (api as any)?.runtime?.agentId,
         sessionKey: (api as any)?.runtime?.sessionKey,
         configuredExternalId: ctx.cfg?.identity?.externalId,

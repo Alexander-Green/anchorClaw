@@ -3,6 +3,7 @@ import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { isSessionFileForAgent, isSessionFileForAnyKnownAgent } from "../memory/sessions.js";
 import { normalizeSessionLookupPath } from "../memory/sessions-index.js";
 import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "../memory/sessions-index-sync.js";
+import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import {
   countNewlinesInRange,
   isSessionArchiveArtifactPath,
@@ -46,6 +47,7 @@ export function createSessionDeltaRuntime(params: {
         const scope = await resolveUserAndWorkspaceScope({
           api,
           pool: ctx.getPool(),
+          workspaceDir: requireConfiguredWorkspaceDir(ctx.cfg),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
           configuredExternalId: ctx.cfg?.identity?.externalId,
@@ -169,6 +171,7 @@ export function createSessionDeltaRuntime(params: {
         const scope = await resolveUserAndWorkspaceScope({
           api,
           pool: ctx.getPool(),
+          workspaceDir: requireConfiguredWorkspaceDir(ctx.cfg),
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
           configuredExternalId: ctx.cfg?.identity?.externalId,

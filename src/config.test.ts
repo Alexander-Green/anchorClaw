@@ -3,6 +3,7 @@ import { anchorClawConfigSchema } from "./config.js";
 
 function baseConfig(): Record<string, unknown> {
   return {
+    workspaceDir: "/workspace",
     postgres: {
       host: "localhost",
       database: "anchorclaw",
@@ -36,6 +37,43 @@ describe("anchorClawConfigSchema identity.externalId", () => {
         identity: { externalId: "abcdefghijklmnopqrstuvwxyz" },
       }),
     ).toThrow("identity.externalId must be at most 20 characters");
+  });
+});
+
+describe("anchorClawConfigSchema workspaceDir", () => {
+  it("requires workspaceDir", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      }),
+    ).toThrow("workspaceDir required");
+  });
+
+  it("accepts env substitution for workspaceDir", () => {
+    const previous = process.env.ANCHORCLAW_TEST_WORKSPACE_DIR;
+    try {
+      process.env.ANCHORCLAW_TEST_WORKSPACE_DIR = "/workspace/from-env";
+      const parsed = anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        workspaceDir: "${ANCHORCLAW_TEST_WORKSPACE_DIR}",
+      });
+      expect(parsed.workspaceDir).toBe("/workspace/from-env");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ANCHORCLAW_TEST_WORKSPACE_DIR;
+      } else {
+        process.env.ANCHORCLAW_TEST_WORKSPACE_DIR = previous;
+      }
+    }
+  });
+
+  it("rejects blank workspaceDir when explicitly configured", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        workspaceDir: "   ",
+      }),
+    ).toThrow("workspaceDir required");
   });
 });
 
@@ -117,6 +155,46 @@ describe("anchorClawConfigSchema sessions.sync", () => {
         },
       }),
     ).toThrow("sessions.sync.deltaMessages must be an integer");
+  });
+});
+
+describe("anchorClawConfigSchema maintenance", () => {
+  it("defaults maintenance config when block is omitted", () => {
+    const parsed = anchorClawConfigSchema.parse(baseConfig());
+    expect(parsed.maintenance?.enabled).toBe(false);
+    expect(parsed.maintenance?.dryRun).toBe(true);
+    expect(parsed.maintenance?.intervalMinutes).toBe(12 * 60);
+    expect(parsed.maintenance?.batchSize).toBe(200);
+    expect(parsed.maintenance?.extractor?.enabled).toBe(false);
+    expect(parsed.maintenance?.extractor?.agentId).toBe("main");
+    expect(parsed.maintenance?.extractor?.maxCandidates).toBe(20);
+    expect(parsed.maintenance?.extractor?.maxCharsPerRun).toBe(12_000);
+  });
+
+  it("accepts custom maintenance settings", () => {
+    const parsed = anchorClawConfigSchema.parse({
+      ...baseConfig(),
+      maintenance: {
+        enabled: true,
+        dryRun: false,
+        intervalMinutes: 15,
+        batchSize: 500,
+        extractor: {
+          enabled: true,
+          agentId: "worker-a",
+          maxCandidates: 8,
+          maxCharsPerRun: 20000,
+        },
+      },
+    });
+    expect(parsed.maintenance?.enabled).toBe(true);
+    expect(parsed.maintenance?.dryRun).toBe(false);
+    expect(parsed.maintenance?.intervalMinutes).toBe(15);
+    expect(parsed.maintenance?.batchSize).toBe(500);
+    expect(parsed.maintenance?.extractor?.enabled).toBe(true);
+    expect(parsed.maintenance?.extractor?.agentId).toBe("worker-a");
+    expect(parsed.maintenance?.extractor?.maxCandidates).toBe(8);
+    expect(parsed.maintenance?.extractor?.maxCharsPerRun).toBe(20000);
   });
 });
 
