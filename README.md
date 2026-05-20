@@ -170,6 +170,15 @@ openclaw gateway restart
 
 ---
 
+## Community Integrations
+
+Community-maintained integration notes live under `docs/integrations/`.
+
+- [TweetClaw source memory workflow](docs/integrations/tweetclaw.md) - contributed by the TweetClaw/Xquik
+  community. TweetClaw and Xquik are maintained separately from AnchorClaw.
+
+---
+
 ## CLI DB Setup Details
 
 AnchorClaw supports explicit setup via CLI:
