@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
 
 import { memoryGetFromDb } from "./get.js";
 
@@ -12,6 +13,13 @@ vi.mock("./sessions-index-sync.js", () => ({
 
 import { memoryGetSessionFile } from "./sessions.js";
 import { syncSessionsIndexDb } from "./sessions-index-sync.js";
+
+vi.mock("node:fs/promises", () => ({
+  default: {
+    readFile: vi.fn(),
+  },
+  readFile: vi.fn(),
+}));
 
 const limits = {
   maxResults: 10,
@@ -191,5 +199,97 @@ describe("memoryGetFromDb sessions visibility", () => {
         sessionFiles: ["sessions/main/s1.jsonl"],
       }),
     );
+  });
+});
+
+describe("memoryGetFromDb daily memory compatibility", () => {
+  it("prefers imported DB daily content for memory/* lookups", async () => {
+    const pool = createPool([
+      [
+        {
+          id: "11111111-1111-1111-1111-111111111111",
+          path: "memory/2026-05-20.md",
+          logical_date: "2026-05-20",
+          content: "DB daily content",
+          content_sha256: "sha",
+          source_kind: "legacy_import",
+          source_path: "/workspace/memory/2026-05-20.md",
+          metadata: {},
+          created_at: "2026-05-20T10:00:00.000Z",
+          updated_at: "2026-05-20T10:00:00.000Z",
+        },
+      ],
+    ]);
+    const got = await memoryGetFromDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      workspaceDir: "/workspace",
+      limits,
+      lookup: "memory/2026-05-20.md",
+    });
+    expect(got.ok).toBe(true);
+    if (!got.ok) {
+      throw new Error("expected successful result");
+    }
+    expect(got.path).toBe("memory/2026-05-20.md");
+    expect(got.kind).toBe("daily-note");
+    expect(got.content).toContain("DB daily content");
+    expect(vi.mocked(fs.readFile)).not.toHaveBeenCalled();
+  });
+
+  it("reads db-memory/daily/<uuid>.md directly from canonical daily table", async () => {
+    const pool = createPool([
+      [
+        {
+          id: "11111111-1111-1111-1111-111111111111",
+          path: "memory/2026-05-20.md",
+          logical_date: "2026-05-20",
+          content: "DB daily content",
+          content_sha256: "sha",
+          source_kind: "legacy_import",
+          source_path: "/workspace/memory/2026-05-20.md",
+          metadata: {},
+          created_at: "2026-05-20T10:00:00.000Z",
+          updated_at: "2026-05-20T10:00:00.000Z",
+        },
+      ],
+    ]);
+    const got = await memoryGetFromDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      workspaceDir: "/workspace",
+      limits,
+      lookup: "db-memory/daily/11111111-1111-1111-1111-111111111111.md",
+    });
+    expect(got.ok).toBe(true);
+    if (!got.ok) {
+      throw new Error("expected successful result");
+    }
+    expect(got.path).toBe("db-memory/daily/11111111-1111-1111-1111-111111111111.md");
+    expect(got.title).toBe("memory/2026-05-20.md");
+    expect(got.kind).toBe("daily-note");
+    expect(got.content).toContain("DB daily content");
+  });
+
+  it("falls back to workspace file when imported DB daily row is absent", async () => {
+    const pool = createPool([[]]);
+    vi.mocked(fs.readFile).mockResolvedValueOnce("legacy daily file");
+    const got = await memoryGetFromDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      workspaceDir: "/workspace",
+      limits,
+      lookup: "memory/2026-05-20.md",
+    });
+    expect(got.ok).toBe(true);
+    if (!got.ok) {
+      throw new Error("expected successful result");
+    }
+    expect(got.path).toBe("memory/2026-05-20.md");
+    expect(got.content).toContain("legacy daily file");
+    expect(vi.mocked(fs.readFile)).toHaveBeenCalledTimes(1);
   });
 });

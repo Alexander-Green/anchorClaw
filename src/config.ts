@@ -1,6 +1,9 @@
 export type AnchorClawConfig = {
   workspaceDir: string;
   sessions?: {
+    search?: {
+      enabled?: boolean;
+    };
     visibility?: "current" | "off" | "visible";
     sync?: {
       deltaBytes?: number;
@@ -54,6 +57,13 @@ export type AnchorClawConfig = {
 
 export const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 export const DEFAULT_SESSION_DELTA_MESSAGES = 50;
+
+export type SessionsSearchState = {
+  configured: boolean;
+  visibility: "current" | "off" | "visible";
+  effective: boolean;
+  reason: "search_disabled" | "visibility_off" | null;
+};
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -186,8 +196,18 @@ export const anchorClawConfigSchema = {
       throw new Error("sessions must be an object");
     }
     if (sessionsObj) {
-      assertAllowedKeys(sessionsObj, ["visibility", "sync"], "sessions");
+      assertAllowedKeys(sessionsObj, ["search", "visibility", "sync"], "sessions");
     }
+    const sessionsSearchObj = sessionsObj ? asRecord(sessionsObj.search) : undefined;
+    if (sessionsObj?.search !== undefined && !sessionsSearchObj) {
+      throw new Error("sessions.search must be an object");
+    }
+    if (sessionsSearchObj) {
+      assertAllowedKeys(sessionsSearchObj, ["enabled"], "sessions.search");
+    }
+    const sessionsSearchEnabled = sessionsSearchObj
+      ? readOptionalBoolean(sessionsSearchObj.enabled, "sessions.search.enabled")
+      : undefined;
     const visibilityRaw = sessionsObj
       ? readOptionalString(sessionsObj.visibility, "sessions.visibility")
       : undefined;
@@ -415,6 +435,9 @@ export const anchorClawConfigSchema = {
     return {
       workspaceDir,
       sessions: {
+        search: {
+          enabled: sessionsSearchEnabled ?? false,
+        },
         visibility: sessionsVisibility,
         sync: {
           deltaBytes: sessionsDeltaBytes ?? DEFAULT_SESSION_DELTA_BYTES,
@@ -469,3 +492,32 @@ export const anchorClawConfigSchema = {
     };
   },
 };
+
+export function resolveSessionsSearchState(
+  cfg: Pick<AnchorClawConfig, "sessions"> | null | undefined,
+): SessionsSearchState {
+  const visibility = cfg?.sessions?.visibility ?? "current";
+  const configured = cfg?.sessions?.search?.enabled === true;
+  if (!configured) {
+    return {
+      configured: false,
+      visibility,
+      effective: false,
+      reason: "search_disabled",
+    };
+  }
+  if (visibility === "off") {
+    return {
+      configured: true,
+      visibility,
+      effective: false,
+      reason: "visibility_off",
+    };
+  }
+  return {
+    configured: true,
+    visibility,
+    effective: true,
+    reason: null,
+  };
+}

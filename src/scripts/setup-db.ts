@@ -11,11 +11,13 @@ export type AnchorClawSetupOptions = {
   dbName?: string;
   dbUser?: string;
   dbPassword?: string;
+  rotateDbPassword?: boolean;
   schema?: string;
   workspaceDir?: string;
   schemaNone?: boolean;
   skipConfig?: boolean;
   skipAgentsPatch?: boolean;
+  enablePromptInjection?: boolean;
   nonInteractive?: boolean;
 };
 
@@ -24,12 +26,16 @@ type ResolvedSetupOptions = {
   dbName: string;
   dbUser: string;
   dbPassword: string;
+  rotateDbPassword: boolean;
   schema: string | undefined;
   workspaceDir: string | undefined;
   skipConfig: boolean;
   skipAgentsPatch: boolean;
+  enablePromptInjection: boolean;
   nonInteractive: boolean;
 };
+
+type PromptInjectionConfigState = "enabled" | "disabled" | "unset";
 
 export type AgentsInstructionPatchResult =
   | { status: "skipped"; reason: string }
@@ -160,6 +166,34 @@ function removeKnownOpenClawFileMemoryInstructions(content: string): string {
   return updated;
 }
 
+function readPromptInjectionConfigState(cfg: Record<string, any>): PromptInjectionConfigState {
+  const hooks = cfg.plugins?.entries?.anchorclaw?.hooks;
+  if (!hooks || typeof hooks !== "object") {
+    return "unset";
+  }
+  if (hooks.allowPromptInjection === false) {
+    return "disabled";
+  }
+  if (hooks.allowPromptInjection === true) {
+    return "enabled";
+  }
+  return "unset";
+}
+
+function readPromptInjectionStateFromConfigFile(): PromptInjectionConfigState {
+  const cfgPath = resolveOpenClawConfigPath();
+  if (!existsSync(cfgPath)) {
+    return "unset";
+  }
+  try {
+    const raw = readFileSync(cfgPath, "utf-8");
+    const cfg = JSON.parse(raw) as Record<string, any>;
+    return readPromptInjectionConfigState(cfg);
+  } catch {
+    return "unset";
+  }
+}
+
 function backupStamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
@@ -222,6 +256,8 @@ async function promptIfNeeded(params: {
   const nonInteractive = Boolean(params.options.nonInteractive);
   const skipConfig = Boolean(params.options.skipConfig);
   let skipAgentsPatch = Boolean(params.options.skipAgentsPatch);
+  let rotateDbPassword = Boolean(params.options.rotateDbPassword);
+  let enablePromptInjection = Boolean(params.options.enablePromptInjection);
 
   let adminUrl = params.options.adminUrl?.trim() || defaults.adminUrl;
   let dbName = params.options.dbName?.trim() || defaults.dbName;
@@ -292,6 +328,29 @@ async function promptIfNeeded(params: {
       } else if (!update) {
         skipAgentsPatch = true;
       }
+
+      const existingPromptInjectionState = update ? readPromptInjectionStateFromConfigFile() : "unset";
+      if (update && !enablePromptInjection && existingPromptInjectionState === "disabled") {
+        const promptInjectionAnswer = (
+          await rl.question(
+            "Enable hooks.allowPromptInjection in openclaw.json for DB-backed daily startup injection if it is currently false? [Y/n]: ",
+          )
+        )
+          .trim()
+          .toLowerCase();
+        enablePromptInjection = promptInjectionAnswer ? !["n", "no"].includes(promptInjectionAnswer) : true;
+      }
+
+      if (dbPassword) {
+        const rotateAnswer = (
+          await rl.question(
+            `If user "${dbUser}" already exists, rotate its password? [y/N]: `,
+          )
+        )
+          .trim()
+          .toLowerCase();
+        rotateDbPassword = rotateAnswer ? ["y", "yes"].includes(rotateAnswer) : false;
+      }
     } finally {
       rl.close();
     }
@@ -312,10 +371,12 @@ async function promptIfNeeded(params: {
     dbName,
     dbUser,
     dbPassword,
+    rotateDbPassword,
     schema,
     workspaceDir,
     skipConfig: Boolean(params.options.skipConfig),
     skipAgentsPatch,
+    enablePromptInjection,
     nonInteractive,
   };
 }
@@ -325,7 +386,8 @@ async function ensureDatabaseAndRole(params: {
   dbName: string;
   dbUser: string;
   dbPassword: string;
-}): Promise<{ databaseExists: boolean; userExists: boolean }> {
+  rotateDbPassword: boolean;
+}): Promise<{ databaseExists: boolean; userExists: boolean; passwordChanged: boolean }> {
   const client = new Client({ connectionString: params.adminUrl });
   await client.connect();
   try {
@@ -337,16 +399,19 @@ async function ensureDatabaseAndRole(params: {
 
     const userRows = await client.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [params.dbUser]);
     const userExists = (userRows.rowCount ?? 0) > 0;
+    let passwordChanged = false;
     if (!userExists) {
       await client.query(`CREATE USER ${quoteIdentifier(params.dbUser)} WITH LOGIN PASSWORD '${params.dbPassword.replaceAll("'", "''")}'`);
-    } else {
+      passwordChanged = true;
+    } else if (params.rotateDbPassword) {
       await client.query(`ALTER USER ${quoteIdentifier(params.dbUser)} WITH PASSWORD '${params.dbPassword.replaceAll("'", "''")}'`);
+      passwordChanged = true;
     }
     await client.query(`ALTER DATABASE ${quoteIdentifier(params.dbName)} OWNER TO ${quoteIdentifier(params.dbUser)}`);
     await client.query(`GRANT CONNECT ON DATABASE ${quoteIdentifier(params.dbName)} TO ${quoteIdentifier(params.dbUser)}`);
     await client.query(`GRANT CREATE ON DATABASE ${quoteIdentifier(params.dbName)} TO ${quoteIdentifier(params.dbUser)}`);
 
-    return { databaseExists, userExists };
+    return { databaseExists, userExists, passwordChanged };
   } finally {
     await client.end();
   }
@@ -414,18 +479,30 @@ async function ensureSchemaAndGrants(params: {
 function updateOpenClawConfig(params: {
   dbName: string;
   dbUser: string;
-  dbPassword: string;
+  dbPassword?: string;
   adminUrl: string;
   schema: string | undefined;
   workspaceDir: string | undefined;
-}): { path: string; updated: boolean } {
+  enablePromptInjection: boolean;
+}): {
+  path: string;
+  updated: boolean;
+  promptInjectionBefore: PromptInjectionConfigState;
+  promptInjectionAfter: PromptInjectionConfigState;
+} {
   const cfgPath = resolveOpenClawConfigPath();
   if (!existsSync(cfgPath)) {
-    return { path: cfgPath, updated: false };
+    return {
+      path: cfgPath,
+      updated: false,
+      promptInjectionBefore: "unset",
+      promptInjectionAfter: "unset",
+    };
   }
 
   const raw = readFileSync(cfgPath, "utf-8");
   const cfg = JSON.parse(raw) as Record<string, any>;
+  const promptInjectionBefore = readPromptInjectionConfigState(cfg);
   const parsedAdmin = new URL(params.adminUrl);
   const host = parsedAdmin.hostname || "localhost";
   const port = parsedAdmin.port ? Number(parsedAdmin.port) : 5432;
@@ -437,20 +514,40 @@ function updateOpenClawConfig(params: {
   cfg.plugins.entries.anchorclaw ??= {};
   cfg.plugins.entries.anchorclaw.enabled = true;
   cfg.plugins.entries.anchorclaw.config ??= {};
-  cfg.plugins.entries.anchorclaw.config.postgres = {
+  const existingPostgresConfig = cfg.plugins.entries.anchorclaw.config.postgres ?? {};
+  const nextPostgresConfig: Record<string, unknown> = {
+    ...existingPostgresConfig,
     host,
     port,
     database: params.dbName,
     user: params.dbUser,
-    password: params.dbPassword,
-    ...(params.schema ? { schema: params.schema } : {}),
   };
+  if (params.schema) {
+    nextPostgresConfig.schema = params.schema;
+  } else {
+    delete nextPostgresConfig.schema;
+  }
+  if (typeof params.dbPassword === "string") {
+    nextPostgresConfig.password = params.dbPassword;
+  }
+  cfg.plugins.entries.anchorclaw.config.postgres = nextPostgresConfig;
   if (params.workspaceDir) {
     cfg.plugins.entries.anchorclaw.config.workspaceDir = params.workspaceDir;
   }
+  if (params.enablePromptInjection) {
+    cfg.plugins.entries.anchorclaw.hooks ??= {};
+    cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection = true;
+  }
+
+  const promptInjectionAfter = readPromptInjectionConfigState(cfg);
 
   writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
-  return { path: cfgPath, updated: true };
+  return {
+    path: cfgPath,
+    updated: true,
+    promptInjectionBefore,
+    promptInjectionAfter,
+  };
 }
 
 export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Promise<void> {
@@ -464,6 +561,7 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     dbName: options.dbName,
     dbUser: options.dbUser,
     dbPassword: options.dbPassword,
+    rotateDbPassword: options.rotateDbPassword,
   });
   await ensureSchemaAndGrants({
     adminUrl: options.adminUrl,
@@ -472,15 +570,17 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     schema: options.schema,
   });
 
-  let configUpdate: { path: string; updated: boolean } | undefined;
+  let configUpdate: ReturnType<typeof updateOpenClawConfig> | undefined;
   if (!options.skipConfig) {
+    const shouldWriteConfigPassword = !dbState.userExists || dbState.passwordChanged;
     configUpdate = updateOpenClawConfig({
       dbName: options.dbName,
       dbUser: options.dbUser,
-      dbPassword: options.dbPassword,
+      dbPassword: shouldWriteConfigPassword ? options.dbPassword : undefined,
       adminUrl: options.adminUrl,
       schema: options.schema,
       workspaceDir: options.workspaceDir,
+      enablePromptInjection: options.enablePromptInjection,
     });
   }
 
@@ -493,11 +593,21 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
   console.log(`- database: ${options.dbName} (${dbState.databaseExists ? "already existed" : "created"})`);
   console.log(`- user: ${options.dbUser} (${dbState.userExists ? "already existed" : "created"})`);
   console.log(`- schema: ${options.schema ?? "(default search_path/public fallback)"}`);
-  console.log(`- password: ${options.dbPassword}`);
+  if (!dbState.userExists) {
+    console.log("- password: created for new user");
+  } else if (dbState.passwordChanged) {
+    console.log("- password: rotated for existing user");
+  } else {
+    console.log("- password: preserved for existing user");
+  }
   if (!options.schema) {
     console.warn(
       'Warning: no schema configured; runtime will use default PostgreSQL search_path (commonly public).',
     );
+  }
+  if (dbState.userExists && !dbState.passwordChanged) {
+    console.warn(`Warning: User "${options.dbUser}" already exists. Existing database password was preserved.`);
+    console.warn("Warning: openclaw.json password was left unchanged.");
   }
   if (options.skipConfig) {
     console.log("- config: skipped (--skip-config)");
@@ -505,6 +615,15 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     console.log(`- config: updated ${configUpdate.path}`);
   } else if (configUpdate) {
     console.log(`- config: not found (${configUpdate.path})`);
+  }
+  if (!options.skipConfig && configUpdate?.updated) {
+    if (configUpdate.promptInjectionAfter === "enabled" && configUpdate.promptInjectionBefore !== "enabled") {
+      console.log("- hooks.allowPromptInjection: enabled for DB-backed daily startup injection");
+    } else if (configUpdate.promptInjectionBefore === "disabled" && configUpdate.promptInjectionAfter === "disabled") {
+      console.warn("Warning: hooks.allowPromptInjection is false in openclaw.json.");
+      console.warn("Warning: AnchorClaw daily startup injection will stay degraded until prompt injection is enabled.");
+      console.warn("Warning: Re-run `openclaw anchorclaw setup --enable-prompt-injection` to enable it automatically.");
+    }
   }
   if (options.skipConfig) {
     console.log("- AGENTS.md patch: skipped (config update disabled)");

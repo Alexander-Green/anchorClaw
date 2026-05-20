@@ -3,11 +3,11 @@ import { memorySearchDb } from "./search.js";
 
 describe("memorySearchDb ranking contract", () => {
   it("uses exact-only boost and does not use broad LIKE boost", async () => {
-    let capturedSql = "";
+    const capturedSql: string[] = [];
     let capturedParams: unknown[] = [];
     const pool = {
       query: async (sql: string, params: unknown[]) => {
-        capturedSql = sql;
+        capturedSql.push(sql);
         capturedParams = params;
         return { rows: [] as any[] };
       },
@@ -22,18 +22,19 @@ describe("memorySearchDb ranking contract", () => {
       maxResults: 5,
     });
 
-    expect(capturedSql).toContain("WHEN lower(coalesce(title, '')) = lower($3) THEN 3.0");
-    expect(capturedSql).toContain("WHEN lower(content) = lower($3) THEN 2.5");
-    expect(capturedSql).not.toContain("LIKE ('%' || lower($3) || '%')");
-    expect(capturedSql).toContain("ORDER BY score DESC, importance DESC, updated_at DESC, id ASC");
+    expect(capturedSql[0]).toContain("WHEN lower(coalesce(title, '')) = lower($3) THEN 3.0");
+    expect(capturedSql[0]).toContain("WHEN lower(content) = lower($3) THEN 2.5");
+    expect(capturedSql[0]).not.toContain("LIKE ('%' || lower($3) || '%')");
+    expect(capturedSql[0]).toContain("ORDER BY score DESC, importance DESC, updated_at DESC, id ASC");
+    expect(capturedSql[1]).toContain("FROM memory_daily_entries");
     expect(capturedParams).toEqual(["u1", "w1", "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515", 5]);
   });
 
   it("keeps lexical FTS ranking path for broad queries", async () => {
-    let capturedSql = "";
+    const capturedSql: string[] = [];
     const pool = {
       query: async (sql: string) => {
-        capturedSql = sql;
+        capturedSql.push(sql);
         return { rows: [] as any[] };
       },
     } as any;
@@ -47,9 +48,9 @@ describe("memorySearchDb ranking contract", () => {
       maxResults: 10,
     });
 
-    expect(capturedSql).toContain("plainto_tsquery('simple', $3)");
-    expect(capturedSql).toContain("ts_rank_cd(search_vector, plainto_tsquery('simple', $3))");
-    expect(capturedSql).not.toContain("LIKE ('%' || lower($3) || '%')");
+    expect(capturedSql[0]).toContain("plainto_tsquery('simple', $3)");
+    expect(capturedSql[0]).toContain("ts_rank_cd(search_vector, plainto_tsquery('simple', $3))");
+    expect(capturedSql[0]).not.toContain("LIKE ('%' || lower($3) || '%')");
   });
 
   it("falls back to relaxed phrase/token queries when strict multi-term FTS returns no hits", async () => {
@@ -107,5 +108,93 @@ describe("memorySearchDb ranking contract", () => {
       "anchorclaw post-restart smoke",
     ]);
     expect(hits[0]?.relaxedQuery).toBe("active memory");
+  });
+
+  it("returns imported daily hits in memory corpus with legacy daily path", async () => {
+    const pool = {
+      query: async (sql: string, params: unknown[]) => {
+        if (String(sql).includes("FROM memory_items")) {
+          return { rows: [] as any[] };
+        }
+        if (String(sql).includes("FROM memory_daily_entries")) {
+          return {
+            rows: [
+              {
+                id: "daily-1",
+                path: "memory/2026-05-20.md",
+                content: "today we discussed daily memory behavior",
+                updated_at: "2026-05-20T09:00:00.000Z",
+                score: 0.8,
+              },
+            ],
+          };
+        }
+        return { rows: [] as any[] };
+      },
+    } as any;
+
+    const hits = await memorySearchDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: { maxResults: 10 } as any,
+      query: "daily memory",
+      maxResults: 5,
+    });
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      path: "memory/2026-05-20.md",
+      kind: "daily-note",
+      title: "memory/2026-05-20.md",
+    });
+  });
+
+  it("keeps durable hits ahead of daily hits on equal score", async () => {
+    const pool = {
+      query: async (sql: string) => {
+        if (String(sql).includes("FROM memory_items")) {
+          return {
+            rows: [
+              {
+                id: "item-1",
+                title: "Team decision",
+                type: "note",
+                content: "team decision content",
+                updated_at: "2026-05-20T10:00:00.000Z",
+                score: 1,
+              },
+            ],
+          };
+        }
+        if (String(sql).includes("FROM memory_daily_entries")) {
+          return {
+            rows: [
+              {
+                id: "daily-1",
+                path: "memory/2026-05-20.md",
+                content: "team decision content",
+                updated_at: "2026-05-20T11:00:00.000Z",
+                score: 1,
+              },
+            ],
+          };
+        }
+        return { rows: [] as any[] };
+      },
+    } as any;
+
+    const hits = await memorySearchDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: { maxResults: 10 } as any,
+      query: "team decision",
+      maxResults: 5,
+    });
+
+    expect(hits).toHaveLength(2);
+    expect(hits[0]?.path).toBe("db-memory/items/item-1.md");
+    expect(hits[1]?.path).toBe("memory/2026-05-20.md");
   });
 });

@@ -1,6 +1,6 @@
 export type DbMemoryPath =
   | { kind: "item"; id: string }
-  | { kind: "event"; id: string }
+  | { kind: "daily"; id: string }
   | { kind: "export"; name: "MEMORY.md" };
 
 function isUuidLike(value: string): boolean {
@@ -23,13 +23,13 @@ export function parseDbMemoryPath(pathValue: string): DbMemoryPath | null {
     return isUuidLike(id) ? { kind: "item", id } : null;
   }
 
-  if (parts[1] === "events" && parts.length === 3) {
+  if (parts[1] === "daily" && parts.length === 3) {
     const filename = parts[2]!;
     if (!filename.endsWith(".md")) {
       return null;
     }
     const id = filename.slice(0, -3);
-    return isUuidLike(id) ? { kind: "event", id } : null;
+    return isUuidLike(id) ? { kind: "daily", id } : null;
   }
 
   if (parts[1] === "export" && parts.length === 3 && parts[2] === "MEMORY.md") {
@@ -38,4 +38,3 @@ export function parseDbMemoryPath(pathValue: string): DbMemoryPath | null {
 
   return null;
 }
-

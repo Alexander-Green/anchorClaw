@@ -8,9 +8,9 @@ describe("parseDbMemoryPath", () => {
     expect(parseDbMemoryPath(`db-memory/items/${uuid}.md`)).toEqual({ kind: "item", id: uuid });
   });
 
-  it("parses event path", () => {
-    const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-    expect(parseDbMemoryPath(`db-memory/events/${uuid}.md`)).toEqual({ kind: "event", id: uuid });
+  it("parses daily path", () => {
+    const uuid = "99999999-2222-3333-4444-555555555555";
+    expect(parseDbMemoryPath(`db-memory/daily/${uuid}.md`)).toEqual({ kind: "daily", id: uuid });
   });
 
   it("parses export path", () => {
@@ -25,12 +25,12 @@ describe("parseDbMemoryPath", () => {
   it("rejects non-md items/events", () => {
     const uuid = "11111111-2222-3333-4444-555555555555";
     expect(parseDbMemoryPath(`db-memory/items/${uuid}.txt`)).toBeNull();
-    expect(parseDbMemoryPath(`db-memory/events/${uuid}.txt`)).toBeNull();
+    expect(parseDbMemoryPath(`db-memory/daily/${uuid}.txt`)).toBeNull();
   });
 
   it("rejects invalid uuid", () => {
     expect(parseDbMemoryPath("db-memory/items/not-a-uuid.md")).toBeNull();
-    expect(parseDbMemoryPath("db-memory/events/not-a-uuid.md")).toBeNull();
+    expect(parseDbMemoryPath("db-memory/daily/not-a-uuid.md")).toBeNull();
   });
 
   it("rejects unknown roots and shapes", () => {
@@ -40,4 +40,3 @@ describe("parseDbMemoryPath", () => {
     expect(parseDbMemoryPath("db-memory/unknown/123.md")).toBeNull();
   });
 });
-

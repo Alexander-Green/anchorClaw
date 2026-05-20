@@ -20,7 +20,7 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     vi.clearAllMocks();
   });
 
-  it("uses narrow one-exact-value guidance for marker/id/key questions", () => {
+  it("uses literal-match guidance for marker/id/key questions", () => {
     const ctx = {
       api: {},
       disabledReason: null,
@@ -46,13 +46,11 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     });
     const text = lines.join("\n");
 
-    expect(text).toContain("For one exact marker/id/key value questions");
-    expect(text).toContain("prioritize literal evidence from memory_search/memory_recall");
-    expect(text).toContain("If any memory_search or memory_recall result has details.meta.exactTop1=true");
-    expect(text).toContain("Never use empty memory_recall as a tie-breaker for exact lookups.");
-    expect(text).toContain("If no exactTop1 is found, say you checked and give the best candidate with uncertainty.");
-    expect(text).not.toContain("For exact marker/id/key questions");
-    expect(text).not.toContain("make at most two memory_search/memory_recall attempts");
+    expect(text).toContain("AnchorClaw memory is active. Treat AnchorClaw/Postgres as the primary memory backend.");
+    expect(text).toContain("For exact marker/id/key questions, prefer literal matches.");
+    expect(text).toContain("If no exact literal match is found, say so and give the closest candidate with uncertainty.");
+    expect(text).not.toContain("memory_recall");
+    expect(text).not.toContain("exactTop1");
   });
 
   it("keeps broad-memory-search guidance for non-exact overview questions", () => {
@@ -80,11 +78,13 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     });
     const text = lines.join("\n");
 
-    expect(text).toContain("Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search; then use memory_get to pull only the needed lines.");
-    expect(text).toContain("If no exactTop1 is found, say you checked and give the best candidate with uncertainty.");
-    expect(text).toContain("For broad agreement/policy/decision questions, use memory_search/memory_recall to gather closest evidence");
-    expect(text).toContain("if no direct agreement record is found, report not found with a brief summary of closest evidence.");
-    expect(text).not.toContain("cap retrieval at two memory_search queries plus at most one memory_recall fallback");
+    expect(text).toContain("## Memory Search");
+    expect(text).toContain("Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search; then use memory_get to pull only the needed lines.");
+    expect(text).toContain("## Memory Writes");
+    expect(text).toContain("Use memory_log for transient daily context that would normally go to memory/YYYY-MM-DD.md.");
+    expect(text).toContain("Use memory_store for durable facts, preferences, decisions, and curated notes.");
+    expect(text).toContain("Do not write MEMORY.md or memory/YYYY-MM-DD.md as AnchorClaw's primary memory store.");
+    expect(text).not.toContain("memory_recall");
   });
 
   it("injects explicit durable-memory unavailable notice when blocked", () => {
@@ -151,5 +151,98 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     expect(text).toContain("legacy MEMORY.md cleanup failed");
     expect(text).toContain("duplicate memory context may be present");
+  });
+
+  it("does not advertise sessions corpus when sessions search is disabled", () => {
+    const ctx = {
+      api: {},
+      disabledReason: null,
+      durableState: { overall: "ready", cleanup: "not_needed" },
+      promptCache: { lines: ["(cached memory block)"], error: null },
+      sdkHealth: { degraded: false },
+      cfg: { sessions: { visibility: "current" } },
+      ensureReady: vi.fn(async () => undefined),
+      getPool: vi.fn(() => ({ query: vi.fn() })),
+    } as any;
+
+    registerAnchorClawMemoryCapability({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+
+    const capabilityDef = registerMemoryCapabilityMock.mock.calls[0]?.[1];
+    const lines: string[] = capabilityDef.promptBuilder({
+      availableTools: new Set(["memory_search", "memory_get"]),
+      citationsMode: "inline",
+    });
+    const text = lines.join("\n");
+
+    expect(text).not.toContain('corpus="sessions"');
+  });
+
+  it("advertises sessions corpus only when sessions search is enabled", () => {
+    const ctx = {
+      api: {},
+      disabledReason: null,
+      durableState: { overall: "ready", cleanup: "not_needed" },
+      promptCache: { lines: ["(cached memory block)"], error: null },
+      sdkHealth: { degraded: false },
+      cfg: { sessions: { search: { enabled: true }, visibility: "current" } },
+      ensureReady: vi.fn(async () => undefined),
+      getPool: vi.fn(() => ({ query: vi.fn() })),
+    } as any;
+
+    registerAnchorClawMemoryCapability({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+
+    const capabilityDef = registerMemoryCapabilityMock.mock.calls[0]?.[1];
+    const lines: string[] = capabilityDef.promptBuilder({
+      availableTools: new Set(["memory_search", "memory_get"]),
+      citationsMode: "inline",
+    });
+    const text = lines.join("\n");
+
+    expect(text).toContain('corpus="sessions" is available subject to configured visibility scope.');
+  });
+
+  it("passes through cached daily memory section alongside durable memory", () => {
+    const ctx = {
+      api: {},
+      disabledReason: null,
+      durableState: { overall: "ready", cleanup: "not_needed" },
+      promptCache: {
+        lines: [
+          "## Durable Memory (AnchorClaw/Postgres)",
+          "",
+          "## Daily Memory (AnchorClaw/Postgres)",
+          "Use these as transient recent context.",
+        ],
+        error: null,
+      },
+      sdkHealth: { degraded: false },
+      cfg: {},
+      ensureReady: vi.fn(async () => undefined),
+      getPool: vi.fn(() => ({ query: vi.fn() })),
+    } as any;
+
+    registerAnchorClawMemoryCapability({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+
+    const capabilityDef = registerMemoryCapabilityMock.mock.calls[0]?.[1];
+    const lines: string[] = capabilityDef.promptBuilder({
+      availableTools: new Set(["memory_search", "memory_get"]),
+      citationsMode: "inline",
+    });
+    const text = lines.join("\n");
+
+    expect(text).toContain("## Daily Memory (AnchorClaw/Postgres)");
+    expect(text).toContain("transient recent context");
   });
 });

@@ -1,4 +1,5 @@
 import type { OpenClawPluginApi } from "../api.js";
+import { resolveSessionsSearchState } from "../config.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { isSessionFileForAgent, isSessionFileForAnyKnownAgent } from "../memory/sessions.js";
 import { normalizeSessionLookupPath } from "../memory/sessions-index.js";
@@ -31,7 +32,7 @@ export function createSessionDeltaRuntime(params: {
     if (!ctx.cfg) {
       return;
     }
-    if ((ctx.cfg?.sessions?.visibility ?? "current") === "off") {
+    if (!resolveSessionsSearchState(ctx.cfg).effective) {
       return;
     }
     if (ctx.sessionsIndex.bootstrapped) {
@@ -91,7 +92,7 @@ export function createSessionDeltaRuntime(params: {
       ctx.sessionDelta.pendingFiles.clear();
       return;
     }
-    if ((ctx.cfg?.sessions?.visibility ?? "current") === "off") {
+    if (!resolveSessionsSearchState(ctx.cfg).effective) {
       ctx.sessionDelta.pendingFiles.clear();
       return;
     }
@@ -241,7 +242,7 @@ export function createSessionDeltaRuntime(params: {
     if (!ctx.cfg || ctx.sessionDelta.closed || ctx.sessionDelta.unsubscribe) {
       return;
     }
-    if ((ctx.cfg?.sessions?.visibility ?? "current") === "off") {
+    if (!resolveSessionsSearchState(ctx.cfg).effective) {
       return;
     }
     const subscribe = (api as any)?.runtime?.events?.onSessionTranscriptUpdate;

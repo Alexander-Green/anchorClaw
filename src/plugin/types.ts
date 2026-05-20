@@ -50,11 +50,24 @@ export type MemoryStatusCheckResult = {
     latencyMs?: number;
     schemaOk?: boolean;
     migrationVersion?: string | null;
+    dailySchemaOk?: boolean;
     error?: string;
+  };
+  daily?: {
+    source: "db";
+    injectionMode: "first_turn";
+    promptInjectionAllowed: boolean;
+    startupPromptEnabled: boolean;
+    startupPromptEffective: boolean;
+    readCompatibilityPath: "db-first";
+    importMode: "canonical_table";
   };
   sessions?: {
     enabled: boolean;
+    searchEnabled?: boolean;
+    effectiveEnabled?: boolean;
     visibility: "off" | "current" | "visible";
+    reasonCode?: "search_disabled" | "visibility_off";
     stateDir?: string;
     agentSessionsDir?: string;
     exists?: boolean;

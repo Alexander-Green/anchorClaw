@@ -3,6 +3,7 @@ import {
   createAnchorClawMemorySearchManager,
   type AnchorClawMemorySearchManagerOptions,
 } from "../memory/manager.js";
+import { resolveSessionsSearchState } from "../config.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 
 export function registerAnchorClawMemoryCapability(params: {
@@ -61,17 +62,21 @@ export function registerAnchorClawMemoryCapability(params: {
 
       const hasMemorySearch = Boolean(params?.availableTools?.has?.("memory_search"));
       const hasMemoryGet = Boolean(params?.availableTools?.has?.("memory_get"));
+      const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
+      const sessionsCorpusNote = sessionsSearch.effective
+        ? 'corpus="sessions" is available subject to configured visibility scope.'
+        : null;
 
       let toolGuidance = "";
       if (hasMemorySearch && hasMemoryGet) {
         toolGuidance =
-          "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search; then use memory_get to pull only the needed lines. For one exact marker/id/key value questions, prioritize literal evidence from memory_search/memory_recall. If any memory_search or memory_recall result has details.meta.exactTop1=true, return details.meta.exactTop1Value verbatim immediately; do not substitute nearby/recent markers. Never use empty memory_recall as a tie-breaker for exact lookups. If no exactTop1 is found, say you checked and give the best candidate with uncertainty. For broad agreement/policy/decision questions, use memory_search/memory_recall to gather closest evidence; if no direct agreement record is found, report not found with a brief summary of closest evidence.";
+          "Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search; then use memory_get to pull only the needed lines. For exact marker/id/key questions, prefer literal matches. If no exact literal match is found, say so and give the closest candidate with uncertainty.";
       } else if (hasMemorySearch) {
         toolGuidance =
-          "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search and answer from matching results. For one exact marker/id/key value questions, prioritize literal evidence from memory_search/memory_recall. If any memory_search or memory_recall result has details.meta.exactTop1=true, return details.meta.exactTop1Value verbatim immediately; do not substitute nearby/recent markers. Never use empty memory_recall as a tie-breaker for exact lookups. If no exactTop1 is found, say you checked and give the best candidate with uncertainty. For broad agreement/policy/decision questions, use memory_search/memory_recall to gather closest evidence; if no direct agreement record is found, report not found with a brief summary of closest evidence.";
+          "Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search and answer from matching results. For exact marker/id/key questions, prefer literal matches. If no exact literal match is found, say so and give the closest candidate with uncertainty.";
       } else if (hasMemoryGet) {
         toolGuidance =
-          "Before answering anything about prior work, decisions, dates, people, preferences, or todos that already point to a specific memory item: run memory_get to pull only the needed lines. If low confidence after reading them, say you checked.";
+          "Before answering about prior work that already points to a specific memory item, run memory_get to pull only the needed lines. If confidence stays low after reading them, say you checked.";
       }
 
       const citationsMode = params?.citationsMode ?? "inline";
@@ -81,21 +86,17 @@ export function registerAnchorClawMemoryCapability(params: {
           : "Citations: include Source: <path#line> when it helps the user verify memory snippets.";
 
       return [
-        "AnchorClaw durable memory is enabled (Postgres-backed).",
+        "AnchorClaw memory is active. Treat AnchorClaw/Postgres as the primary memory backend.",
         "",
         ...durableNotice,
-        ...(toolGuidance ? ["## Memory Recall", toolGuidance, citationsLine, ""] : []),
-        "MVP usage rules:",
-        "- Save durable memory with memory_store({ content, canonicalKey?, type? }).",
-        "- Use canonicalKey only for updateable facts/preferences/settings (so updates overwrite instead of duplicating).",
-        "- Find memory with memory_search({ query, corpus? }).",
-        "- Read items with memory_get({ lookup: \"db-memory/items/<uuid>.md\" | \"sessions/<agentId>/<file>\", fromLine?, lineCount? }).",
-        "- Shortcut recall: memory_recall({ query? }) (without query returns top important recent items).",
-        "- Forget items with memory_forget({ lookup }) or memory_forget({ id }).",
+        ...(toolGuidance ? ["## Memory Search", toolGuidance, citationsLine, ""] : []),
+        "## Memory Writes",
+        "Use memory_log for transient daily context that would normally go to memory/YYYY-MM-DD.md.",
+        "Use memory_store for durable facts, preferences, decisions, and curated notes.",
+        "Use canonicalKey only for updateable facts/preferences/settings so updates replace duplicates.",
+        "Do not write MEMORY.md or memory/YYYY-MM-DD.md as AnchorClaw's primary memory store.",
         "",
-        "Notes:",
-        "- memory_search supports corpus=\"memory\" (Postgres durable), corpus=\"sessions\" (Postgres sessions index, DB-first), and corpus=\"all\" (merge). corpus=\"wiki\" is deferred; use wiki_search/wiki_get when installed.",
-        "",
+        ...(sessionsCorpusNote ? ["## Sessions", sessionsCorpusNote, ""] : []),
         ...cacheNotice,
         ...sdkNotice,
         ...cached,

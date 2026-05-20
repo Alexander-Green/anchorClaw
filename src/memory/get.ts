@@ -2,6 +2,7 @@ import type { PostgresPool } from "../postgres.js";
 import { parseDbMemoryPath } from "./paths.js";
 import type { MemoryLimits } from "./limits.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
+import { getDailyEntryById, getDailyEntryByPath } from "./daily.js";
 import { memoryGetSessionFile } from "./sessions.js";
 import { memoryGetSessionFromIndexDb, normalizeSessionLookupPath } from "./sessions-index.js";
 import { syncSessionsIndexDb } from "./sessions-index-sync.js";
@@ -69,14 +70,48 @@ export async function memoryGetFromDb(params: {
   }
 
   if (rawLookup.startsWith("memory/")) {
-    // Best-effort compatibility: allow reading daily memory files directly when requested.
-    const workspaceDir = params.workspaceDir ? path.resolve(params.workspaceDir) : null;
-    if (!workspaceDir) {
-      return { ok: false, disabled: true, error: "workspaceDir unavailable for memory/* reads" };
-    }
     const normalized = rawLookup.replaceAll("\\", "/");
     if (normalized.includes("..") || normalized.startsWith("/") || normalized === "memory") {
       return { ok: false, disabled: true, error: "unsupported lookup path" };
+    }
+
+    // DB-first compatibility: if this legacy daily file was already imported,
+    // read the canonical DB copy instead of the workspace file.
+    const importedRow = await getDailyEntryByPath({
+      pool: params.pool,
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      path: normalized,
+    });
+    if (importedRow) {
+      const fromLine = params.fromLine ?? 1;
+      const lineCount = params.lineCount ?? params.limits.getDefaultLines;
+      const read = buildMemoryReadResult({
+        content: importedRow.content,
+        relPath: normalized,
+        from: fromLine,
+        lines: lineCount,
+        defaultLines: params.limits.getDefaultLines,
+        maxChars: params.limits.getMaxChars,
+      });
+      return {
+        ok: true,
+        corpus: "memory",
+        path: normalized,
+        id: importedRow.id,
+        kind: "daily-note",
+        content: read.text,
+        fromLine: read.from,
+        lineCount: read.lines,
+        updatedAt: importedRow.updatedAt,
+      };
+    }
+
+    // Legacy fallback for workspaces that still have file-based daily memory
+    // but have not imported or migrated that file into DB yet.
+    const workspaceDir = params.workspaceDir ? path.resolve(params.workspaceDir) : null;
+    if (!workspaceDir) {
+      return { ok: false, disabled: true, error: "workspaceDir unavailable for memory/* reads" };
     }
 
     const absPath = path.resolve(workspaceDir, normalized);
@@ -252,28 +287,19 @@ export async function memoryGetFromDb(params: {
     };
   }
 
-  if (parsed.kind === "event") {
-    const result = await params.pool.query<{
-      id: string;
-      content: string;
-      event_type: string;
-      created_at: string;
-    }>(
-      `
-      SELECT id, content, event_type, created_at
-      FROM memory_events
-      WHERE user_id = $1 AND workspace_id = $2 AND id = $3
-      LIMIT 1
-    `,
-      [params.userId, params.workspaceId, parsed.id],
-    );
-    const row = result.rows[0];
+  if (parsed.kind === "daily") {
+    const row = await getDailyEntryById({
+      pool: params.pool,
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      id: parsed.id,
+    });
     if (!row) {
       return { ok: false, error: "not found" };
     }
     const read = buildMemoryReadResult({
       content: row.content,
-      relPath: `db-memory/events/${row.id}.md`,
+      relPath: `db-memory/daily/${row.id}.md`,
       from: fromLine,
       lines: lineCount,
       defaultLines: params.limits.getDefaultLines,
@@ -282,13 +308,14 @@ export async function memoryGetFromDb(params: {
     return {
       ok: true,
       corpus: "memory",
-      path: `db-memory/events/${row.id}.md`,
+      path: `db-memory/daily/${row.id}.md`,
       id: row.id,
-      kind: row.event_type,
+      title: row.path,
+      kind: "daily-note",
       content: read.text,
       fromLine: read.from,
       lineCount: read.lines,
-      updatedAt: row.created_at,
+      updatedAt: row.updatedAt,
     };
   }
 

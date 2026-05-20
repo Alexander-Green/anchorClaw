@@ -78,11 +78,23 @@ describe("anchorClawConfigSchema workspaceDir", () => {
 });
 
 describe("anchorClawConfigSchema sessions.visibility", () => {
-  it("defaults to sessions.visibility=current when sessions block is omitted", () => {
+  it("defaults to sessions.search.enabled=false and sessions.visibility=current when sessions block is omitted", () => {
     const parsed = anchorClawConfigSchema.parse(baseConfig());
+    expect(parsed.sessions?.search?.enabled).toBe(false);
     expect(parsed.sessions?.visibility).toBe("current");
     expect(parsed.sessions?.sync?.deltaBytes).toBe(100_000);
     expect(parsed.sessions?.sync?.deltaMessages).toBe(50);
+  });
+
+  it("accepts sessions.search.enabled=true", () => {
+    const parsed = anchorClawConfigSchema.parse({
+      ...baseConfig(),
+      sessions: {
+        search: { enabled: true },
+      },
+    });
+    expect(parsed.sessions?.search?.enabled).toBe(true);
+    expect(parsed.sessions?.visibility).toBe("current");
   });
 
   it("accepts visibility=current|off|visible", () => {
@@ -112,6 +124,17 @@ describe("anchorClawConfigSchema sessions.visibility", () => {
         sessions: { visibility: "all" },
       }),
     ).toThrow("sessions.visibility must be one of: current, off, visible");
+  });
+
+  it("rejects non-boolean sessions.search.enabled", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        sessions: {
+          search: { enabled: "yes" as any },
+        },
+      }),
+    ).toThrow("sessions.search.enabled must be a boolean");
   });
 });
 
@@ -197,4 +220,3 @@ describe("anchorClawConfigSchema maintenance", () => {
     expect(parsed.maintenance?.extractor?.maxCharsPerRun).toBe(20000);
   });
 });
-

@@ -1,4 +1,5 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
+import { resolveSessionsSearchState } from "../../config.js";
 import { memoryGetFromDb } from "../../memory/get.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { canAccessSessionPathByVisibility } from "../../memory/sessions-visibility.js";
@@ -60,11 +61,21 @@ export function registerMemoryGetTool({ ctx }: ToolRegistrationParams) {
           details: { disabled: true, error: "lookup required" },
         };
       }
-      const sessionsVisibility = ctx.cfg?.sessions?.visibility ?? "current";
-      if (sessionsVisibility === "off" && lookup.trim().startsWith("sessions/")) {
+      const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
+      const sessionsVisibility = sessionsSearch.visibility;
+      if (!sessionsSearch.effective && lookup.trim().startsWith("sessions/")) {
         return {
-          content: [{ type: "text", text: "anchorclaw: sessions corpus is disabled by config (sessions.visibility=off)" }],
-          details: { disabled: true, error: "sessions corpus disabled", visibility: sessionsVisibility },
+          content: [{ type: "text", text: "anchorclaw: sessions source is unavailable until sessions.search.enabled=true" }],
+          details: {
+            disabled: true,
+            error: "sessions source unavailable",
+            sessions: {
+              configured: sessionsSearch.configured,
+              effective: sessionsSearch.effective,
+              visibility: sessionsSearch.visibility,
+              ...(sessionsSearch.reason ? { reason: sessionsSearch.reason } : {}),
+            },
+          },
         };
       }
       if (lookup.trim().startsWith("sessions/")) {

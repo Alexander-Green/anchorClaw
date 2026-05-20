@@ -13,6 +13,7 @@ import {
 } from "./constants.js";
 import { isTransientDbError } from "./db-errors.js";
 import { resolveUserAndWorkspaceScope } from "./identity.js";
+import { parseLogicalDateFromDailyPath } from "./memory/daily.js";
 import type { PostgresPool } from "./postgres.js";
 import type { DurableCleanupState, DurableImportState, DurableOverallState } from "./plugin/types.js";
 
@@ -761,22 +762,51 @@ async function importDailyMemory(params: {
     }
 
     try {
+      const logicalDate = parseLogicalDateFromDailyPath(relPath);
+      if (!logicalDate) {
+        throw new Error(`unsupported daily path ${relPath}`);
+      }
       const inserted = await params.pool.query<{ id: string }>(
         `
-        INSERT INTO memory_events (user_id, workspace_id, event_type, content, metadata, tags, created_by)
-        VALUES ($1, $2, 'import', $3, $4::jsonb, '{}'::text[], $5)
+        INSERT INTO memory_daily_entries (
+          user_id,
+          workspace_id,
+          logical_date,
+          path,
+          content,
+          content_sha256,
+          source_kind,
+          source_path,
+          metadata,
+          created_by
+        )
+        VALUES ($1, $2, $3::date, $4, $5, $6, 'legacy_import', $7, $8::jsonb, $9)
+        ON CONFLICT (user_id, workspace_id, path)
+        DO UPDATE SET
+          logical_date = EXCLUDED.logical_date,
+          content = EXCLUDED.content,
+          content_sha256 = EXCLUDED.content_sha256,
+          source_kind = EXCLUDED.source_kind,
+          source_path = EXCLUDED.source_path,
+          metadata = EXCLUDED.metadata,
+          updated_at = now(),
+          created_by = EXCLUDED.created_by
         RETURNING id
       `,
         [
           scope.userId,
           scope.workspaceId,
+          logicalDate,
+          relPath,
           content,
-          JSON.stringify({ legacy_file: relPath, legacy_sha256: digest }),
+          digest,
+          absPath,
+          JSON.stringify({ legacy_file: relPath, legacy_sha256: digest, absolute_path: absPath }),
           "anchorclaw-import",
         ],
       );
       if (!inserted.rows[0]?.id) {
-        throw new Error(`failed to import ${relPath} into memory_events`);
+        throw new Error(`failed to import ${relPath} into memory_daily_entries`);
       }
     } catch (error) {
       await removeImportRecord({
@@ -787,7 +817,7 @@ async function importDailyMemory(params: {
         sha256: digest,
       });
       params.api.logger.warn(
-        `anchorclaw: failed to import ${relPath} into memory_events (${error instanceof Error ? error.message : String(error)})`,
+        `anchorclaw: failed to import ${relPath} into memory_daily_entries (${error instanceof Error ? error.message : String(error)})`,
       );
     }
   }

@@ -1,4 +1,5 @@
 import type { PostgresPool } from "../postgres.js";
+import { queryPromptDailyEntries as queryDailyPromptEntries } from "./daily.js";
 
 // MVP: prompt injection only supports fact/note (MEMORY.md role).
 type MemoryItemType = "fact" | "note";
@@ -10,6 +11,15 @@ export type PromptMemoryItem = {
   content: string;
   importance: number;
   updatedAt: string;
+};
+
+export type PromptDailyEntry = {
+  id: string;
+  path: string;
+  logicalDate?: string;
+  content: string;
+  createdAt: string;
+  updatedAt?: string;
 };
 
 export async function queryPromptMemoryItems(params: {
@@ -42,6 +52,7 @@ export async function queryPromptMemoryItems(params: {
         ELSE 100
       END ASC,
       importance DESC,
+      CASE WHEN canonical_key IS NOT NULL THEN 0 ELSE 1 END ASC,
       updated_at DESC,
       id ASC
     LIMIT $3
@@ -64,6 +75,15 @@ export async function queryPromptMemoryItems(params: {
     importance: row.importance,
     updatedAt: row.updated_at,
   }));
+}
+
+export async function queryPromptDailyEntries(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+  limit: number;
+}): Promise<PromptDailyEntry[]> {
+  return queryDailyPromptEntries(params);
 }
 
 function truncate(value: string, maxChars: number): string {
@@ -223,4 +243,39 @@ export function buildPromptMemorySection(params: {
     finalLines.pop();
   }
   return finalLines;
+}
+
+export function buildPromptDailySection(params: {
+  entries: PromptDailyEntry[];
+  maxTotalChars: number;
+  maxPathChars: number;
+  maxEntryChars: number;
+}): string[] {
+  if (params.entries.length === 0) {
+    return [];
+  }
+
+  const lines: string[] = [];
+  lines.push("## Daily Memory (AnchorClaw/Postgres)");
+  lines.push("Use these as transient recent context. Prefer durable memory for stable facts/preferences.");
+  lines.push("");
+
+  let used = lines.join("\n").length;
+  for (const entry of params.entries) {
+    const pathLabel = truncate(entry.path.trim(), params.maxPathChars);
+    const body = truncate(entry.content.trim(), params.maxEntryChars);
+    const block = [`- ${pathLabel}`, `  ${body.replaceAll("\n", "\n  ")}`, ""].join("\n");
+    if (used + block.length > params.maxTotalChars) {
+      break;
+    }
+    lines.push(`- ${pathLabel}`);
+    lines.push(`  ${body.replaceAll("\n", "\n  ")}`);
+    lines.push("");
+    used += block.length;
+  }
+
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  return lines;
 }

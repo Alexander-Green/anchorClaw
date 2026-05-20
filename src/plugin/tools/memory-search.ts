@@ -1,6 +1,7 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
+import { resolveSessionsSearchState } from "../../config.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
-import { memorySearchDb } from "../../memory/search.js";
+import { memorySearchDailyDb, memorySearchDb } from "../../memory/search.js";
 import { memorySearchSessions } from "../../memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/sessions-index.js";
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
@@ -83,7 +84,7 @@ export function registerMemorySearchTool({
     name: "memory_search",
     label: "Memory Search",
     description:
-      "Search memory.\n\nBehavior contract:\n- corpus defaults to \"memory\" (durable items in Postgres).\n- For corpus=\"memory\", retrieval is lexical Postgres FTS (tsquery/ts_rank), not vector semantic retrieval.\n- corpus=\"sessions\" uses Postgres-backed sessions index (DB-first) and returns paths like sessions/<agentId>/<session>.jsonl.\n- Results contain synthetic paths. Use memory_get to read them.\n- If the top result is an exact literal match, content includes \"Top exact match: <value>\" and details.meta.exactTop1/exactTop1Value.\n- Do not claim semantic/vector retrieval unless details.meta explicitly reports it in a future implementation.",
+      "Search memory.\n\nBehavior contract:\n- corpus defaults to \"memory\" (durable items plus DB-backed daily memory).\n- For corpus=\"memory\", retrieval is lexical Postgres FTS (tsquery/ts_rank), not vector semantic retrieval.\n- corpus=\"daily\" searches DB-backed daily memory only.\n- corpus=\"sessions\" uses Postgres-backed sessions index (DB-first), returns paths like sessions/<agentId>/<session>.jsonl, and is opt-in via sessions.search.enabled=true.\n- Results contain synthetic paths. Use memory_get to read them.\n- If the top result is an exact literal match, content includes \"Top exact match: <value>\" and details.meta.exactTop1/exactTop1Value.\n- Do not claim semantic/vector retrieval unless details.meta explicitly reports it in a future implementation.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -91,8 +92,8 @@ export function registerMemorySearchTool({
         query: { type: "string", description: "Search query text." },
         corpus: {
           type: "string",
-          description: "Memory corpus (memory|sessions|all). Defaults to memory.",
-          enum: ["memory", "sessions", "all", "wiki"],
+          description: "Memory corpus (memory|daily|sessions|all). Defaults to memory.",
+          enum: ["memory", "daily", "sessions", "all", "wiki"],
         },
         maxResults: { type: "number", description: "Max results (capped by configured limits)." },
         minScore: { type: "number", description: "Optional minimum score threshold." },
@@ -125,8 +126,9 @@ export function registerMemorySearchTool({
       const minScore = typeof record.minScore === "number" ? (record.minScore as number) : undefined;
       const effectiveMax = typeof maxResults === "number" ? maxResults : limits.maxResults;
       const trimmedCorpus = corpus.trim();
-      const sessionsVisibility = ctx.cfg?.sessions?.visibility ?? "current";
-      const sessionsEnabled = sessionsVisibility !== "off";
+      const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
+      const sessionsVisibility = sessionsSearch.visibility;
+      const sessionsEnabled = sessionsSearch.effective;
       if (trimmedCorpus === "wiki") {
         return {
           content: [
@@ -140,13 +142,40 @@ export function registerMemorySearchTool({
         };
       }
       let hits: any[] = [];
-      let retrievalMode: "fts_memory" | "sessions_index" | "sessions_fallback" | "all_merge_lexical" = "fts_memory";
+      let retrievalMode: "fts_memory" | "fts_daily" | "sessions_index" | "sessions_fallback" | "all_merge_lexical" = "fts_memory";
       try {
         if (trimmedCorpus === "sessions") {
           if (!sessionsEnabled) {
+            const visible = formatSearchLikeVisibleOutput({
+              hits: [],
+              retrievalMode: "sessions_disabled",
+              queryMode: classifyQueryMode(query),
+              exactTop1: false,
+              exactTop1Value: null,
+              recommendedAction: "stop_not_found",
+              provider: "anchorclaw",
+              model: "postgres-fts",
+            });
             return {
-              content: [{ type: "text", text: "anchorclaw: sessions corpus is disabled by config (sessions.visibility=off)" }],
-              details: { disabled: true, error: "sessions corpus disabled", visibility: sessionsVisibility },
+              content: [{ type: "text", text: visible }],
+              details: {
+                results: [],
+                count: 0,
+                meta: {
+                  retrievalMode: "sessions_disabled",
+                  queryMode: classifyQueryMode(query),
+                  semantic: false,
+                  exactTop1: false,
+                  exactTop1Value: null,
+                  recommendedAction: "stop_not_found",
+                  sessions: {
+                    configured: sessionsSearch.configured,
+                    effective: sessionsSearch.effective,
+                    visibility: sessionsSearch.visibility,
+                    ...(sessionsSearch.reason ? { reason: sessionsSearch.reason } : {}),
+                  },
+                },
+              },
             };
           }
           await ensureSessionsIndexBootstrapped();
@@ -190,6 +219,16 @@ export function registerMemorySearchTool({
             ...(typeof maxResults === "number" ? { maxResults } : {}),
           });
           retrievalMode = "fts_memory";
+        } else if (trimmedCorpus === "daily") {
+          hits = await memorySearchDailyDb({
+            pool: ctx.getPool(),
+            userId: scope.userId,
+            workspaceId: scope.workspaceId,
+            limits,
+            query,
+            ...(typeof maxResults === "number" ? { maxResults } : {}),
+          });
+          retrievalMode = "fts_daily";
         } else if (trimmedCorpus === "all") {
           if (sessionsEnabled) {
             await ensureSessionsIndexBootstrapped();
@@ -273,7 +312,7 @@ export function registerMemorySearchTool({
         };
       }
 
-      if (trimmedCorpus !== "memory" && trimmedCorpus !== "sessions" && trimmedCorpus !== "all") {
+      if (trimmedCorpus !== "memory" && trimmedCorpus !== "daily" && trimmedCorpus !== "sessions" && trimmedCorpus !== "all") {
         return {
           content: [{ type: "text", text: `anchorclaw: unsupported corpus (${trimmedCorpus || "empty"})` }],
           details: { disabled: true, error: "unsupported corpus", corpus: trimmedCorpus },
@@ -338,6 +377,12 @@ export function registerMemorySearchTool({
             exactTop1,
             exactTop1Value,
             recommendedAction,
+            sessions: {
+              configured: sessionsSearch.configured,
+              effective: sessionsSearch.effective,
+              visibility: sessionsSearch.visibility,
+              ...(sessionsSearch.reason ? { reason: sessionsSearch.reason } : {}),
+            },
           },
           ...(ctx.sdkHealth.degraded
             ? { degraded: true, degradedReason: "sdk_error", sdk: { ...ctx.sdkHealth } }

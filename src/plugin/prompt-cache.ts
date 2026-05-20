@@ -1,6 +1,9 @@
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
-import { buildPromptMemorySection, queryPromptMemoryItems } from "../memory/prompt.js";
+import {
+  buildPromptMemorySection,
+  queryPromptMemoryItems,
+} from "../memory/prompt.js";
 import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 
@@ -44,16 +47,20 @@ export function createPromptCacheRuntime(params: {
           // profile/config/skill/summary/automation (safe ordering + size budgets + canonicalKey conventions).
           types: ["fact", "note"],
         });
-        ctx.promptCache.lines = buildPromptMemorySection({
+        const maxItemsByType = items.reduce<Record<string, number>>((acc, item) => {
+          acc[item.type] = (acc[item.type] ?? 0) + 1;
+          return acc;
+        }, {});
+        const durableLines = buildPromptMemorySection({
           items,
           maxTotalChars: 12_000,
           maxTitleChars: 120,
           policy: {
-            // MVP: durable injection focuses on facts and notes.
-            maxItemsByType: { fact: 6, note: 4 },
-            defaultMaxItemChars: 1_200,
+            maxItemsByType,
+            defaultMaxItemChars: 2_400,
           },
         });
+        ctx.promptCache.lines = durableLines;
         ctx.promptCache.error = null;
       } catch (error) {
         ctx.promptCache.lines = null;

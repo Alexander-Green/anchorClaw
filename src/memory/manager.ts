@@ -1,5 +1,5 @@
 import type { OpenClawPluginApi } from "../api.js";
-import type { AnchorClawConfig } from "../config.js";
+import { resolveSessionsSearchState, type AnchorClawConfig } from "../config.js";
 import type { PostgresPool } from "../postgres.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { resolveMemoryLimits } from "./limits.js";
@@ -142,8 +142,9 @@ export function createAnchorClawMemorySearchManager(
   params: AnchorClawMemorySearchManagerOptions,
 ): MemorySearchManager {
   const { api, cfg } = params;
-  const sessionsVisibility = cfg.sessions?.visibility ?? "current";
-  const sessionsEnabled = sessionsVisibility !== "off";
+  const sessionsSearch = resolveSessionsSearchState(cfg);
+  const sessionsVisibility = sessionsSearch.visibility;
+  const sessionsEnabled = sessionsSearch.effective;
 
   const resolveWorkspaceDir = (): string | undefined => resolveConfiguredWorkspaceDir(cfg);
   const warnWorkspaceUnavailable = (operation: "search" | "readFile" | "sync") => {
@@ -196,7 +197,7 @@ export function createAnchorClawMemorySearchManager(
       const limits = resolveMemoryLimits(cfg);
 
       const requestedSources =
-        Array.isArray(opts?.sources) && opts.sources.length > 0 ? opts.sources : ["memory", "sessions"];
+        Array.isArray(opts?.sources) && opts.sources.length > 0 ? opts.sources : ["memory"];
       const effectiveSources = sessionsEnabled
         ? requestedSources
         : requestedSources.filter((source) => source !== "sessions");
@@ -341,6 +342,30 @@ export function createAnchorClawMemorySearchManager(
         };
       }
 
+      if (relPath.startsWith("memory/")) {
+        const got = await memoryGetFromDb({
+          pool: params.getPool(),
+          userId: scope.userId,
+          workspaceId: scope.workspaceId,
+          agentId: params.agentId,
+          workspaceDir,
+          sessionsVisibility,
+          limits,
+          lookup: relPath,
+          fromLine,
+          lineCount,
+        });
+        if (!got.ok) {
+          return { text: "", path: relPath };
+        }
+        return {
+          text: got.content,
+          path: got.path,
+          from: got.fromLine,
+          lines: got.lineCount,
+        };
+      }
+
       const workspaceRelative = resolveWorkspaceRelativePath(relPath);
       if (workspaceRelative) {
         const absPath = path.resolve(workspaceDir, workspaceRelative);
@@ -407,6 +432,9 @@ export function createAnchorClawMemorySearchManager(
           postgresDatabase: cfg.postgres.database,
           limits,
           sessionsMaxFileBytes: limits.sessionsMaxFileBytes,
+          sessionsSearchConfigured: sessionsSearch.configured,
+          sessionsSearchEffective: sessionsSearch.effective,
+          ...(sessionsSearch.reason ? { sessionsSearchReason: sessionsSearch.reason } : {}),
           sessionsVisibility,
           purpose: params.purpose ?? "default",
           ...(!workspaceDir ? { degraded: true, error: "workspace_dir_unavailable" } : {}),

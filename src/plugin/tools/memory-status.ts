@@ -1,9 +1,17 @@
 import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
+import { resolveSessionsSearchState } from "../../config.js";
 import type { MemoryStatusCheckResult } from "../types.js";
 import type { ToolRegistrationParams } from "./common.js";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+
+function isPromptInjectionAllowed(api: any): boolean {
+  const currentConfig =
+    typeof api?.runtime?.config?.current === "function" ? api.runtime.config.current() : undefined;
+  const hooks = currentConfig?.plugins?.entries?.anchorclaw?.hooks;
+  return hooks?.allowPromptInjection !== false;
+}
 
 export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
   const api = ctx.api;
@@ -26,6 +34,7 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
     async execute(_toolCallId: string, params: unknown) {
       const record = (params ?? {}) as { check?: unknown };
       const activeCheck = record.check === true;
+      const promptInjectionAllowed = isPromptInjectionAllowed(api);
       const base: MemoryStatusCheckResult = {
         ok: ctx.durableState?.overall === "ready",
         backend: "anchorclaw",
@@ -37,6 +46,15 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
         reason: ctx.durableState?.reason ?? ctx.disabledReason ?? null,
         mode: activeCheck ? "active" : "cached",
         sdk: { ...ctx.sdkHealth },
+        daily: {
+          source: "db",
+          injectionMode: "first_turn",
+          promptInjectionAllowed,
+          startupPromptEnabled: true,
+          startupPromptEffective: promptInjectionAllowed,
+          readCompatibilityPath: "db-first",
+          importMode: "canonical_table",
+        },
       };
       if (activeCheck) {
         const startedAt = Date.now();
@@ -46,15 +64,18 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
           await ctx.getPool().query("SELECT 1");
           const schemaRows = await ctx.getPool().query<{
             memory_items: string | null;
+            memory_daily_entries: string | null;
             session_index_files: string | null;
             session_index_chunks: string | null;
             schema_migrations: string | null;
           }>(
-            "SELECT to_regclass('memory_items') AS memory_items, to_regclass('session_index_files') AS session_index_files, to_regclass('session_index_chunks') AS session_index_chunks, to_regclass('schema_migrations') AS schema_migrations",
+            "SELECT to_regclass('memory_items') AS memory_items, to_regclass('memory_daily_entries') AS memory_daily_entries, to_regclass('session_index_files') AS session_index_files, to_regclass('session_index_chunks') AS session_index_chunks, to_regclass('schema_migrations') AS schema_migrations",
           );
           const schema = schemaRows.rows[0];
+          const dailySchemaOk = Boolean(schema?.memory_daily_entries);
           const schemaOk = Boolean(
             schema?.memory_items &&
+              schema?.memory_daily_entries &&
               schema?.session_index_files &&
               schema?.session_index_chunks &&
               schema?.schema_migrations,
@@ -66,6 +87,7 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
             ok: schemaOk,
             latencyMs: Math.max(0, Date.now() - startedAt),
             schemaOk,
+            dailySchemaOk,
             migrationVersion: migrationRows.rows[0]?.id ?? null,
           };
           if (!schemaOk) {
@@ -80,8 +102,9 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
           };
         }
 
-        const sessionsVisibility = ctx.cfg?.sessions?.visibility ?? "current";
-        const sessionsEnabled = sessionsVisibility !== "off";
+        const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
+        const sessionsVisibility = sessionsSearch.visibility;
+        const sessionsEnabled = sessionsSearch.effective;
         try {
           const agentId = String((api as any)?.runtime?.agentId ?? "main");
           const agentSessionsDir = await resolveSessionsDirForAgent(agentId);
@@ -104,7 +127,10 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
           }
           base.sessions = {
             enabled: sessionsEnabled,
+            searchEnabled: sessionsSearch.configured,
+            effectiveEnabled: sessionsSearch.effective,
             visibility: sessionsVisibility,
+            ...(sessionsSearch.reason ? { reasonCode: sessionsSearch.reason } : {}),
             stateDir,
             agentSessionsDir,
             exists,
@@ -114,7 +140,10 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
           base.ok = false;
           base.sessions = {
             enabled: sessionsEnabled,
+            searchEnabled: sessionsSearch.configured,
+            effectiveEnabled: sessionsSearch.effective,
             visibility: sessionsVisibility,
+            ...(sessionsSearch.reason ? { reasonCode: sessionsSearch.reason } : {}),
             error: error instanceof Error ? error.message : String(error),
           };
         }

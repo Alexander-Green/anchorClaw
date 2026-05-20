@@ -5,6 +5,7 @@ const {
   resolveScopeMock,
   resolveLimitsMock,
   memorySearchDbMock,
+  memorySearchDailyDbMock,
   memorySearchSessionsMock,
   hasSessionsIndexRowsMock,
   memorySearchSessionsIndexDbMock,
@@ -13,6 +14,7 @@ const {
   resolveScopeMock: vi.fn(async () => ({ userId: "u1", workspaceId: "w1" })),
   resolveLimitsMock: vi.fn(() => ({ maxResults: 10 })),
   memorySearchDbMock: vi.fn(async () => []),
+  memorySearchDailyDbMock: vi.fn(async () => []),
   memorySearchSessionsMock: vi.fn(async () => []),
   hasSessionsIndexRowsMock: vi.fn(async () => false),
   memorySearchSessionsIndexDbMock: vi.fn(async () => []),
@@ -29,6 +31,7 @@ vi.mock("../../memory/limits.js", () => ({
 
 vi.mock("../../memory/search.js", () => ({
   memorySearchDb: memorySearchDbMock,
+  memorySearchDailyDb: memorySearchDailyDbMock,
 }));
 
 vi.mock("../../memory/sessions.js", () => ({
@@ -53,7 +56,7 @@ function buildCtx() {
         runtime: { agentId: "main", sessionKey: "agent:main:main" },
       },
       disabledReason: null,
-      cfg: { workspaceDir: "/workspace", sessions: { visibility: "current" } },
+      cfg: { workspaceDir: "/workspace", sessions: { search: { enabled: true }, visibility: "current" } },
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
       sdkHealth: { degraded: false, reason: null, affectedOperation: null },
@@ -232,5 +235,100 @@ describe("memory_search tool exactTop1 metadata", () => {
 
     expect(visible.queryMode).toBe("contextual");
     expect(visible.meta.queryMode).toBe("contextual");
+  });
+
+  it("treats sessions corpus as unavailable by default until opt-in is enabled", async () => {
+    const { ctx, registerTool } = buildCtx();
+    ctx.cfg.sessions = { visibility: "current" };
+    const ensureSessionsIndexBootstrapped = vi.fn(async () => undefined);
+    registerMemorySearchTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped,
+    });
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-6", { query: "needle", corpus: "sessions" });
+    const visible = JSON.parse(result.content[0].text);
+
+    expect(visible.results).toHaveLength(0);
+    expect(visible.meta.recommendedAction).toBe("stop_not_found");
+    expect(result.details.meta.sessions).toMatchObject({
+      configured: false,
+      effective: false,
+      visibility: "current",
+      reason: "search_disabled",
+    });
+    expect(ensureSessionsIndexBootstrapped).not.toHaveBeenCalled();
+    expect(memorySearchSessionsIndexDbMock).not.toHaveBeenCalled();
+    expect(memorySearchSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("excludes sessions from corpus=all when opt-in is disabled", async () => {
+    (memorySearchDbMock as any).mockResolvedValueOnce([
+      {
+        corpus: "memory",
+        path: "db-memory/items/1.md",
+        id: "1",
+        title: "saved fact",
+        kind: "note",
+        score: 1.2,
+        snippet: "saved fact",
+      },
+    ] as any[]);
+    const { ctx, registerTool } = buildCtx();
+    ctx.cfg.sessions = { visibility: "visible" };
+    const ensureSessionsIndexBootstrapped = vi.fn(async () => undefined);
+    registerMemorySearchTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped,
+    });
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-7", { query: "saved", corpus: "all" });
+    const visible = JSON.parse(result.content[0].text);
+
+    expect(visible.results).toHaveLength(1);
+    expect(visible.results[0].corpus).toBe("memory");
+    expect(result.details.meta.sessions).toMatchObject({
+      configured: false,
+      effective: false,
+      visibility: "visible",
+      reason: "search_disabled",
+    });
+    expect(ensureSessionsIndexBootstrapped).not.toHaveBeenCalled();
+    expect(memorySearchSessionsIndexDbMock).not.toHaveBeenCalled();
+    expect(memorySearchSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("routes corpus=daily to daily-only DB search", async () => {
+    (memorySearchDailyDbMock as any).mockResolvedValueOnce([
+      {
+        corpus: "memory",
+        path: "memory/2026-05-20.md",
+        id: "daily-1",
+        title: "memory/2026-05-20.md",
+        kind: "daily-note",
+        score: 1.1,
+        snippet: "today we discussed daily ownership",
+      },
+    ] as any[]);
+    const { ctx, registerTool } = buildCtx();
+    registerMemorySearchTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-8", { query: "daily ownership", corpus: "daily" });
+    const visible = JSON.parse(result.content[0].text);
+
+    expect(visible.results).toHaveLength(1);
+    expect(visible.results[0].path).toBe("memory/2026-05-20.md");
+    expect(result.details.meta.retrievalMode).toBe("fts_daily");
+    expect(memorySearchDailyDbMock).toHaveBeenCalledTimes(1);
+    expect(memorySearchDbMock).not.toHaveBeenCalled();
   });
 });

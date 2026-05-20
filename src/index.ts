@@ -13,6 +13,7 @@ import { createPromptCacheRuntime } from "./plugin/prompt-cache.js";
 import { createMaintenanceRuntime, registerMaintenanceLifecycle } from "./plugin/maintenance.js";
 import { registerEpisodicHooks } from "./plugin/episodic.js";
 import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
+import { registerDailyPromptHook } from "./plugin/daily-prompt.js";
 import { registerSessionDeltaLifecycle } from "./plugin/lifecycle.js";
 import { createSessionDeltaRuntime } from "./plugin/session-delta.js";
 import { registerAnchorClawTools } from "./plugin/tools/index.js";
@@ -36,22 +37,26 @@ export default definePluginEntry({
           .option("--db-name <name>", "Database name (default: anchorclaw)")
           .option("--db-user <user>", "App user name (default: anchorclaw)")
           .option("--db-password <pass>", "App user password (auto-generated if omitted)")
+          .option("--rotate-db-password", "Allow password rotation for an existing app user")
           .option("--schema <name>", 'Schema name (default: memory, use "none" for search_path/public fallback)')
           .option("--workspace-dir <path>", "OpenClaw workspace directory for AnchorClaw import/scope")
           .option("--schema-none", "Disable dedicated schema and use default PostgreSQL search_path")
           .option("--skip-config", "Do not update ~/.openclaw/openclaw.json")
           .option("--skip-agents-patch", "Do not patch workspace AGENTS.md file-memory instructions")
+          .option("--enable-prompt-injection", "Set plugins.entries.anchorclaw.hooks.allowPromptInjection=true in openclaw.json")
           .option("--non-interactive", "Disable prompts and use defaults/flags only")
           .action(async (opts: {
             adminUrl?: string;
             dbName?: string;
             dbUser?: string;
             dbPassword?: string;
+            rotateDbPassword?: boolean;
             schema?: string;
             workspaceDir?: string;
             schemaNone?: boolean;
             skipConfig?: boolean;
             skipAgentsPatch?: boolean;
+            enablePromptInjection?: boolean;
             nonInteractive?: boolean;
           }) => {
             await runAnchorClawSetup({
@@ -59,11 +64,13 @@ export default definePluginEntry({
               dbName: opts.dbName,
               dbUser: opts.dbUser,
               dbPassword: opts.dbPassword,
+              rotateDbPassword: opts.rotateDbPassword,
               schema: opts.schema,
               workspaceDir: opts.workspaceDir,
               schemaNone: opts.schemaNone,
               skipConfig: opts.skipConfig,
               skipAgentsPatch: opts.skipAgentsPatch,
+              enablePromptInjection: opts.enablePromptInjection,
               nonInteractive: opts.nonInteractive,
             });
           });
@@ -263,6 +270,7 @@ export default definePluginEntry({
       refreshPromptCache,
       ensureSessionsIndexBootstrapped,
     });
+    registerDailyPromptHook({ api, ctx });
     registerAnchorClawTools({
       ctx,
       refreshPromptCache,

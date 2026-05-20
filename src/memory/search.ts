@@ -1,5 +1,6 @@
 import type { PostgresPool } from "../postgres.js";
 import type { MemoryLimits } from "./limits.js";
+import { searchDailyEntriesDb } from "./daily.js";
 
 export type MemorySearchParams = {
   query: string;
@@ -111,6 +112,29 @@ async function queryMemoryItems(params: {
   return mapRowsToHits(rows);
 }
 
+async function queryImportedDailyMemory(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+  query: string;
+  limit: number;
+  relaxedQuery?: string;
+}): Promise<MemorySearchHit[]> {
+  return searchDailyEntriesDb(params);
+}
+
+function sortMergedHits(left: MemorySearchHit, right: MemorySearchHit): number {
+  if (right.score !== left.score) {
+    return right.score - left.score;
+  }
+  const leftKind = left.kind === "daily-note" ? 1 : 0;
+  const rightKind = right.kind === "daily-note" ? 1 : 0;
+  if (leftKind !== rightKind) {
+    return leftKind - rightKind;
+  }
+  return left.path.localeCompare(right.path);
+}
+
 export async function memorySearchDb(params: {
   pool: PostgresPool;
   userId: string;
@@ -132,8 +156,15 @@ export async function memorySearchDb(params: {
     query: q,
     limit,
   });
-  if (strictHits.length > 0) {
-    return strictHits;
+  const strictDailyHits = await queryImportedDailyMemory({
+    pool: params.pool,
+    userId: params.userId,
+    workspaceId: params.workspaceId,
+    query: q,
+    limit,
+  });
+  if (strictHits.length > 0 || strictDailyHits.length > 0) {
+    return [...strictHits, ...strictDailyHits].sort(sortMergedHits).slice(0, limit);
   }
 
   const relaxedQueries = deriveRelaxedQueries(q);
@@ -158,14 +189,78 @@ export async function memorySearchDb(params: {
         merged.set(key, taggedHit);
       }
     }
+    const relaxedDailyHits = await queryImportedDailyMemory({
+      pool: params.pool,
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      query: relaxedQuery,
+      limit,
+    });
+    for (const hit of relaxedDailyHits) {
+      const key = hit.id ?? hit.path;
+      const previous = merged.get(key);
+      const taggedHit = { ...hit, relaxedQuery };
+      if (!previous || taggedHit.score > previous.score) {
+        merged.set(key, taggedHit);
+      }
+    }
   }
 
   return Array.from(merged.values())
-    .sort((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
+    .sort(sortMergedHits)
+    .slice(0, limit);
+}
+
+export async function memorySearchDailyDb(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+  limits: MemoryLimits;
+  query: string;
+  maxResults?: number;
+}): Promise<MemorySearchHit[]> {
+  const q = params.query.trim();
+  if (!q) {
+    return [];
+  }
+  const limit = clampInteger(params.maxResults ?? params.limits.maxResults, 1, params.limits.maxResults);
+
+  const strictHits = await queryImportedDailyMemory({
+    pool: params.pool,
+    userId: params.userId,
+    workspaceId: params.workspaceId,
+    query: q,
+    limit,
+  });
+  if (strictHits.length > 0) {
+    return strictHits.slice(0, limit);
+  }
+
+  const relaxedQueries = deriveRelaxedQueries(q);
+  if (relaxedQueries.length === 0) {
+    return [];
+  }
+
+  const merged = new Map<string, MemorySearchHit>();
+  for (const relaxedQuery of relaxedQueries) {
+    const relaxedDailyHits = await queryImportedDailyMemory({
+      pool: params.pool,
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      query: relaxedQuery,
+      limit,
+      relaxedQuery,
+    });
+    for (const hit of relaxedDailyHits) {
+      const key = hit.id ?? hit.path;
+      const previous = merged.get(key);
+      if (!previous || hit.score > previous.score) {
+        merged.set(key, hit);
       }
-      return left.path.localeCompare(right.path);
-    })
+    }
+  }
+
+  return Array.from(merged.values())
+    .sort(sortMergedHits)
     .slice(0, limit);
 }

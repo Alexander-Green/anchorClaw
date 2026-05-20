@@ -10,7 +10,9 @@ const {
   loadMigrations,
   createPool,
   queryPromptItems,
+  queryPromptDailyEntries,
   buildPromptSection,
+  buildPromptDailySection,
   syncSessionsIndexDb,
   syncVisibleSessionsIndexDb,
   runImport,
@@ -35,7 +37,9 @@ const {
   loadMigrations: vi.fn(async () => []),
   createPool: vi.fn(),
   queryPromptItems: vi.fn(async () => []),
+  queryPromptDailyEntries: vi.fn(async () => []),
   buildPromptSection: vi.fn(() => [] as string[]),
+  buildPromptDailySection: vi.fn(() => [] as string[]),
   syncSessionsIndexDb: vi.fn(async () => ({
     indexedFiles: 0,
     updatedFiles: 0,
@@ -86,6 +90,16 @@ vi.mock("./config.js", () => ({
   },
   DEFAULT_SESSION_DELTA_BYTES: 100_000,
   DEFAULT_SESSION_DELTA_MESSAGES: 50,
+  resolveSessionsSearchState: (cfg: any) => {
+    const visibility = cfg?.sessions?.visibility ?? "current";
+    const configured = cfg?.sessions?.search?.enabled === true;
+    return {
+      configured,
+      visibility,
+      effective: configured && visibility !== "off",
+      reason: !configured ? "search_disabled" : visibility === "off" ? "visibility_off" : null,
+    };
+  },
 }));
 
 vi.mock("./identity.js", () => ({
@@ -116,7 +130,9 @@ vi.mock("./memory/recall.js", () => ({ memoryRecallDb: vi.fn() }));
 
 vi.mock("./memory/prompt.js", () => ({
   queryPromptMemoryItems: queryPromptItems,
+  queryPromptDailyEntries,
   buildPromptMemorySection: buildPromptSection,
+  buildPromptDailySection,
 }));
 
 vi.mock("./memory/sessions.js", () => ({
@@ -288,7 +304,7 @@ beforeEach(() => {
   );
   parseCfg.mockReturnValue({
     postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-    sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
+    sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
     identity: { externalId: "test" },
     workspaceDir: "/tmp/work",
   });
@@ -331,11 +347,66 @@ describe("cli registration", () => {
   });
 });
 
+describe("tool registration", () => {
+  it("does not register memory_recall in Track A core surface", () => {
+    const { api } = buildApi();
+
+    (plugin as any).register(api);
+
+    const toolNames = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0]?.name)
+      .filter((name: unknown) => typeof name === "string");
+    expect(toolNames).not.toContain("memory_recall");
+  });
+
+  it("registers before_prompt_build hook for first-turn daily injection", () => {
+    const { api } = buildApi();
+
+    (plugin as any).register(api);
+
+    expect(api.registerHook).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+  });
+});
+
 describe("phase2 session delta listener", () => {
   async function registerAndWaitStartup(api: any) {
     (plugin as any).register(api);
     await vi.runAllTimersAsync();
   }
+
+  it("does not subscribe session delta listener when sessions search opt-in is disabled", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
+      identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
+    });
+    const { api } = buildApi();
+    await registerAndWaitStartup(api);
+
+    expect(api.runtime.events.onSessionTranscriptUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not inject daily prompt context on continuation turns", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
+      identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
+    });
+    const { api } = buildApi();
+    await registerAndWaitStartup(api);
+
+    const hook = (api.registerHook as any).mock.calls.find(
+      (call: any[]) => call[0] === "before_prompt_build",
+    )?.[1];
+    expect(hook).toBeTypeOf("function");
+
+    const result = await hook({ prompt: "continue", messages: [{ role: "user", content: "hi" }] });
+    expect(result).toBeUndefined();
+    expect(queryPromptDailyEntries).not.toHaveBeenCalled();
+    expect(buildPromptDailySection).not.toHaveBeenCalled();
+  });
 
   it("filters out non-current-agent transcript updates in current visibility", async () => {
     isSessionFileForAgent.mockResolvedValue(false);
@@ -395,7 +466,7 @@ describe("phase2 session delta listener", () => {
   it("accepts cross-agent transcript updates in visible visibility without current-agent filter", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      sessions: { visibility: "visible" },
+      sessions: { search: { enabled: true }, visibility: "visible" },
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
@@ -570,6 +641,7 @@ describe("phase2 session delta listener", () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: {
+        search: { enabled: true },
         visibility: "current",
         sync: { deltaBytes: 100_000, deltaMessages: 1 },
       },
@@ -608,6 +680,7 @@ describe("phase2 session delta listener", () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: {
+        search: { enabled: true },
         visibility: "current",
         sync: { deltaBytes: 0, deltaMessages: 0 },
       },
@@ -633,7 +706,7 @@ describe("phase2 session delta listener", () => {
   it("rejects unrecognized transcript path updates in visible visibility", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      sessions: { visibility: "visible" },
+      sessions: { search: { enabled: true }, visibility: "visible" },
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
@@ -654,7 +727,7 @@ describe("phase2 session delta listener", () => {
   it("blocks memory_get sessions lookup in visible mode when session visibility guard denies access", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      sessions: { visibility: "visible" },
+      sessions: { search: { enabled: true }, visibility: "visible" },
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
@@ -680,7 +753,7 @@ describe("phase2 session delta listener", () => {
   it("blocks memory_get sessions lookup in current mode when session visibility guard denies access", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      sessions: { visibility: "current" },
+      sessions: { search: { enabled: true }, visibility: "current" },
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
@@ -747,7 +820,7 @@ describe("phase2 session delta listener", () => {
   it("returns degraded details when memory_search hits sdk/runtime error", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      sessions: { visibility: "visible" },
+      sessions: { search: { enabled: true }, visibility: "visible" },
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
@@ -778,7 +851,7 @@ describe("phase2 session delta listener", () => {
   it("recovers sdk degraded state after consecutive successful operations", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      sessions: { visibility: "visible" },
+      sessions: { search: { enabled: true }, visibility: "visible" },
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
@@ -831,7 +904,7 @@ describe("phase2 session delta listener", () => {
   it("exposes sdk health via memory_status tool", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      sessions: { visibility: "visible" },
+      sessions: { search: { enabled: true }, visibility: "visible" },
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
@@ -867,6 +940,15 @@ describe("phase2 session delta listener", () => {
     });
     const degraded = await statusRegistration.execute("toolcall-status-1", {});
     expect(degraded.details.sdk.degraded).toBe(true);
+    expect(degraded.details.daily).toMatchObject({
+      source: "db",
+      injectionMode: "first_turn",
+      promptInjectionAllowed: true,
+      startupPromptEnabled: true,
+      startupPromptEffective: true,
+      readCompatibilityPath: "db-first",
+      importMode: "canonical_table",
+    });
 
     await getRegistration.execute("toolcall-get-status-1", { lookup: "sessions/main/a.jsonl" });
     await getRegistration.execute("toolcall-get-status-2", { lookup: "sessions/main/a.jsonl" });
@@ -884,6 +966,7 @@ describe("phase2 session delta listener", () => {
             rows: [
               {
                 memory_items: "memory_items",
+                memory_daily_entries: "memory_daily_entries",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
@@ -918,7 +1001,17 @@ describe("phase2 session delta listener", () => {
       database: {
         ok: true,
         schemaOk: true,
+        dailySchemaOk: true,
         migrationVersion: "0002",
+      },
+      daily: {
+        source: "db",
+        injectionMode: "first_turn",
+        promptInjectionAllowed: true,
+        startupPromptEnabled: true,
+        startupPromptEffective: true,
+        readCompatibilityPath: "db-first",
+        importMode: "canonical_table",
       },
       sessions: {
         enabled: true,
@@ -939,6 +1032,7 @@ describe("phase2 session delta listener", () => {
             rows: [
               {
                 memory_items: "memory_items",
+                memory_daily_entries: "memory_daily_entries",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
@@ -1017,7 +1111,7 @@ describe("phase2 session delta listener", () => {
   it("uses cfg.workspaceDir as the startup import source of truth", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
+      sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
       identity: { externalId: "test" },
       workspaceDir: "/cfg/workspace",
     });
@@ -1036,7 +1130,7 @@ describe("phase2 session delta listener", () => {
   it("blocks startup import when cfg.workspaceDir is not set", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
+      sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
       identity: { externalId: "test" },
     });
     const { api } = buildApi();
