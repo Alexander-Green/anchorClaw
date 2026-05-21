@@ -366,17 +366,13 @@ describe("tool registration", () => {
 
     const calls = (api.registerHook as any).mock.calls;
     expect(calls.length).toBeGreaterThan(0);
-    const hasObjectForm = calls.some(
+    const hasNamedOrLegacyForm = calls.some(
       (call: any[]) =>
-        call[0] &&
-        typeof call[0] === "object" &&
-        call[0].event === "before_prompt_build" &&
-        typeof call[0].handler === "function",
+        call[0] === "before_prompt_build" &&
+        typeof call[1] === "function" &&
+        (call[2] === undefined || call[2]?.name === "anchorclaw-daily-startup-injection"),
     );
-    const hasLegacyForm = calls.some(
-      (call: any[]) => call[0] === "before_prompt_build" && typeof call[1] === "function",
-    );
-    expect(hasObjectForm || hasLegacyForm).toBe(true);
+    expect(hasNamedOrLegacyForm).toBe(true);
   });
 });
 
@@ -409,15 +405,8 @@ describe("phase2 session delta listener", () => {
     const { api } = buildApi();
     await registerAndWaitStartup(api);
 
-    const call = (api.registerHook as any).mock.calls.find(
-      (row: any[]) =>
-        (row[0] && typeof row[0] === "object" && row[0].event === "before_prompt_build") ||
-        row[0] === "before_prompt_build",
-    );
-    const hook =
-      call && call[0] && typeof call[0] === "object" && call[0].event === "before_prompt_build"
-        ? call[0].handler
-        : call?.[1];
+    const call = (api.registerHook as any).mock.calls.find((row: any[]) => row[0] === "before_prompt_build");
+    const hook = call?.[1];
     expect(hook).toBeTypeOf("function");
 
     const result = await hook({ prompt: "continue", messages: [{ role: "user", content: "hi" }] });

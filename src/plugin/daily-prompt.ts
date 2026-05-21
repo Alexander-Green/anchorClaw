@@ -94,18 +94,16 @@ export function registerDailyPromptHook(params: {
     return;
   }
 
-  // Host SDK compatibility: some builds accept object-form hook registration,
-  // while older builds use registerHook(name, handler).
+  // Host SDK compatibility: some builds require opts.name, while older builds
+  // accept registerHook(name, handler) without opts.
   try {
-    registerHookAny({
+    registerHookAny("before_prompt_build", handler, {
       name: "anchorclaw-daily-startup-injection",
-      event: "before_prompt_build",
-      handler,
     });
     return;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    api.logger.debug?.(`anchorclaw: object-form hook registration failed, trying legacy signature (${message})`);
+    api.logger.debug?.(`anchorclaw: named hook registration failed, trying legacy signature (${message})`);
   }
 
   registerHookAny("before_prompt_build", handler);
