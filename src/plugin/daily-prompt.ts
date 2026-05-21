@@ -40,8 +40,7 @@ export function registerDailyPromptHook(params: {
   ctx: PluginRuntimeContext;
 }) {
   const { api, ctx } = params;
-
-  api.registerHook("before_prompt_build", async (event: any) => {
+  const handler = async (event: any) => {
     if (ctx.disabledReason || !ctx.cfg) {
       return undefined;
     }
@@ -88,5 +87,26 @@ export function registerDailyPromptHook(params: {
       api.logger.warn(`anchorclaw: daily startup prompt injection failed (${message})`);
       return undefined;
     }
-  });
+  };
+
+  const registerHookAny = (api as any).registerHook;
+  if (typeof registerHookAny !== "function") {
+    return;
+  }
+
+  // Host SDK compatibility: some builds accept object-form hook registration,
+  // while older builds use registerHook(name, handler).
+  try {
+    registerHookAny({
+      name: "anchorclaw-daily-startup-injection",
+      event: "before_prompt_build",
+      handler,
+    });
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    api.logger.debug?.(`anchorclaw: object-form hook registration failed, trying legacy signature (${message})`);
+  }
+
+  registerHookAny("before_prompt_build", handler);
 }
