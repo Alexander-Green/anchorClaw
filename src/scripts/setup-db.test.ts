@@ -509,6 +509,7 @@ describe("runAnchorClawSetup", () => {
         dbPassword: "secret",
         schema: "memory",
         workspaceDir,
+        patchAgents: true,
       });
 
       const patchedAgents = readFileSync(agentsPath, "utf-8");
@@ -666,7 +667,7 @@ describe("runAnchorClawSetup", () => {
     }
   });
 
-  it("respects interactive no-answer for AGENTS.md patch prompt", async () => {
+  it("leaves AGENTS.md unchanged by default in interactive setup", async () => {
     const previousHome = process.env.HOME;
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -712,7 +713,6 @@ describe("runAnchorClawSetup", () => {
         "", // password
         "", // workspace dir
         "", // update config -> default yes
-        "n", // patch AGENTS -> no
       ];
 
       await runAnchorClawSetup({
@@ -793,7 +793,6 @@ describe("runAnchorClawSetup", () => {
         "", // password
         "", // workspace dir
         "", // update config -> default yes
-        "", // patch AGENTS -> default yes
         "", // enable prompt injection -> default yes
       ];
 
@@ -809,6 +808,76 @@ describe("runAnchorClawSetup", () => {
 
       const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
       expect(cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection).toBe(true);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not patch AGENTS.md by default in non-interactive setup", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    const workspaceDir = resolve(home, "workspace");
+    const agentsPath = join(workspaceDir, "AGENTS.md");
+    const originalAgents = [
+      "# AGENTS.md - Your Workspace",
+      "",
+      "## Memory",
+      "",
+      "- **Long-term:** `MEMORY.md`",
+      "",
+      "## Red Lines",
+      "",
+    ].join("\n");
+
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      mkdirSync(workspaceDir, { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ plugins: {} }, null, 2) + "\n");
+      writeFileSync(agentsPath, originalAgents);
+
+      await runAnchorClawSetup({
+        nonInteractive: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+        workspaceDir,
+      });
+
+      expect(readFileSync(agentsPath, "utf-8")).toBe(originalAgents);
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        "- AGENTS.md patch: not requested (use --patch-agents if legacy file-memory instructions conflict)",
+      );
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;

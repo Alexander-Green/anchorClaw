@@ -16,6 +16,7 @@ export type AnchorClawSetupOptions = {
   workspaceDir?: string;
   schemaNone?: boolean;
   skipConfig?: boolean;
+  patchAgents?: boolean;
   skipAgentsPatch?: boolean;
   enablePromptInjection?: boolean;
   nonInteractive?: boolean;
@@ -30,6 +31,7 @@ type ResolvedSetupOptions = {
   schema: string | undefined;
   workspaceDir: string | undefined;
   skipConfig: boolean;
+  patchAgents: boolean;
   skipAgentsPatch: boolean;
   enablePromptInjection: boolean;
   nonInteractive: boolean;
@@ -255,6 +257,7 @@ async function promptIfNeeded(params: {
   };
   const nonInteractive = Boolean(params.options.nonInteractive);
   const skipConfig = Boolean(params.options.skipConfig);
+  let patchAgents = Boolean(params.options.patchAgents);
   let skipAgentsPatch = Boolean(params.options.skipAgentsPatch);
   let rotateDbPassword = Boolean(params.options.rotateDbPassword);
   let enablePromptInjection = Boolean(params.options.enablePromptInjection);
@@ -319,13 +322,8 @@ async function promptIfNeeded(params: {
         ? !["n", "no"].includes(updateAnswer)
         : shouldUpdateByDefault;
       params.options.skipConfig = !update;
-      if (update && !skipAgentsPatch) {
-        const patchAnswer = (await rl.question("Patch workspace AGENTS.md to remove default MEMORY.md writer instructions? [Y/n]: "))
-          .trim()
-          .toLowerCase();
-        const patch = patchAnswer ? !["n", "no"].includes(patchAnswer) : true;
-        skipAgentsPatch = !patch;
-      } else if (!update) {
+      if (!update) {
+        patchAgents = false;
         skipAgentsPatch = true;
       }
 
@@ -375,6 +373,7 @@ async function promptIfNeeded(params: {
     schema,
     workspaceDir,
     skipConfig: Boolean(params.options.skipConfig),
+    patchAgents,
     skipAgentsPatch,
     enablePromptInjection,
     nonInteractive,
@@ -585,7 +584,7 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
   }
 
   const agentsPatch =
-    !options.skipConfig && configUpdate?.updated && !options.skipAgentsPatch
+    !options.skipConfig && configUpdate?.updated && options.patchAgents && !options.skipAgentsPatch
       ? patchWorkspaceAgentsInstructions({ workspaceDir: options.workspaceDir })
       : undefined;
 
@@ -627,8 +626,12 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
   }
   if (options.skipConfig) {
     console.log("- AGENTS.md patch: skipped (config update disabled)");
+  } else if (options.patchAgents && options.skipAgentsPatch) {
+    console.log("- AGENTS.md patch: skipped (--skip-agents-patch)");
+  } else if (!options.patchAgents) {
+    console.log("- AGENTS.md patch: not requested (use --patch-agents if legacy file-memory instructions conflict)");
   } else if (options.skipAgentsPatch) {
-    console.log("- AGENTS.md patch: skipped (user choice or --skip-agents-patch)");
+    console.log("- AGENTS.md patch: skipped (--skip-agents-patch)");
   } else if (agentsPatch?.status === "patched") {
     console.log(`- AGENTS.md patch: updated ${agentsPatch.path}`);
     console.log(`- AGENTS.md backup: ${agentsPatch.backupPath}`);

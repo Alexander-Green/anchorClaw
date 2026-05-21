@@ -1,6 +1,6 @@
 {
   "name": "@alexandrgreen/anchorclaw",
-  "version": "0.0.5-phase3.1",
+  "version": "0.0.6-phase4-track-a",
   "description": "OpenClaw Postgres-backed long-term memory plugin",
   "author": "Alexander Green",
   "license": "MIT",
@@ -16,13 +16,14 @@
   "files": [
     "dist/",
     "migrations/",
+    "assets/",
     "openclaw.plugin.json",
     "NOTICE",
     "README.md",
     "package.json"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node ./scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
