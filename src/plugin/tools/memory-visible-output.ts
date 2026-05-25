@@ -5,6 +5,7 @@ type Hit = {
   score?: number;
   snippet?: string;
   corpus?: string;
+  title?: string;
 };
 
 export function formatSearchLikeVisibleOutput(params: {
@@ -41,13 +42,77 @@ export function formatSearchLikeVisibleOutput(params: {
       endLine,
       score: typeof hit.score === "number" ? hit.score : 0,
       snippet: snippetRaw ? `${snippetRaw}${sourceLabel}` : "",
-      source: hit.corpus === "sessions" ? "sessions" : "memory",
+      source: hit.corpus === "sessions" ? "sessions" : hit.corpus === "daily" ? "daily" : "memory",
       citation,
       corpus: typeof hit.corpus === "string" ? hit.corpus : "memory",
     };
   });
 
-  const envelope = {
+  const summary =
+    results.length === 0
+      ? `No memory results found. recommendedAction=${params.recommendedAction}; retrievalMode=${params.retrievalMode}.`
+      : `Found ${results.length} memory result${results.length === 1 ? "" : "s"}. recommendedAction=${params.recommendedAction}; retrievalMode=${params.retrievalMode}.`;
+  const lines = [summary];
+  if (params.exactTop1Value) {
+    lines.push(`Top exact match: ${params.exactTop1Value}`);
+  }
+  for (const [index, result] of results.entries()) {
+    const label = result.citation ? `${result.path}#L${result.startLine}` : result.path;
+    lines.push("");
+    lines.push(`${index + 1}. [${result.corpus}] ${label} (score ${result.score.toFixed(3)})`);
+    if (result.snippet) {
+      lines.push(result.snippet);
+    }
+  }
+  if (params.broadContext) {
+    lines.push("");
+    lines.push("Note: empty-query recall is broad context, not exact evidence.");
+  }
+
+  return lines.join("\n");
+}
+
+export function buildSearchLikeDetailsEnvelope(params: {
+  hits: Hit[];
+  retrievalMode: RetrievalMode;
+  queryMode: "exact_value" | "contextual";
+  exactTop1: boolean;
+  exactTop1Value: string | null;
+  recommendedAction: "return_exact" | "inspect_top" | "stop_not_found";
+  provider: string;
+  model: string;
+  broadContext?: boolean;
+}) {
+  const { hits } = params;
+  const topCandidates = hits
+    .slice(0, 5)
+    .map((hit) => {
+      const title = typeof hit.title === "string" ? hit.title.trim() : "";
+      const snippet = typeof hit.snippet === "string" ? hit.snippet.trim() : "";
+      return title || snippet;
+    })
+    .filter((value) => value.length > 0);
+
+  const results = hits.map((hit) => {
+    const path = typeof hit.path === "string" ? hit.path : "";
+    const snippetRaw = typeof hit.snippet === "string" ? hit.snippet : "";
+    const startLine = 1;
+    const endLine = 1;
+    const citation = path ? `${path}#L${startLine}` : "";
+    const sourceLabel = path ? `\n\nSource: ${citation}` : "";
+    return {
+      path,
+      startLine,
+      endLine,
+      score: typeof hit.score === "number" ? hit.score : 0,
+      snippet: snippetRaw ? `${snippetRaw}${sourceLabel}` : "",
+      source: hit.corpus === "sessions" ? "sessions" : hit.corpus === "daily" ? "daily" : "memory",
+      citation,
+      corpus: typeof hit.corpus === "string" ? hit.corpus : "memory",
+    };
+  });
+
+  return {
     recommendedAction: params.recommendedAction,
     queryMode: params.queryMode,
     exactTop1Value: params.exactTop1Value,
@@ -77,6 +142,4 @@ export function formatSearchLikeVisibleOutput(params: {
         : {}),
     },
   };
-
-  return JSON.stringify(envelope, null, 2);
 }

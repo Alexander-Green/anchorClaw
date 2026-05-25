@@ -96,8 +96,10 @@ describe("memory_search tool exactTop1 metadata", () => {
       query: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
       corpus: "memory",
     });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
+    expect(result.content[0].text).toContain("Found 1 memory result");
+    expect(() => JSON.parse(result.content[0].text)).toThrow();
     expect(visible.results).toHaveLength(1);
     expect(visible.queryMode).toBe("exact_value");
     expect(visible.topCandidates[0]).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
@@ -132,7 +134,7 @@ describe("memory_search tool exactTop1 metadata", () => {
     const def = registerTool.mock.calls[0]?.[0];
 
     const result = await def.execute("toolcall-2", { query: "smoke", corpus: "memory" });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.results).toHaveLength(1);
     expect(visible.queryMode).toBe("contextual");
@@ -155,7 +157,7 @@ describe("memory_search tool exactTop1 metadata", () => {
     const def = registerTool.mock.calls[0]?.[0];
 
     const result = await def.execute("toolcall-3", { query: "nothing-here", corpus: "memory" });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.results).toHaveLength(0);
     expect(visible.queryMode).toBe("contextual");
@@ -200,7 +202,7 @@ describe("memory_search tool exactTop1 metadata", () => {
       query: "What exact marker did I save?",
       corpus: "memory",
     });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.queryMode).toBe("exact_value");
     expect(visible.topCandidates[0]).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");
@@ -231,7 +233,7 @@ describe("memory_search tool exactTop1 metadata", () => {
       query: "What marker/id/key values do we have around tests? Summarize briefly.",
       corpus: "memory",
     });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.queryMode).toBe("contextual");
     expect(visible.meta.queryMode).toBe("contextual");
@@ -249,7 +251,7 @@ describe("memory_search tool exactTop1 metadata", () => {
     const def = registerTool.mock.calls[0]?.[0];
 
     const result = await def.execute("toolcall-6", { query: "needle", corpus: "sessions" });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.results).toHaveLength(0);
     expect(visible.meta.recommendedAction).toBe("stop_not_found");
@@ -287,7 +289,7 @@ describe("memory_search tool exactTop1 metadata", () => {
     const def = registerTool.mock.calls[0]?.[0];
 
     const result = await def.execute("toolcall-7", { query: "saved", corpus: "all" });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.results).toHaveLength(1);
     expect(visible.results[0].corpus).toBe("memory");
@@ -305,7 +307,7 @@ describe("memory_search tool exactTop1 metadata", () => {
   it("routes corpus=daily to daily-only DB search", async () => {
     (memorySearchDailyDbMock as any).mockResolvedValueOnce([
       {
-        corpus: "memory",
+        corpus: "daily",
         path: "memory/2026-05-20.md",
         id: "daily-1",
         title: "memory/2026-05-20.md",
@@ -323,10 +325,12 @@ describe("memory_search tool exactTop1 metadata", () => {
     const def = registerTool.mock.calls[0]?.[0];
 
     const result = await def.execute("toolcall-8", { query: "daily ownership", corpus: "daily" });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.results).toHaveLength(1);
     expect(visible.results[0].path).toBe("memory/2026-05-20.md");
+    expect(visible.results[0].corpus).toBe("daily");
+    expect(visible.results[0].source).toBe("daily");
     expect(result.details.meta.retrievalMode).toBe("fts_daily");
     expect(memorySearchDailyDbMock).toHaveBeenCalledTimes(1);
     expect(memorySearchDbMock).not.toHaveBeenCalled();

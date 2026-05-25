@@ -7,7 +7,7 @@ import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
 import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
-import { formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
+import { buildSearchLikeDetailsEnvelope, formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
 
 function normalizeExact(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -159,6 +159,16 @@ export function registerMemorySearchTool({
             return {
               content: [{ type: "text", text: visible }],
               details: {
+                visible: buildSearchLikeDetailsEnvelope({
+                  hits: [],
+                  retrievalMode: "sessions_disabled",
+                  queryMode: classifyQueryMode(query),
+                  exactTop1: false,
+                  exactTop1Value: null,
+                  recommendedAction: "stop_not_found",
+                  provider: "anchorclaw",
+                  model: "postgres-fts",
+                }),
                 results: [],
                 count: 0,
                 meta: {
@@ -360,6 +370,16 @@ export function registerMemorySearchTool({
         provider: "anchorclaw",
         model: "postgres-fts",
       });
+      const visibleDetails = buildSearchLikeDetailsEnvelope({
+        hits,
+        retrievalMode,
+        queryMode,
+        exactTop1,
+        exactTop1Value,
+        recommendedAction,
+        provider: "anchorclaw",
+        model: "postgres-fts",
+      });
       return {
         content: [
           {
@@ -368,6 +388,7 @@ export function registerMemorySearchTool({
           },
         ],
         details: {
+          visible: visibleDetails,
           results: hits,
           count: hits.length,
           meta: {

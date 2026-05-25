@@ -3,7 +3,7 @@ import { resolveMemoryLimits } from "../../memory/limits.js";
 import { memoryRecallDb } from "../../memory/recall.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
 import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
-import { formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
+import { buildSearchLikeDetailsEnvelope, formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
 
 function normalizeExact(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -167,6 +167,17 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
         model: "postgres-fts",
         broadContext,
       });
+      const visibleDetails = buildSearchLikeDetailsEnvelope({
+        hits: rerankedResults as any[],
+        retrievalMode: recalled.retrievalMode,
+        queryMode,
+        exactTop1,
+        exactTop1Value,
+        recommendedAction,
+        provider: "anchorclaw",
+        model: "postgres-fts",
+        broadContext,
+      });
 
       return {
         content: [
@@ -177,6 +188,7 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
         ],
         details: {
           ...recalled,
+          visible: visibleDetails,
           results: rerankedResults,
           meta: {
             retrievalMode: recalled.retrievalMode,

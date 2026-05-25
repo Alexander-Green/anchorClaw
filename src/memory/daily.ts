@@ -250,7 +250,7 @@ export async function searchDailyEntriesDb(params: {
   return rows.map((row) => {
     const snippet = row.content.length > 240 ? `${row.content.slice(0, 240)}…` : row.content;
     return {
-      corpus: "memory",
+      corpus: "daily",
       path: row.path,
       id: row.id,
       title: row.path,

@@ -9,7 +9,7 @@ export type MemorySearchParams = {
 };
 
 export type MemorySearchHit = {
-  corpus: "memory" | "sessions";
+  corpus: "memory" | "daily" | "sessions";
   path: string;
   title?: string;
   kind?: string;
@@ -58,8 +58,45 @@ function mapRowsToHits(rows: MemorySearchRow[], relaxedQuery?: string): MemorySe
 }
 
 function deriveRelaxedQueries(query: string): string[] {
+  const stopWords = new Set([
+    "a",
+    "an",
+    "and",
+    "are",
+    "did",
+    "do",
+    "does",
+    "i",
+    "is",
+    "me",
+    "my",
+    "of",
+    "the",
+    "to",
+    "what",
+    "which",
+    "who",
+    "как",
+    "какая",
+    "какие",
+    "какой",
+    "какое",
+    "меня",
+    "мне",
+    "мой",
+    "мои",
+    "моя",
+    "мое",
+    "моё",
+    "у",
+    "что",
+  ]);
   const tokens = Array.from(
-    new Set((query.toLowerCase().match(/[a-z0-9_@.-]+/g) ?? []).filter((token) => token.length >= 3)),
+    new Set(
+      (query.toLowerCase().match(/[\p{L}\p{N}_@.-]+/gu) ?? [])
+        .filter((token) => token.length >= 2)
+        .filter((token) => !stopWords.has(token)),
+    ),
   );
   if (tokens.length < 2) {
     return [];

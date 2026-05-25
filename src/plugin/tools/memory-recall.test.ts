@@ -66,7 +66,7 @@ describe("memory_recall tool exactTop1 metadata", () => {
     const result = await def.execute("toolcall-1", {
       query: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
     });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.results).toHaveLength(1);
     expect(visible.queryMode).toBe("exact_value");
@@ -103,7 +103,7 @@ describe("memory_recall tool exactTop1 metadata", () => {
     const def = registerTool.mock.calls[0]?.[0];
 
     const result = await def.execute("toolcall-2", {});
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.results).toHaveLength(1);
     expect(visible.queryMode).toBe("contextual");
@@ -131,7 +131,7 @@ describe("memory_recall tool exactTop1 metadata", () => {
     const def = registerTool.mock.calls[0]?.[0];
 
     const result = await def.execute("toolcall-3", { query: "nothing-here" });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.results).toHaveLength(0);
     expect(visible.queryMode).toBe("contextual");
@@ -178,7 +178,7 @@ describe("memory_recall tool exactTop1 metadata", () => {
     const result = await def.execute("toolcall-4", {
       query: "What exact marker did I save?",
     });
-    const visible = JSON.parse(result.content[0].text);
+    const visible = result.details.visible;
 
     expect(visible.queryMode).toBe("exact_value");
     expect(visible.topCandidates[0]).toBe("ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515");

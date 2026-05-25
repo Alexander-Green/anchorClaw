@@ -110,6 +110,48 @@ describe("memorySearchDb ranking contract", () => {
     expect(hits[0]?.relaxedQuery).toBe("active memory");
   });
 
+  it("uses unicode relaxed queries for Russian natural-language questions", async () => {
+    const queried: string[] = [];
+    const pool = {
+      query: async (_sql: string, params: unknown[]) => {
+        const query = String(params[2]);
+        queried.push(query);
+        if (query === "любимый цвет") {
+          return {
+            rows: [
+              {
+                id: "color",
+                title: "Любимый цвет: зеленый",
+                type: "fact",
+                content: "Любимый цвет: зеленый",
+                updated_at: "2026-05-21T14:27:00.000Z",
+                score: 1.8,
+              },
+            ],
+          };
+        }
+        return { rows: [] as any[] };
+      },
+    } as any;
+
+    const hits = await memorySearchDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: { maxResults: 10 } as any,
+      query: "Какой мой любимый цвет?",
+      maxResults: 5,
+    });
+
+    expect(queried).toContain("Какой мой любимый цвет?");
+    expect(queried).toContain("любимый цвет");
+    expect(queried).not.toContain("какой мой");
+    expect(hits[0]).toMatchObject({
+      title: "Любимый цвет: зеленый",
+      relaxedQuery: "любимый цвет",
+    });
+  });
+
   it("returns imported daily hits in memory corpus with legacy daily path", async () => {
     const pool = {
       query: async (sql: string, params: unknown[]) => {
@@ -144,6 +186,7 @@ describe("memorySearchDb ranking contract", () => {
 
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({
+      corpus: "daily",
       path: "memory/2026-05-20.md",
       kind: "daily-note",
       title: "memory/2026-05-20.md",
