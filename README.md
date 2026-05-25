@@ -31,14 +31,14 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
 ## What Works Today (Track A Core)
 
 - **Durable memory in Postgres** (`memory_items`):
-  - `memory_store` (canonical upsert via `canonicalKey`)
+  - `memory_store` (canonical upsert via `canonicalKey`; use when the user's intent is to persist information for future interactions)
   - `memory_search` (`corpus="memory"`) via Postgres FTS over durable memory plus DB-owned daily memory
   - `memory_get` reads synthetic paths (`db-memory/items/<uuid>.md`) with bounded excerpts
   - `memory_forget` soft-deletes items (+ audit trail in DB)
 - **DB-owned daily memory** (`memory_daily_entries`):
   - `memory_log` appends transient daily context into canonical `memory/YYYY-MM-DD.md` entries backed by Postgres
   - `memory_get("memory/YYYY-MM-DD.md")` is DB-first
-  - daily startup injection happens on first-turn/new-session via hook-based prompt injection
+  - daily startup injection happens on first-turn/new-session via hook-based prompt injection, with OpenClaw-compatible recent-daily limits
 - **OpenClaw compatibility**
   - `registerMemoryCapability` + a `MemorySearchManager` adapter so `status/doctor/CLI` can work
   - `memory_get` accepts both parameter styles:
@@ -60,13 +60,14 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
 - **Migration support**
   - One-time idempotent import of legacy `MEMORY.md` into Postgres (by file hash)
   - Optional (default on) cleanup of `MEMORY.md` after import to avoid duplicate prompt injection
-- **Phase 4 maintenance foundation (backend-owned)**
+- **Phase 4 maintenance foundation (backend-owned, still evolving)**
   - Optional background maintenance scheduler (`maintenance.enabled`)
   - DB-owned cycle over `memory_episodic` with `dryRun` support
   - Extractor + dedupe checks before write into `memory_items`
   - Archives processed episodic rows only after successful extractor cycle
   - Non-dry-run maintenance waits for durable startup state to become `ready`
   - `dryRun` reports heuristic candidate counts only; it does not run the extractor
+  - Current Track A runtime uses `memory_daily_entries`; extractor promotion from daily windows is a later Phase 4 workstream
 
 ---
 
@@ -156,8 +157,10 @@ Common overrides:
 
 `sessions.sync.deltaBytes` and `sessions.sync.deltaMessages` control when transcript deltas trigger a
 targeted sessions reindex. `import.cleanupMemoryMdAfterImport` controls the default post-import `MEMORY.md`
-stub cleanup. AnchorClaw maintenance source is episodic events (`memory_episodic`), and `limits` can reduce search/read caps below the built-in maximums.
-`maintenance.dryRun` currently reports heuristic candidate counts only; it is meant for cheap backlog visibility, not extractor-faithful validation.
+stub cleanup. Track A runtime daily memory is owned by `memory_daily_entries`; the current maintenance
+extractor path is still experimental and does not yet represent the final daily-promotion pipeline.
+`limits` can reduce search/read caps below the built-in maximums. `maintenance.dryRun` currently reports
+heuristic candidate counts only; it is meant for cheap backlog visibility, not extractor-faithful validation.
 
 Optional Postgres runtime settings belong inside the existing `postgres` block. Setup writes the required
 connection fields; add these only when needed:
@@ -264,12 +267,15 @@ Safety behavior:
 AnchorClaw exposes both “native” and compatibility surfaces via OpenClaw tool contracts:
 
 - `memory_store({ content, canonicalKey?, type? })` where `type` is `fact|note` (MVP)
+  - use for durable facts/preferences/decisions/settings/curated notes when the user's intent is persistence across future interactions
+  - if persistence intent is ambiguous, ask a brief clarification before storing
 - `memory_log({ content, date?, path? })`
+  - use for transient daily context that would normally go to `memory/YYYY-MM-DD.md`
 - `memory_search({ query, corpus?, maxResults?, minScore? })`
   - `corpus="memory"` (default): Postgres durable memory plus DB-owned daily memory
   - `corpus="daily"`: DB-owned daily memory only
   - `corpus="sessions"`: Postgres sessions index (DB-first, opt-in)
-  - `corpus="all"`: deterministic merge of `memory + sessions` when sessions search is enabled
+  - `corpus="all"`: deterministic merge of durable memory + DB-owned daily memory + sessions only when sessions search is enabled
   - `corpus="wiki"`: stub for now (use `wiki_search/wiki_get` from `memory-wiki`)
 - `memory_get({ lookup|path, fromLine|from?, lineCount|lines? })`
   - `MEMORY.md` is a virtual DB snapshot (source-of-truth is Postgres)
