@@ -176,11 +176,8 @@ export default definePluginEntry({
         }
 
         api.logger.info("anchorclaw: startup step prompt-cache-warmup started");
-        refreshPromptCache();
         try {
-          if (ctx.promptCache.refreshPromise) {
-            await ctx.promptCache.refreshPromise;
-          }
+          await refreshPromptCache({ force: true });
           if (ctx.promptCache.error) {
             api.logger.warn(`anchorclaw: startup step prompt-cache-warmup failed (${ctx.promptCache.error})`);
           } else {
@@ -242,7 +239,7 @@ export default definePluginEntry({
           if (importResult.cleanup === "failed" && importResult.reason) {
             api.logger.warn(`anchorclaw: workspace import cleanup warning (${importResult.reason})`);
           }
-          refreshPromptCache();
+          await refreshPromptCache({ force: true });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           ctx.setDurableState({

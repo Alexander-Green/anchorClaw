@@ -47,9 +47,10 @@ describe("memory_store visible output", () => {
       type: "fact",
     });
     const { ctx, registerTool } = buildCtx();
+    const refreshPromptCache = vi.fn(async () => undefined);
     registerMemoryStoreTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      refreshPromptCache,
     } as any);
     const def = registerTool.mock.calls[0]?.[0];
 
@@ -67,5 +68,6 @@ describe("memory_store visible output", () => {
       canonicalKey: "preferred_language",
       type: "fact",
     });
+    expect(refreshPromptCache).toHaveBeenCalledWith({ force: true });
   });
 });

@@ -9,7 +9,7 @@ export function registerMemoryStoreTool({ ctx, refreshPromptCache }: ToolRegistr
     name: "memory_store",
     label: "Memory Store",
     description:
-      "Store durable long-term memory into Postgres.\n\nMVP rules:\n- Always provide { content }.\n- If you are storing an updateable fact/preference/setting, provide { canonicalKey } so future calls overwrite the same logical item (instead of creating duplicates).\n- Optionally provide { type: \"fact\"|\"note\"|... } (default: \"note\").",
+      "Store durable long-term memory into Postgres.\n\nMVP rules:\n- Use this when the user asks to remember/save/store durable information (\"запомни\", \"сохрани\", \"запиши\", \"remember\", \"save\", \"store\").\n- Always provide { content }.\n- If you are storing an updateable fact/preference/setting, provide { canonicalKey } so future calls overwrite the same logical item (instead of creating duplicates).\n- Optionally provide { type: \"fact\"|\"note\"|... } (default: \"note\").\n- Do not tell the user durable memory was saved until this tool succeeds.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -84,7 +84,7 @@ export function registerMemoryStoreTool({ ctx, refreshPromptCache }: ToolRegistr
         };
       }
 
-      refreshPromptCache();
+      await refreshPromptCache({ force: true });
 
       const visible = {
         ok: true,

@@ -8,7 +8,7 @@ import type { PluginRuntimeContext } from "./runtime-context.js";
 
 export function registerAnchorClawMemoryCapability(params: {
   ctx: PluginRuntimeContext;
-  refreshPromptCache: () => void;
+  refreshPromptCache: (options?: { force?: boolean }) => Promise<void>;
   ensureSessionsIndexBootstrapped: () => Promise<void>;
 }) {
   const { ctx, refreshPromptCache, ensureSessionsIndexBootstrapped } = params;
@@ -30,7 +30,7 @@ export function registerAnchorClawMemoryCapability(params: {
       };
 
       if (!ctx.promptCache.lines && !ctx.promptCache.error) {
-        refreshPromptCache();
+        void refreshPromptCache();
       }
       const cached = ctx.promptCache.lines ?? [];
       const cacheNotice = ctx.promptCache.error
@@ -93,6 +93,8 @@ export function registerAnchorClawMemoryCapability(params: {
         "## Memory Writes",
         "Use memory_log for transient daily context that would normally go to memory/YYYY-MM-DD.md.",
         "Use memory_store for durable facts, preferences, decisions, and curated notes.",
+        'If the user asks to remember/save/store something durable ("запомни", "сохрани", "запиши", "remember", "save", "store"), call memory_store before confirming.',
+        "Only say that durable memory was saved after memory_store succeeds; if it fails or is unavailable, say it was not saved.",
         "Use canonicalKey only for updateable facts/preferences/settings so updates replace duplicates.",
         "Do not write MEMORY.md or memory/YYYY-MM-DD.md as AnchorClaw's primary memory store.",
         "",

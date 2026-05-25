@@ -2,7 +2,7 @@ import type { PluginRuntimeContext } from "../runtime-context.js";
 
 export type ToolRegistrationParams = {
   ctx: PluginRuntimeContext;
-  refreshPromptCache: () => void;
+  refreshPromptCache: (options?: { force?: boolean }) => Promise<void>;
   ensureSessionsIndexBootstrapped: () => Promise<void>;
 };
 

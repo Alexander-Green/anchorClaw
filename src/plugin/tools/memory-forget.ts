@@ -77,7 +77,7 @@ export function registerMemoryForgetTool({ ctx, refreshPromptCache }: ToolRegist
         };
       }
 
-      refreshPromptCache();
+      await refreshPromptCache({ force: true });
 
       const visible = {
         ok: true,

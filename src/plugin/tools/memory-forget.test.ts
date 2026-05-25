@@ -44,9 +44,10 @@ describe("memory_forget visible output", () => {
       deleted: 1,
     });
     const { ctx, registerTool } = buildCtx();
+    const refreshPromptCache = vi.fn(async () => undefined);
     registerMemoryForgetTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      refreshPromptCache,
     } as any);
     const def = registerTool.mock.calls[0]?.[0];
 
@@ -61,5 +62,6 @@ describe("memory_forget visible output", () => {
       lookup: "db-memory/items/11111111-1111-1111-1111-111111111111.md",
       id: null,
     });
+    expect(refreshPromptCache).toHaveBeenCalledWith({ force: true });
   });
 });

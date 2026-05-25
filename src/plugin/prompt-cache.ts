@@ -8,7 +8,7 @@ import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 
 export type PromptCacheRuntime = {
-  refreshPromptCache: () => void;
+  refreshPromptCache: (options?: { force?: boolean }) => Promise<void>;
 };
 
 export function createPromptCacheRuntime(params: {
@@ -17,16 +17,19 @@ export function createPromptCacheRuntime(params: {
 }): PromptCacheRuntime {
   const { api, ctx } = params;
 
-  const refreshPromptCache = () => {
+  const refreshPromptCache = async (options?: { force?: boolean }) => {
     if (!ctx.cfg) {
       ctx.promptCache.lines = null;
       ctx.promptCache.error = ctx.disabledReason ?? "invalid config";
       return;
     }
     if (ctx.promptCache.refreshPromise) {
-      return;
+      if (!options?.force) {
+        return ctx.promptCache.refreshPromise;
+      }
+      await ctx.promptCache.refreshPromise.catch(() => undefined);
     }
-    ctx.promptCache.refreshPromise = (async () => {
+    const refreshPromise = (async () => {
       try {
         await ctx.ensureReady();
         const scope = await resolveUserAndWorkspaceScope({
@@ -70,6 +73,8 @@ export function createPromptCacheRuntime(params: {
         ctx.promptCache.refreshPromise = null;
       }
     })();
+    ctx.promptCache.refreshPromise = refreshPromise;
+    return refreshPromise;
   };
 
   return { refreshPromptCache };
