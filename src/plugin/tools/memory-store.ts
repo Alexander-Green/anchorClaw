@@ -9,7 +9,7 @@ export function registerMemoryStoreTool({ ctx, refreshPromptCache }: ToolRegistr
     name: "memory_store",
     label: "Memory Store",
     description:
-      "Store durable long-term memory into Postgres.\n\nMVP rules:\n- Use this when the user asks to remember/save/store durable information (\"запомни\", \"сохрани\", \"запиши\", \"remember\", \"save\", \"store\").\n- Always provide { content }.\n- If you are storing an updateable fact/preference/setting, provide { canonicalKey } so future calls overwrite the same logical item (instead of creating duplicates).\n- Optionally provide { type: \"fact\"|\"note\"|... } (default: \"note\").\n- Do not tell the user durable memory was saved until this tool succeeds.",
+      "Store durable long-term memory into Postgres.\n\nMVP rules:\n- Use this when the user's intent is to persist information for future interactions; infer durable-save intent from meaning in any language, not from specific keywords.\n- Typical durable memory includes stable facts, preferences, decisions, settings, and curated long-term notes.\n- Use memory_log instead for transient daily context.\n- If persistence intent is ambiguous, ask a brief clarification before storing.\n- Always provide { content }.\n- If you are storing an updateable fact/preference/setting, provide { canonicalKey } so future calls overwrite the same logical item (instead of creating duplicates).\n- Optionally provide { type: \"fact\"|\"note\"|... } (default: \"note\").\n- Do not tell the user durable memory was saved until this tool succeeds.",
     parameters: {
       type: "object",
       additionalProperties: false,

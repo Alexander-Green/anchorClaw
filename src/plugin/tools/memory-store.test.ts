@@ -53,6 +53,8 @@ describe("memory_store visible output", () => {
       refreshPromptCache,
     } as any);
     const def = registerTool.mock.calls[0]?.[0];
+    expect(def.description).toContain("infer durable-save intent from meaning in any language");
+    expect(def.description).not.toContain("запомни");
 
     const result = await def.execute("toolcall-1", {
       content: "I prefer TypeScript.",

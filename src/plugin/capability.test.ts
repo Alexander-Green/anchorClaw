@@ -83,8 +83,10 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     expect(text).toContain("## Memory Writes");
     expect(text).toContain("Use memory_log for transient daily context that would normally go to memory/YYYY-MM-DD.md.");
     expect(text).toContain("Use memory_store for durable facts, preferences, decisions, and curated notes.");
-    expect(text).toContain('If the user asks to remember/save/store something durable ("запомни", "сохрани", "запиши", "remember", "save", "store"), call memory_store before confirming.');
+    expect(text).toContain("If the user's intent is to persist information for future conversations, infer that durable-save intent from meaning in any language and call memory_store before confirming.");
+    expect(text).toContain("If persistence intent is ambiguous, ask a brief clarification before storing.");
     expect(text).toContain("Only say that durable memory was saved after memory_store succeeds; if it fails or is unavailable, say it was not saved.");
+    expect(text).not.toContain("запомни");
     expect(text).toContain("Do not write MEMORY.md or memory/YYYY-MM-DD.md as AnchorClaw's primary memory store.");
     expect(text).not.toContain("memory_recall");
   });

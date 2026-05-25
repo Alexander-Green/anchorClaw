@@ -98,7 +98,7 @@ describe("memory_search tool exactTop1 metadata", () => {
     });
     const visible = result.details.visible;
 
-    expect(result.content[0].text).toContain("Found 1 memory result");
+    expect(result.content[0].text).toContain("Found 1 result");
     expect(() => JSON.parse(result.content[0].text)).toThrow();
     expect(visible.results).toHaveLength(1);
     expect(visible.queryMode).toBe("exact_value");

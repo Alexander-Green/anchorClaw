@@ -50,8 +50,8 @@ export function formatSearchLikeVisibleOutput(params: {
 
   const summary =
     results.length === 0
-      ? `No memory results found. recommendedAction=${params.recommendedAction}; retrievalMode=${params.retrievalMode}.`
-      : `Found ${results.length} memory result${results.length === 1 ? "" : "s"}. recommendedAction=${params.recommendedAction}; retrievalMode=${params.retrievalMode}.`;
+      ? `No results found. recommendedAction=${params.recommendedAction}; retrievalMode=${params.retrievalMode}.`
+      : `Found ${results.length} result${results.length === 1 ? "" : "s"}. recommendedAction=${params.recommendedAction}; retrievalMode=${params.retrievalMode}.`;
   const lines = [summary];
   if (params.exactTop1Value) {
     lines.push(`Top exact match: ${params.exactTop1Value}`);
