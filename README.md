@@ -102,7 +102,7 @@ By default, setup updates `~/.openclaw/openclaw.json` with the required runtime 
 
 `workspaceDir` is AnchorClaw's source of truth for startup import, workspace scoping, prompt cache, and `memory/*` reads. Setup accepts `--workspace-dir`; otherwise it uses `OPENCLAW_WORKSPACE_DIR` when present, then the OpenClaw default workspace path. If config update is enabled and no workspace path can be resolved, setup fails fast instead of writing a partial config.
 
-By default, setup does **not** mutate `<workspaceDir>/AGENTS.md`. If a specific model keeps following legacy file-memory instructions instead of AnchorClaw tools, you can opt into a narrow backup-first repair with `--patch-agents`.
+Setup does **not** need to mutate `<workspaceDir>/AGENTS.md`. Default OpenClaw instructions that mention `MEMORY.md` or `memory/YYYY-MM-DD.md` remain compatible: when AnchorClaw is active, the runtime prompt and tool schemas map those concepts to DB-backed `memory_store`, `memory_log`, `memory_search`, and `memory_get`.
 
 ### 3) Optional config overrides
 
@@ -228,8 +228,6 @@ openclaw anchorclaw setup \
 Useful flags:
 
 - `--skip-config`: keep `~/.openclaw/openclaw.json` unchanged
-- `--patch-agents`: optionally patch workspace `AGENTS.md` to remove known default file-memory instructions
-- `--skip-agents-patch`: compatibility flag; only matters together with `--patch-agents`
 - `--schema-none`: use PostgreSQL default `search_path` (no dedicated schema)
 - `--db-password <pass>`: set app user password explicitly
 - `--enable-prompt-injection`: automatically set `plugins.entries.anchorclaw.hooks.allowPromptInjection=true`
@@ -250,7 +248,7 @@ Config update behavior:
 - writes the required `postgres` connection block
 - preserves unrelated top-level `anchorclaw.config` keys such as `identity`, `sessions`, `import`, and `limits`
 - rewrites `anchorclaw.config.postgres`; re-add `postgres.sslMode`, `postgres.sslCa`, or `postgres.pool` after setup if you use them
-- leaves `AGENTS.md` unchanged by default; use `--patch-agents` only if legacy file-memory instructions are causing conflicts
+- leaves `AGENTS.md` unchanged; legacy file-memory instructions are handled through AnchorClaw runtime/tool compatibility
 - fails fast if config update is enabled but `workspaceDir` cannot be resolved
 
 Safety behavior:
@@ -258,7 +256,7 @@ Safety behavior:
 - idempotent setup for existing database/user/schema
 - no destructive operations on existing databases/schemas
 - fail-fast on schema conflicts that look AnchorClaw-related but have no `schema_migrations`
-- before patching `AGENTS.md`, writes a backup under `.openclaw-repair/anchorclaw/`
+- legacy `--patch-agents` troubleshooting mode, if used, writes a backup under `.openclaw-repair/anchorclaw/` before changing `AGENTS.md`
 
 ---
 
@@ -301,20 +299,16 @@ To disable cleanup:
 { "import": { "cleanupMemoryMdAfterImport": false } }
 ```
 
-### Optional `AGENTS.md` Repair
+### `AGENTS.md` Compatibility
 
-Some models or custom prompts may keep following legacy workspace instructions that write memory into `MEMORY.md` or `memory/YYYY-MM-DD.md` directly. AnchorClaw does not rely on `AGENTS.md` for normal behavior; it relies on runtime capability prompts and tool schemas (`memory_log`, `memory_store`, `memory_search`, `memory_get`).
+AnchorClaw does not require rewriting workspace instructions. Existing OpenClaw-style instructions can keep referring to `MEMORY.md` and `memory/YYYY-MM-DD.md`; AnchorClaw treats those as memory concepts backed by Postgres tools:
 
-If you run into that conflict, setup can perform a narrow backup-first repair of the configured workspace `AGENTS.md`:
+- `MEMORY.md` writes/search/reads map to `memory_store`, `memory_search`, and `memory_get("MEMORY.md")`
+- `memory/YYYY-MM-DD.md` appends/reads map to `memory_log` and `memory_get("memory/YYYY-MM-DD.md")`
 
-- backs up the original file to `.openclaw-repair/anchorclaw/AGENTS.md.anchorclaw-backup.<timestamp>.md`
-- removes the known default `## Memory` file-memory section only when the expected OpenClaw markers are present
-- removes the known heartbeat `Memory Maintenance (During Heartbeats)` subsection only when the expected OpenClaw markers are present
-- removes the known proactive-work bullet that says to review/update `MEMORY.md`
+Direct edits to those files should only happen when the user explicitly asks for file editing or export.
 
-This repair is **opt-in**. Run setup with `--patch-agents` only if you see the model persistently writing to legacy files instead of using AnchorClaw tools.
-
-If you later uninstall or disable AnchorClaw and want to return to OpenClaw's file-based memory workflow, restore those instructions from the backup file or from OpenClaw's default `AGENTS.md` template.
+The legacy `--patch-agents` flag still exists as a troubleshooting escape hatch for old installs, but it is not part of the normal install path. It backs up the original file to `.openclaw-repair/anchorclaw/AGENTS.md.anchorclaw-backup.<timestamp>.md` before removing known default file-memory writer sections.
 
 ---
 

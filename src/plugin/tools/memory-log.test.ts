@@ -68,6 +68,7 @@ describe("memory_log tool", () => {
       refreshPromptCache: vi.fn(),
     } as any);
     const def = registerTool.mock.calls[0]?.[0];
+    expect(def.description).toContain("DB-backed implementation for memory/YYYY-MM-DD.md appends");
     expect(def.description).toContain("Use for save requests about today, now, current conversation");
     expect(def.description).toContain("Use memory_store for durable facts, preferences, schedules");
     expect(def.description).toContain("Do not confirm logged until this tool succeeds.");

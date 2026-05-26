@@ -54,6 +54,7 @@ describe("memory_store visible output", () => {
     } as any);
     const def = registerTool.mock.calls[0]?.[0];
     expect(def.description).toContain("recurring schedules");
+    expect(def.description).toContain("DB-backed implementation for curated MEMORY.md writes");
     expect(def.description).toContain("Use for save requests about stable facts");
     expect(def.description).toContain("Use memory_log for daily/current context");
     expect(def.description).toContain("Do not confirm saved until this tool succeeds.");

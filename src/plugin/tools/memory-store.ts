@@ -9,7 +9,7 @@ export function registerMemoryStoreTool({ ctx, refreshPromptCache }: ToolRegistr
     name: "memory_store",
     label: "Memory Store",
     description:
-      "Store durable long-term memory in Postgres. Use for save requests about stable facts, preferences, recurring schedules, decisions, settings, project rules, and curated notes. Use memory_log for daily/current context. Required: content. Use canonicalKey for updateable durable facts/preferences/schedules/settings. Optional type: fact or note. Do not confirm saved until this tool succeeds.",
+      "Store durable long-term memory in Postgres. This is the DB-backed implementation for curated MEMORY.md writes. Use for save requests about stable facts, preferences, recurring schedules, decisions, settings, project rules, and curated notes. Use memory_log for daily/current context. Required: content. Use canonicalKey for updateable durable facts/preferences/schedules/settings. Optional type: fact or note. Do not confirm saved until this tool succeeds.",
     parameters: {
       type: "object",
       additionalProperties: false,

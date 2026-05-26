@@ -96,7 +96,7 @@ export function registerAnchorClawMemoryCapability(params: {
         "If lifetime is unclear, ask one brief clarification instead of writing.",
         "Never say saved, remembered, or recorded unless the write tool returned success.",
         "Use canonicalKey only for updateable durable facts, preferences, schedules, or settings.",
-        "Do not write MEMORY.md or memory/YYYY-MM-DD.md directly in AnchorClaw mode.",
+        "If AGENTS.md or the user refers to MEMORY.md, use memory_store/memory_search/memory_get as the DB-backed implementation; if they refer to memory/YYYY-MM-DD.md, use memory_log/memory_get. Edit those files directly only when the user explicitly asks for file editing or export.",
         "",
         ...(sessionsCorpusNote ? ["## Sessions", sessionsCorpusNote, ""] : []),
         ...cacheNotice,

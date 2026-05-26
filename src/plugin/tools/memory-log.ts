@@ -16,7 +16,7 @@ export function registerMemoryLogTool({ ctx }: ToolRegistrationParams) {
     name: "memory_log",
     label: "Memory Log",
     description:
-      "Append DB-backed daily/current memory. Use for save requests about today, now, current conversation, events, meeting notes, and temporary notes. Use memory_store for durable facts, preferences, schedules, decisions, settings, project rules, and curated notes. Required: content. Optional: date or memory/YYYY-MM-DD.md path. Do not confirm logged until this tool succeeds.",
+      "Append DB-backed daily/current memory. This is the DB-backed implementation for memory/YYYY-MM-DD.md appends. Use for save requests about today, now, current conversation, events, meeting notes, and temporary notes. Use memory_store for durable facts, preferences, schedules, decisions, settings, project rules, and curated notes. Required: content. Optional: date or memory/YYYY-MM-DD.md path. Do not confirm logged until this tool succeeds.",
     parameters: {
       type: "object",
       additionalProperties: false,

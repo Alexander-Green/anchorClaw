@@ -89,7 +89,9 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     expect(text).toContain("If lifetime is unclear, ask one brief clarification instead of writing.");
     expect(text).toContain("Never say saved, remembered, or recorded unless the write tool returned success.");
     expect(text).not.toContain("запомни");
-    expect(text).toContain("Do not write MEMORY.md or memory/YYYY-MM-DD.md directly in AnchorClaw mode.");
+    expect(text).toContain("If AGENTS.md or the user refers to MEMORY.md, use memory_store/memory_search/memory_get as the DB-backed implementation");
+    expect(text).toContain("if they refer to memory/YYYY-MM-DD.md, use memory_log/memory_get");
+    expect(text).toContain("Edit those files directly only when the user explicitly asks for file editing or export.");
     expect(text).not.toContain("memory_recall");
   });
 

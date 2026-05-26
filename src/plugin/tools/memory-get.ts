@@ -12,12 +12,12 @@ export function registerMemoryGetTool({ ctx }: ToolRegistrationParams) {
     name: "memory_get",
     label: "Memory Get",
     description:
-      "Read durable long-term memory content by path.\n\nMVP rules:\n- Pass lookup as a synthetic DB path returned by memory_search/memory_store (e.g. db-memory/items/<uuid>.md), or sessions/<agentId>/<file>, or MEMORY.md (virtual snapshot).\n- OpenClaw-compatible aliases: you may pass { path, from, lines } instead of { lookup, fromLine, lineCount }.\n- Content is returned as a bounded excerpt (use fromLine/lineCount to paginate).",
+      "Read memory content by path.\n\nMVP rules:\n- Pass lookup as a synthetic DB path returned by memory_search/memory_store (e.g. db-memory/items/<uuid>.md), or sessions/<agentId>/<file>, or MEMORY.md (virtual snapshot), or memory/YYYY-MM-DD.md (DB-backed daily memory).\n- OpenClaw-compatible aliases: you may pass { path, from, lines } instead of { lookup, fromLine, lineCount }.\n- Content is returned as a bounded excerpt (use fromLine/lineCount to paginate).",
     parameters: {
       type: "object",
       additionalProperties: false,
       properties: {
-        lookup: { type: "string", description: "AnchorClaw lookup path (preferred): db-memory/... or sessions/... or MEMORY.md." },
+        lookup: { type: "string", description: "AnchorClaw lookup path (preferred): db-memory/... or sessions/... or MEMORY.md or memory/YYYY-MM-DD.md." },
         fromLine: { type: "number", description: "AnchorClaw alias for 'from' (1-based line number)." },
         lineCount: { type: "number", description: "AnchorClaw alias for 'lines' (number of lines)." },
         path: { type: "string", description: "OpenClaw-compatible alias for lookup." },
