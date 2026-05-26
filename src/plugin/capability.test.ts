@@ -81,13 +81,14 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     expect(text).toContain("## Memory Search");
     expect(text).toContain("Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search; then use memory_get to pull only the needed lines.");
     expect(text).toContain("## Memory Writes");
-    expect(text).toContain("Before replying, decide whether the user's message asks you to preserve information beyond the current answer.");
-    expect(text).toContain("memory_log for daily/current context, events, meeting notes, and temporary notes");
-    expect(text).toContain("memory_store for durable facts, preferences, recurring schedules, decisions, settings, project rules, and curated long-term notes");
-    expect(text).toContain("If the intended lifetime is unclear, ask one brief clarification before storing.");
-    expect(text).toContain("Only say that memory was saved after the chosen write tool succeeds; if it fails or is unavailable, say it was not saved.");
+    expect(text).toContain("A save request means the user wants information preserved beyond this reply.");
+    expect(text).toContain("emit exactly one write tool call before final text");
+    expect(text).toContain("memory_store for durable facts, preferences, recurring schedules, decisions, settings, project rules, and curated notes");
+    expect(text).toContain("memory_log for today, now, current conversation, events, meeting notes, and temporary notes");
+    expect(text).toContain("If lifetime is unclear, ask one brief clarification instead of writing.");
+    expect(text).toContain("Never say saved, remembered, or recorded unless the write tool returned success.");
     expect(text).not.toContain("запомни");
-    expect(text).toContain("Do not write MEMORY.md or memory/YYYY-MM-DD.md as AnchorClaw's primary memory store.");
+    expect(text).toContain("Do not write MEMORY.md or memory/YYYY-MM-DD.md directly in AnchorClaw mode.");
     expect(text).not.toContain("memory_recall");
   });
 

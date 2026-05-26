@@ -54,8 +54,9 @@ describe("memory_store visible output", () => {
     } as any);
     const def = registerTool.mock.calls[0]?.[0];
     expect(def.description).toContain("recurring schedules");
-    expect(def.description).toContain("Infer write intent from meaning in any language");
-    expect(def.description).toContain("Use memory_log instead for daily/current context");
+    expect(def.description).toContain("Use for save requests about stable facts");
+    expect(def.description).toContain("Use memory_log for daily/current context");
+    expect(def.description).toContain("Do not confirm saved until this tool succeeds.");
     expect(def.description).not.toContain("запомни");
 
     const result = await def.execute("toolcall-1", {

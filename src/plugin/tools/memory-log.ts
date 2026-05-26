@@ -16,7 +16,7 @@ export function registerMemoryLogTool({ ctx }: ToolRegistrationParams) {
     name: "memory_log",
     label: "Memory Log",
     description:
-      "Append transient daily context into AnchorClaw's DB-backed canonical daily memory.\n\nMVP rules:\n- Use this for current-day/current-conversation context, events, meeting notes, and temporary daily notes that would normally go to memory/YYYY-MM-DD.md.\n- Use memory_store instead for durable facts, preferences, recurring schedules, decisions, settings, project rules, and curated long-term notes.\n- Infer daily write intent from meaning in any language, especially when the information is about today, now, this conversation, or a current event.\n- Writes are append-only into the canonical daily entry for the resolved day.\n- Do not tell the user daily memory was saved until this tool succeeds.",
+      "Append DB-backed daily/current memory. Use for save requests about today, now, current conversation, events, meeting notes, and temporary notes. Use memory_store for durable facts, preferences, schedules, decisions, settings, project rules, and curated notes. Required: content. Optional: date or memory/YYYY-MM-DD.md path. Do not confirm logged until this tool succeeds.",
     parameters: {
       type: "object",
       additionalProperties: false,
