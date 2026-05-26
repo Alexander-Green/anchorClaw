@@ -6,7 +6,10 @@ import { memorySearchSessions } from "../../memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/sessions-index.js";
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
+import {
+  getToolUnavailableResponse,
+  type ToolRegistrationParams,
+} from "./common.js";
 import { buildSearchLikeDetailsEnvelope, formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
 
 function normalizeExact(value: unknown): string {
@@ -100,35 +103,31 @@ export function registerMemorySearchTool({
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      const unavailable = getToolUnavailableResponse(ctx);
-      if (unavailable) return unavailable;
-      await ctx.ensureReady();
-      const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
-      if (!workspaceDir) {
+      const blockedReason = ctx.durableState?.reason ?? ctx.startupCriticalFailure ?? null;
+      if (
+        ctx.durableState?.overall === "blocked" &&
+        typeof blockedReason === "string" &&
+        blockedReason.includes("migrations_failed:")
+      ) {
         return {
-          content: [{ type: "text", text: `anchorclaw: memory_search unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
-          details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
+          content: [{ type: "text", text: `anchorclaw: memory_search degraded (${blockedReason})` }],
+          details: {
+            disabled: true,
+            error: blockedReason,
+            degraded: true,
+            degradedReason: "migrations_failed",
+            sdk: { ...ctx.sdkHealth },
+          },
         };
       }
-      const scope = await resolveUserAndWorkspaceScope({
-        api,
-        pool: ctx.getPool(),
-        workspaceDir,
-        agentId: (api as any)?.runtime?.agentId,
-        sessionKey: (api as any)?.runtime?.sessionKey,
-        configuredExternalId: ctx.cfg?.identity?.externalId,
-      });
-      const limits = resolveMemoryLimits(ctx.cfg!);
+      const unavailable = getToolUnavailableResponse(ctx);
+      if (unavailable) return unavailable;
       const record = (params ?? {}) as any;
       const query = typeof record.query === "string" ? String(record.query) : "";
       const corpus = typeof record.corpus === "string" ? String(record.corpus) : "memory";
       const maxResults = typeof record.maxResults === "number" ? (record.maxResults as number) : undefined;
       const minScore = typeof record.minScore === "number" ? (record.minScore as number) : undefined;
-      const effectiveMax = typeof maxResults === "number" ? maxResults : limits.maxResults;
       const trimmedCorpus = corpus.trim();
-      const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
-      const sessionsVisibility = sessionsSearch.visibility;
-      const sessionsEnabled = sessionsSearch.effective;
       if (trimmedCorpus === "wiki") {
         return {
           content: [
@@ -141,9 +140,54 @@ export function registerMemorySearchTool({
           details: { disabled: true, error: "corpus=wiki not implemented" },
         };
       }
+      const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
+      const sessionsVisibility = sessionsSearch.visibility;
+      const sessionsEnabled = sessionsSearch.effective;
       let hits: any[] = [];
       let retrievalMode: "fts_memory" | "fts_daily" | "sessions_index" | "sessions_fallback" | "all_merge_lexical" = "fts_memory";
       try {
+        await ctx.ensureReady();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const degradedReason = message.startsWith("migrations_failed:")
+          ? message
+          : `migrations_failed: ${message}`;
+        ctx.setDurableState({
+          overall: "blocked",
+          migrations: "failed",
+          reason: degradedReason,
+        });
+        ctx.setStartupCriticalFailure(degradedReason);
+        ctx.markSdkError(`memory_search:${trimmedCorpus || "unknown"}`, error);
+        return {
+          content: [{ type: "text", text: `anchorclaw: memory_search degraded (${degradedReason})` }],
+          details: {
+            disabled: true,
+            error: degradedReason,
+            degraded: true,
+            degradedReason: "migrations_failed",
+            sdk: { ...ctx.sdkHealth },
+          },
+        };
+      }
+      try {
+        const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
+        if (!workspaceDir) {
+          return {
+            content: [{ type: "text", text: `anchorclaw: memory_search unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
+            details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
+          };
+        }
+        const scope = await resolveUserAndWorkspaceScope({
+          api,
+          pool: ctx.getPool(),
+          workspaceDir,
+          agentId: (api as any)?.runtime?.agentId,
+          sessionKey: (api as any)?.runtime?.sessionKey,
+          configuredExternalId: ctx.cfg?.identity?.externalId,
+        });
+        const limits = resolveMemoryLimits(ctx.cfg!);
+        const effectiveMax = typeof maxResults === "number" ? maxResults : limits.maxResults;
         if (trimmedCorpus === "sessions") {
           if (!sessionsEnabled) {
             const visible = formatSearchLikeVisibleOutput({
@@ -308,10 +352,10 @@ export function registerMemorySearchTool({
         }
         ctx.markSdkSuccess();
       } catch (error) {
-        ctx.markSdkError(`memory_search:${trimmedCorpus || "unknown"}`, error);
         const message = error instanceof Error ? error.message : String(error);
+        ctx.markSdkError(`memory_search:${trimmedCorpus || "unknown"}`, error);
         return {
-          content: [{ type: "text", text: `anchorclaw: memory_search degraded (sdk/runtime error: ${message})` }],
+          content: [{ type: "text", text: `anchorclaw: memory_search degraded (${message})` }],
           details: {
             disabled: true,
             error: message,

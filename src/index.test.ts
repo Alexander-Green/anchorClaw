@@ -1077,6 +1077,30 @@ describe("phase2 session delta listener", () => {
     });
   });
 
+  it("reports migrations failure via memory_status active check when ensureReady fails", async () => {
+    applyMigrations.mockRejectedValueOnce(new Error("generation expression is not immutable"));
+
+    const { api } = buildApi();
+    await registerAndWaitStartup(api);
+    const statusRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_status");
+    expect(statusRegistration).toBeDefined();
+
+    const result = await statusRegistration.execute("toolcall-status-active-migrations-1", { check: true });
+    expect(result.content[0].text).toContain("AnchorClaw memory is blocked");
+    expect(result.details).toMatchObject({
+      ok: false,
+      overall: "blocked",
+      migrationsState: "failed",
+      reason: "migrations_failed: generation expression is not immutable",
+      database: {
+        ok: false,
+        error: "migrations_failed: generation expression is not immutable",
+      },
+    });
+  });
+
   it("logs workspace import degraded when importer returns degraded result", async () => {
     runImport.mockResolvedValueOnce({
       overall: "degraded",

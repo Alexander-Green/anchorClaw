@@ -89,16 +89,24 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
             schemaOk,
             dailySchemaOk,
             migrationVersion: migrationRows.rows[0]?.id ?? null,
+            ...(!schemaOk && base.reason ? { error: base.reason } : {}),
           };
           if (!schemaOk) {
             base.ok = false;
+            base.overall = "blocked";
+            base.migrationsState = "failed";
+            base.reason ??= "schema_incomplete";
           }
         } catch (error) {
           dbError = error instanceof Error ? error.message : String(error);
+          const migrationReason = dbError.startsWith("migrations_failed:") ? dbError : `migrations_failed: ${dbError}`;
           base.ok = false;
+          base.overall = "blocked";
+          base.migrationsState = "failed";
+          base.reason = migrationReason;
           base.database = {
             ok: false,
-            error: dbError,
+            error: migrationReason,
           };
         }
 

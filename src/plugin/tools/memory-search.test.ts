@@ -59,9 +59,12 @@ function buildCtx() {
       cfg: { workspaceDir: "/workspace", sessions: { search: { enabled: true }, visibility: "current" } },
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
+      durableState: { overall: "ready", migrations: "ready", reason: null },
       sdkHealth: { degraded: false, reason: null, affectedOperation: null },
       markSdkSuccess: vi.fn(),
       markSdkError: vi.fn(),
+      setDurableState: vi.fn(),
+      setStartupCriticalFailure: vi.fn(),
     } as any,
     registerTool,
   };
@@ -336,5 +339,41 @@ describe("memory_search tool exactTop1 metadata", () => {
     expect(result.details.meta.retrievalMode).toBe("fts_daily");
     expect(memorySearchDailyDbMock).toHaveBeenCalledTimes(1);
     expect(memorySearchDbMock).not.toHaveBeenCalled();
+  });
+
+  it("returns degraded response when ensureReady fails on migrations", async () => {
+    const { ctx, registerTool } = buildCtx();
+    ctx.ensureReady = vi.fn(async () => {
+      throw new Error("migrations_failed: generation expression is not immutable");
+    });
+    registerMemorySearchTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-schema-1", {
+      query: "favorite color",
+      corpus: "memory",
+    });
+
+    expect(result.content[0].text).toContain("memory_search degraded");
+    expect(result.details).toMatchObject({
+      degraded: true,
+      degradedReason: "migrations_failed",
+      error: "migrations_failed: generation expression is not immutable",
+    });
+    expect(memorySearchDbMock).not.toHaveBeenCalled();
+    expect(ctx.setDurableState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        overall: "blocked",
+        migrations: "failed",
+        reason: "migrations_failed: generation expression is not immutable",
+      }),
+    );
+    expect(ctx.setStartupCriticalFailure).toHaveBeenCalledWith(
+      "migrations_failed: generation expression is not immutable",
+    );
   });
 });
