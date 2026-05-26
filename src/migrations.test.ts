@@ -1,8 +1,19 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import { applyMigrations } from "./migrations.js";
 
 describe("applyMigrations", () => {
+  it("keeps 0007 search_text migration Postgres-compatible without generated columns", () => {
+    const sql = readFileSync(new URL("../migrations/0007_memory_search_text.sql", import.meta.url), "utf8");
+
+    expect(sql).toContain("ADD COLUMN IF NOT EXISTS search_text TEXT");
+    expect(sql).toContain("CREATE OR REPLACE FUNCTION memory_items_sync_search_text()");
+    expect(sql).toContain("CREATE TRIGGER memory_items_search_text_sync");
+    expect(sql).not.toContain("GENERATED ALWAYS AS");
+    expect(sql).not.toContain("concat_ws(");
+  });
+
   it("runs each migration inside a dedicated client transaction", async () => {
     const clientCalls: Array<{ sql: string; args: unknown[] }> = [];
     const client = {
