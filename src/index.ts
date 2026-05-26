@@ -10,8 +10,6 @@ import {
   type PluginRuntimeContext,
 } from "./plugin/runtime-context.js";
 import { createPromptCacheRuntime } from "./plugin/prompt-cache.js";
-import { createMaintenanceRuntime, registerMaintenanceLifecycle } from "./plugin/maintenance.js";
-import { registerEpisodicHooks } from "./plugin/episodic.js";
 import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
 import { registerDailyPromptHook } from "./plugin/daily-prompt.js";
 import { registerSessionDeltaLifecycle } from "./plugin/lifecycle.js";
@@ -104,6 +102,11 @@ export default definePluginEntry({
       if (warning) {
         api.logger.warn(warning);
       }
+      if (cfg.maintenance?.enabled || cfg.maintenance?.extractor?.enabled) {
+        api.logger.warn(
+          "anchorclaw: maintenance/extractor config is ignored in this release build; experimental extractor remains archived on branch old/extractor",
+        );
+      }
     }
 
     const ctx: PluginRuntimeContext = createPluginRuntimeContext({
@@ -112,7 +115,6 @@ export default definePluginEntry({
       disabledReason,
     });
     const { refreshPromptCache } = createPromptCacheRuntime({ api, ctx });
-    const { cleanupMaintenance } = createMaintenanceRuntime({ api, ctx });
     const { ensureSessionsIndexBootstrapped, ensureSessionDeltaListener, cleanupSessionDelta } =
       createSessionDeltaRuntime({ api, ctx });
 
@@ -263,8 +265,6 @@ export default definePluginEntry({
       })();
     }
     registerSessionDeltaLifecycle({ api, cleanupSessionDelta });
-    registerMaintenanceLifecycle({ api, cleanupMaintenance });
-    registerEpisodicHooks({ api, ctx });
     registerAnchorClawMemoryCapability({
       ctx,
       refreshPromptCache,

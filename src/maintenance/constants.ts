@@ -1,0 +1,2 @@
+export const MAINTENANCE_INTERNAL_MARKER = "[POSTCLAW_INTERNAL_LLM_CALL_DO_NOT_LOG]";
+export const MAINTENANCE_SESSION_ID_PREFIX = "anchorclaw-maintenance-";

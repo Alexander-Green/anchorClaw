@@ -5,7 +5,7 @@ import { resolveUserAndWorkspaceScope } from "../identity.js";
 import {
   MAINTENANCE_INTERNAL_MARKER,
   MAINTENANCE_SESSION_ID_PREFIX,
-} from "../maintenance/extractor.js";
+} from "../maintenance/constants.js";
 
 // Keep headroom below the default extractor window so one row can fit with its prefix.
 const MAX_EPISODIC_CONTENT_CHARS = 11_000;

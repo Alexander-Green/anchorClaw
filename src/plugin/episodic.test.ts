@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerEpisodicHooks } from "./episodic.js";
-import { MAINTENANCE_SESSION_ID_PREFIX } from "../maintenance/extractor.js";
+import { MAINTENANCE_SESSION_ID_PREFIX } from "../maintenance/constants.js";
 
 const resolveUserAndWorkspaceScope = vi.hoisted(() => vi.fn());
 

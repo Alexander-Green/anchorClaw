@@ -788,7 +788,7 @@ describe("phase2 session delta listener", () => {
     const { api, getTranscriptListener, runCleanup, unsub } = buildApiLegacyLifecycle();
     await registerAndWaitStartup(api);
 
-    expect(api.registerRuntimeLifecycle).toHaveBeenCalledTimes(2);
+    expect(api.registerRuntimeLifecycle).toHaveBeenCalledTimes(1);
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("using legacy runtime lifecycle API"),
     );
