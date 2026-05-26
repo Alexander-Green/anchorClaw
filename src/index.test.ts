@@ -366,13 +366,31 @@ describe("tool registration", () => {
 
     const calls = (api.registerHook as any).mock.calls;
     expect(calls.length).toBeGreaterThan(0);
-    const hasNamedOrLegacyForm = calls.some(
+    const hasDailyHook = calls.some(
       (call: any[]) =>
         call[0] === "before_prompt_build" &&
         typeof call[1] === "function" &&
         (call[2] === undefined || call[2]?.name === "anchorclaw-daily-startup-injection"),
     );
-    expect(hasNamedOrLegacyForm).toBe(true);
+    expect(hasDailyHook).toBe(true);
+  });
+
+  it("registers before_prompt_build system override for DB-backed memory semantics", async () => {
+    const { api } = buildApi();
+
+    (plugin as any).register(api);
+
+    const call = (api.registerHook as any).mock.calls.find(
+      (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-memory-system-override",
+    );
+    const hook = call?.[1];
+    expect(hook).toBeTypeOf("function");
+
+    const result = await hook({ prompt: "какой мой любимый цвет?", messages: [] });
+    expect(result?.prependSystemContext).toContain("AnchorClaw memory override:");
+    expect(result?.prependSystemContext).toContain("MEMORY.md as AnchorClaw DB durable memory");
+    expect(result?.prependSystemContext).toContain("memory/YYYY-MM-DD.md as AnchorClaw DB daily memory");
+    expect(result?.prependSystemContext).toContain("Before answering that a remembered fact");
   });
 });
 
@@ -405,7 +423,9 @@ describe("phase2 session delta listener", () => {
     const { api } = buildApi();
     await registerAndWaitStartup(api);
 
-    const call = (api.registerHook as any).mock.calls.find((row: any[]) => row[0] === "before_prompt_build");
+    const call = (api.registerHook as any).mock.calls.find(
+      (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-daily-startup-injection",
+    );
     const hook = call?.[1];
     expect(hook).toBeTypeOf("function");
 

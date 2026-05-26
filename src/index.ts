@@ -14,6 +14,7 @@ import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
 import { registerDailyPromptHook } from "./plugin/daily-prompt.js";
 import { registerSessionDeltaLifecycle } from "./plugin/lifecycle.js";
 import { createSessionDeltaRuntime } from "./plugin/session-delta.js";
+import { registerAnchorClawSystemOverrideHook } from "./plugin/system-override.js";
 import { registerAnchorClawTools } from "./plugin/tools/index.js";
 import { runAnchorClawSetup } from "./scripts/setup-db.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "./workspace.js";
@@ -270,6 +271,7 @@ export default definePluginEntry({
       refreshPromptCache,
       ensureSessionsIndexBootstrapped,
     });
+    registerAnchorClawSystemOverrideHook({ api, ctx });
     registerDailyPromptHook({ api, ctx });
     registerAnchorClawTools({
       ctx,
