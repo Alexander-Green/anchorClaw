@@ -68,6 +68,9 @@ describe("memory_log tool", () => {
       refreshPromptCache: vi.fn(),
     } as any);
     const def = registerTool.mock.calls[0]?.[0];
+    expect(def.description).toContain("current-day/current-conversation context");
+    expect(def.description).toContain("Use memory_store instead for durable facts, preferences, recurring schedules");
+    expect(def.description).toContain("Infer daily write intent from meaning in any language");
 
     const result = await def.execute("toolcall-1", {
       content: "Today we confirmed daily DB ownership.",

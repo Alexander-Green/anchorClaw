@@ -267,10 +267,10 @@ Safety behavior:
 AnchorClaw exposes both “native” and compatibility surfaces via OpenClaw tool contracts:
 
 - `memory_store({ content, canonicalKey?, type? })` where `type` is `fact|note` (MVP)
-  - use for durable facts/preferences/decisions/settings/curated notes when the user's intent is persistence across future interactions
-  - if persistence intent is ambiguous, ask a brief clarification before storing
+  - use for durable facts/preferences/recurring schedules/decisions/settings/project rules/curated notes when the user's intent is persistence across future interactions
+  - if the intended memory lifetime is ambiguous, ask a brief clarification before storing
 - `memory_log({ content, date?, path? })`
-  - use for transient daily context that would normally go to `memory/YYYY-MM-DD.md`
+  - use for current-day/current-conversation context, events, meeting notes, and temporary daily notes that would normally go to `memory/YYYY-MM-DD.md`
 - `memory_search({ query, corpus?, maxResults?, minScore? })`
   - `corpus="memory"` (default): Postgres durable memory plus DB-owned daily memory
   - `corpus="daily"`: DB-owned daily memory only
