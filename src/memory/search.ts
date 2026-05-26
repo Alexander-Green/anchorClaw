@@ -28,6 +28,7 @@ type MemorySearchRow = {
   title: string | null;
   type: string;
   content: string;
+  canonical_key?: string | null;
   updated_at: string;
   score: number;
 };
@@ -121,17 +122,63 @@ async function queryMemoryItems(params: {
 }): Promise<MemorySearchHit[]> {
   const { rows } = await params.pool.query<MemorySearchRow>(
     `
+    WITH q AS (
+      SELECT plainto_tsquery('simple', $3) AS ts_query
+    )
     SELECT
       id,
       title,
       type,
       content,
+      canonical_key,
       updated_at,
       (
-        ts_rank_cd(search_vector, plainto_tsquery('simple', $3))
+        ts_rank_cd(to_tsvector('simple', search_text), q.ts_query)
         + CASE
             WHEN lower(coalesce(title, '')) = lower($3) THEN 3.0
             WHEN lower(content) = lower($3) THEN 2.5
+            WHEN lower(coalesce(canonical_key, '')) = lower($3) THEN 2.25
+            ELSE 0
+          END
+      ) AS score
+    FROM memory_items, q
+    WHERE user_id = $1
+      AND workspace_id = $2
+      AND status = 'active'
+      AND to_tsvector('simple', search_text) @@ q.ts_query
+    ORDER BY score DESC, importance DESC, updated_at DESC, id ASC
+    LIMIT $4
+  `,
+    [params.userId, params.workspaceId, params.query, params.limit],
+  );
+
+  return mapRowsToHits(rows);
+}
+
+async function queryMemoryItemsFuzzy(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+  query: string;
+  limit: number;
+}): Promise<MemorySearchHit[]> {
+  const { rows } = await params.pool.query<MemorySearchRow>(
+    `
+    SELECT
+      id,
+      title,
+      type,
+      content,
+      canonical_key,
+      updated_at,
+      (
+        GREATEST(
+          similarity(lower(search_text), lower($3)),
+          word_similarity(lower($3), lower(search_text))
+        )
+        + CASE
+            WHEN lower(search_text) LIKE ('%' || lower($3) || '%') THEN 0.6
+            WHEN lower(coalesce(canonical_key, '')) LIKE ('%' || lower($3) || '%') THEN 0.4
             ELSE 0
           END
       ) AS score
@@ -139,7 +186,12 @@ async function queryMemoryItems(params: {
     WHERE user_id = $1
       AND workspace_id = $2
       AND status = 'active'
-      AND search_vector @@ plainto_tsquery('simple', $3)
+      AND (
+        lower(search_text) LIKE ('%' || lower($3) || '%')
+        OR lower(coalesce(canonical_key, '')) LIKE ('%' || lower($3) || '%')
+        OR word_similarity(lower($3), lower(search_text)) >= 0.45
+        OR similarity(lower(search_text), lower($3)) >= 0.35
+      )
     ORDER BY score DESC, importance DESC, updated_at DESC, id ASC
     LIMIT $4
   `,
@@ -202,6 +254,17 @@ export async function memorySearchDb(params: {
   });
   if (strictHits.length > 0 || strictDailyHits.length > 0) {
     return [...strictHits, ...strictDailyHits].sort(sortMergedHits).slice(0, limit);
+  }
+
+  const fuzzyHits = await queryMemoryItemsFuzzy({
+    pool: params.pool,
+    userId: params.userId,
+    workspaceId: params.workspaceId,
+    query: q,
+    limit,
+  });
+  if (fuzzyHits.length > 0) {
+    return fuzzyHits.slice(0, limit);
   }
 
   const relaxedQueries = deriveRelaxedQueries(q);

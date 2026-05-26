@@ -32,10 +32,11 @@ export function formatSearchLikeVisibleOutput(params: {
   const results = hits.map((hit) => {
     const path = typeof hit.path === "string" ? hit.path : "";
     const snippetRaw = typeof hit.snippet === "string" ? hit.snippet : "";
+    const corpus = typeof hit.corpus === "string" ? hit.corpus : "memory";
     const startLine = 1;
     const endLine = 1;
     const citation = path ? `${path}#L${startLine}` : "";
-    const sourceLabel = path ? `\n\nSource: ${citation}` : "";
+    const sourceLabel = path ? `\n\nSource: ${corpus === "daily" ? "DB daily entry " : ""}${citation}` : "";
     return {
       path,
       startLine,
@@ -44,7 +45,7 @@ export function formatSearchLikeVisibleOutput(params: {
       snippet: snippetRaw ? `${snippetRaw}${sourceLabel}` : "",
       source: hit.corpus === "sessions" ? "sessions" : hit.corpus === "daily" ? "daily" : "memory",
       citation,
-      corpus: typeof hit.corpus === "string" ? hit.corpus : "memory",
+      corpus,
     };
   });
 
@@ -58,8 +59,9 @@ export function formatSearchLikeVisibleOutput(params: {
   }
   for (const [index, result] of results.entries()) {
     const label = result.citation ? `${result.path}#L${result.startLine}` : result.path;
+    const corpusLabel = result.corpus === "daily" ? "daily DB entry" : result.corpus;
     lines.push("");
-    lines.push(`${index + 1}. [${result.corpus}] ${label} (score ${result.score.toFixed(3)})`);
+    lines.push(`${index + 1}. [${corpusLabel}] ${label} (score ${result.score.toFixed(3)})`);
     if (result.snippet) {
       lines.push(result.snippet);
     }
@@ -96,10 +98,11 @@ export function buildSearchLikeDetailsEnvelope(params: {
   const results = hits.map((hit) => {
     const path = typeof hit.path === "string" ? hit.path : "";
     const snippetRaw = typeof hit.snippet === "string" ? hit.snippet : "";
+    const corpus = typeof hit.corpus === "string" ? hit.corpus : "memory";
     const startLine = 1;
     const endLine = 1;
     const citation = path ? `${path}#L${startLine}` : "";
-    const sourceLabel = path ? `\n\nSource: ${citation}` : "";
+    const sourceLabel = path ? `\n\nSource: ${corpus === "daily" ? "DB daily entry " : ""}${citation}` : "";
     return {
       path,
       startLine,
@@ -108,7 +111,7 @@ export function buildSearchLikeDetailsEnvelope(params: {
       snippet: snippetRaw ? `${snippetRaw}${sourceLabel}` : "",
       source: hit.corpus === "sessions" ? "sessions" : hit.corpus === "daily" ? "daily" : "memory",
       citation,
-      corpus: typeof hit.corpus === "string" ? hit.corpus : "memory",
+      corpus,
     };
   });
 

@@ -70,13 +70,13 @@ export function registerAnchorClawMemoryCapability(params: {
       let toolGuidance = "";
       if (hasMemorySearch && hasMemoryGet) {
         toolGuidance =
-          "Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search; then use memory_get to pull only the needed lines. For exact marker/id/key questions, prefer literal matches. If no exact literal match is found, say so and give the closest candidate with uncertainty.";
+          "Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search; then use memory_get to pull only the needed lines. If memory gives enough evidence, answer from it and do not scan workspace files unless the user asks for files/calendar. For exact marker/id/key questions, prefer literal matches. If no exact literal match is found, say so and give the closest candidate with uncertainty.";
       } else if (hasMemorySearch) {
         toolGuidance =
-          "Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search and answer from matching results. For exact marker/id/key questions, prefer literal matches. If no exact literal match is found, say so and give the closest candidate with uncertainty.";
+          "Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search and answer from matching results. If memory gives enough evidence, answer from it and do not scan workspace files unless the user asks for files/calendar. For exact marker/id/key questions, prefer literal matches. If no exact literal match is found, say so and give the closest candidate with uncertainty.";
       } else if (hasMemoryGet) {
         toolGuidance =
-          "Before answering about prior work that already points to a specific memory item, run memory_get to pull only the needed lines. If confidence stays low after reading them, say you checked.";
+          "Before answering about prior work that already points to a specific memory item, run memory_get to pull only the needed lines. If memory gives enough evidence, answer from it and do not scan workspace files unless the user asks for files/calendar. If confidence stays low after reading them, say you checked.";
       }
 
       const citationsMode = params?.citationsMode ?? "inline";

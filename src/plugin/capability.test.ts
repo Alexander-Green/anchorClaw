@@ -80,6 +80,7 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     expect(text).toContain("## Memory Search");
     expect(text).toContain("Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search; then use memory_get to pull only the needed lines.");
+    expect(text).toContain("If memory gives enough evidence, answer from it and do not scan workspace files unless the user asks for files/calendar.");
     expect(text).toContain("## Memory Writes");
     expect(text).toContain("A save request means the user wants information preserved beyond this reply.");
     expect(text).toContain("emit exactly one write tool call before final text");

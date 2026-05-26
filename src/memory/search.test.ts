@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { memorySearchDb } from "./search.js";
 
 describe("memorySearchDb ranking contract", () => {
-  it("uses exact-only boost and does not use broad LIKE boost", async () => {
+  it("uses exact boosts on title/content/canonical key in the strict FTS path", async () => {
     const capturedSql: string[] = [];
     let capturedParams: unknown[] = [];
     const pool = {
@@ -24,7 +24,8 @@ describe("memorySearchDb ranking contract", () => {
 
     expect(capturedSql[0]).toContain("WHEN lower(coalesce(title, '')) = lower($3) THEN 3.0");
     expect(capturedSql[0]).toContain("WHEN lower(content) = lower($3) THEN 2.5");
-    expect(capturedSql[0]).not.toContain("LIKE ('%' || lower($3) || '%')");
+    expect(capturedSql[0]).toContain("WHEN lower(coalesce(canonical_key, '')) = lower($3) THEN 2.25");
+    expect(capturedSql[0]).toContain("to_tsvector('simple', search_text) @@ q.ts_query");
     expect(capturedSql[0]).toContain("ORDER BY score DESC, importance DESC, updated_at DESC, id ASC");
     expect(capturedSql[1]).toContain("FROM memory_daily_entries");
     expect(capturedParams).toEqual(["u1", "w1", "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515", 5]);
@@ -49,8 +50,8 @@ describe("memorySearchDb ranking contract", () => {
     });
 
     expect(capturedSql[0]).toContain("plainto_tsquery('simple', $3)");
-    expect(capturedSql[0]).toContain("ts_rank_cd(search_vector, plainto_tsquery('simple', $3))");
-    expect(capturedSql[0]).not.toContain("LIKE ('%' || lower($3) || '%')");
+    expect(capturedSql[0]).toContain("ts_rank_cd(to_tsvector('simple', search_text), q.ts_query)");
+    expect(capturedSql[2]).toContain("word_similarity(lower($3), lower(search_text))");
   });
 
   it("falls back to relaxed phrase/token queries when strict multi-term FTS returns no hits", async () => {
@@ -149,6 +150,48 @@ describe("memorySearchDb ranking contract", () => {
     expect(hits[0]).toMatchObject({
       title: "Любимый цвет: зеленый",
       relaxedQuery: "любимый цвет",
+    });
+  });
+
+  it("uses fuzzy fallback to recover close lexical forms after strict FTS miss", async () => {
+    const capturedSql: string[] = [];
+    const pool = {
+      query: async (sql: string, params: unknown[]) => {
+        capturedSql.push(sql);
+        if (capturedSql.length === 3) {
+          expect(String(params[2])).toBe("Сабира");
+          return {
+            rows: [
+              {
+                id: "sabira-color",
+                title: "Любимый цвет Сабиры — жёлтый.",
+                type: "fact",
+                content: "Любимый цвет Сабиры — жёлтый.",
+                canonical_key: "sabira_favorite_color",
+                updated_at: "2026-05-26T11:37:29.000Z",
+                score: 0.91,
+              },
+            ],
+          };
+        }
+        return { rows: [] as any[] };
+      },
+    } as any;
+
+    const hits = await memorySearchDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: { maxResults: 10 } as any,
+      query: "Сабира",
+      maxResults: 5,
+    });
+
+    expect(capturedSql[2]).toContain("word_similarity(lower($3), lower(search_text))");
+    expect(capturedSql[2]).toContain("similarity(lower(search_text), lower($3))");
+    expect(hits[0]).toMatchObject({
+      title: "Любимый цвет Сабиры — жёлтый.",
+      path: "db-memory/items/sabira-color.md",
     });
   });
 

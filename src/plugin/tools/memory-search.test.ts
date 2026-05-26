@@ -331,6 +331,8 @@ describe("memory_search tool exactTop1 metadata", () => {
     expect(visible.results[0].path).toBe("memory/2026-05-20.md");
     expect(visible.results[0].corpus).toBe("daily");
     expect(visible.results[0].source).toBe("daily");
+    expect(result.content[0].text).toContain("[daily DB entry] memory/2026-05-20.md#L1");
+    expect(result.content[0].text).toContain("Source: DB daily entry memory/2026-05-20.md#L1");
     expect(result.details.meta.retrievalMode).toBe("fts_daily");
     expect(memorySearchDailyDbMock).toHaveBeenCalledTimes(1);
     expect(memorySearchDbMock).not.toHaveBeenCalled();
