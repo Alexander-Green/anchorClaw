@@ -40,7 +40,7 @@ export function formatSearchLikeVisibleOutput(params: {
     const citation = path ? `${path}#L${startLine}` : "";
     const notes: string[] = [];
     if (corpus === "daily") {
-      notes.push("Note: daily memory is one-day context unless explicitly recurring.");
+      notes.push("Scope: date-specific daily memory.");
     } else if (canonicalKey) {
       notes.push(`Canonical key: ${canonicalKey}`);
     }
@@ -114,7 +114,7 @@ export function buildSearchLikeDetailsEnvelope(params: {
     const citation = path ? `${path}#L${startLine}` : "";
     const notes: string[] = [];
     if (corpus === "daily") {
-      notes.push("Note: daily memory is one-day context unless explicitly recurring.");
+      notes.push("Scope: date-specific daily memory.");
     } else if (canonicalKey) {
       notes.push(`Canonical key: ${canonicalKey}`);
     }

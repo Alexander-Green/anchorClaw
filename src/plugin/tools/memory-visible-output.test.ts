@@ -27,7 +27,7 @@ describe("memory search visible output", () => {
     expect(visible).toContain("Canonical key: favorite_color");
   });
 
-  it("marks daily hits as one-day context in visible and structured output", () => {
+  it("marks daily hits as date-specific context in visible and structured output", () => {
     const visible = formatSearchLikeVisibleOutput({
       hits: [
         {
@@ -65,7 +65,7 @@ describe("memory search visible output", () => {
       model: "postgres-fts",
     });
 
-    expect(visible).toContain("daily memory is one-day context");
-    expect(details.results[0]?.snippet).toContain("daily memory is one-day context");
+    expect(visible).toContain("Scope: date-specific daily memory.");
+    expect(details.results[0]?.snippet).toContain("Scope: date-specific daily memory.");
   });
 });
