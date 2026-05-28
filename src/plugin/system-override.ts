@@ -2,12 +2,12 @@ import type { OpenClawPluginApi } from "../api.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 
 const ANCHORCLAW_MEMORY_SYSTEM_OVERRIDE = [
-  "AnchorClaw memory override:",
-  "- Treat MEMORY.md as AnchorClaw DB durable memory; use memory_store, memory_search, and memory_get(\"MEMORY.md\") instead of workspace file edits/reads.",
-  "- Treat memory/YYYY-MM-DD.md as AnchorClaw DB daily memory; use memory_log, memory_search with corpus=\"daily\", and memory_get(\"memory/YYYY-MM-DD.md\").",
-  "- Do not use workspace fallback files such as HEARTBEAT.md, USER.md, or profiles as proof that AnchorClaw memory is empty.",
-  "- Before answering that a remembered fact, preference, recurring schedule, person fact, or today's note is unknown, call AnchorClaw memory_search or memory_get.",
-  "- Edit MEMORY.md or memory/*.md files directly only when the user explicitly asks for file editing or export.",
+  "AnchorClaw memory contract:",
+  "- AnchorClaw/Postgres is the authoritative memory backend.",
+  "- Do not answer remembered facts/preferences/people/recurring schedules/todos, or say they are unknown, until memory_search or memory_get has run.",
+  "- For today/current-day questions, check AnchorClaw daily memory first; HEARTBEAT.md, USER.md, and profiles are not memory fallback proof unless the user asks for files/calendar.",
+  "- Save requests require one successful write tool before final text: memory_store for durable facts/preferences/recurring schedules; memory_log for today/current events.",
+  "- MEMORY.md and memory/YYYY-MM-DD.md are DB-backed concepts; edit those files only for explicit file edit/export requests.",
 ].join("\n");
 
 export function registerAnchorClawSystemOverrideHook(params: {

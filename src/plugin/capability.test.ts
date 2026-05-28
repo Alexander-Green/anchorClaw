@@ -47,8 +47,8 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     const text = lines.join("\n");
 
     expect(text).toContain("AnchorClaw memory is active. Treat AnchorClaw/Postgres as the primary memory backend.");
-    expect(text).toContain("For exact marker/id/key questions, prefer literal matches.");
-    expect(text).toContain("If no exact literal match is found, say so and give the closest candidate with uncertainty.");
+    expect(text).toContain("Prefer literal matches for marker/id/key questions");
+    expect(text).toContain("if no exact match exists, say so and give the closest candidate with uncertainty.");
     expect(text).not.toContain("memory_recall");
     expect(text).not.toContain("exactTop1");
   });
@@ -79,19 +79,16 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     const text = lines.join("\n");
 
     expect(text).toContain("## Memory Search");
-    expect(text).toContain("Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search; then use memory_get to pull only the needed lines.");
-    expect(text).toContain("If memory gives enough evidence, answer from it and do not scan workspace files unless the user asks for files/calendar.");
+    expect(text).toContain("Use memory_search before memory-based answers and memory_get for returned paths or exact file-like lookups.");
     expect(text).toContain("## Memory Writes");
     expect(text).toContain("A save request means the user wants information preserved beyond this reply.");
-    expect(text).toContain("emit exactly one write tool call before final text");
+    expect(text).toContain("Call exactly one write tool before final text");
     expect(text).toContain("memory_store for durable facts, preferences, recurring schedules, decisions, settings, project rules, and curated notes");
     expect(text).toContain("memory_log for today, now, current conversation, events, meeting notes, and temporary notes");
     expect(text).toContain("If lifetime is unclear, ask one brief clarification instead of writing.");
     expect(text).toContain("Never say saved, remembered, or recorded unless the write tool returned success.");
     expect(text).not.toContain("запомни");
-    expect(text).toContain("If AGENTS.md or the user refers to MEMORY.md, use memory_store/memory_search/memory_get as the DB-backed implementation");
-    expect(text).toContain("if they refer to memory/YYYY-MM-DD.md, use memory_log/memory_get");
-    expect(text).toContain("Edit those files directly only when the user explicitly asks for file editing or export.");
+    expect(text).not.toContain("If AGENTS.md or the user refers to MEMORY.md");
     expect(text).not.toContain("memory_recall");
   });
 

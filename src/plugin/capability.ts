@@ -70,13 +70,13 @@ export function registerAnchorClawMemoryCapability(params: {
       let toolGuidance = "";
       if (hasMemorySearch && hasMemoryGet) {
         toolGuidance =
-          "Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search; then use memory_get to pull only the needed lines. If memory gives enough evidence, answer from it and do not scan workspace files unless the user asks for files/calendar. For exact marker/id/key questions, prefer literal matches. If no exact literal match is found, say so and give the closest candidate with uncertainty.";
+          "Use memory_search before memory-based answers and memory_get for returned paths or exact file-like lookups. Prefer literal matches for marker/id/key questions; if no exact match exists, say so and give the closest candidate with uncertainty.";
       } else if (hasMemorySearch) {
         toolGuidance =
-          "Before answering about prior work, decisions, dates, people, preferences, or todos, run memory_search and answer from matching results. If memory gives enough evidence, answer from it and do not scan workspace files unless the user asks for files/calendar. For exact marker/id/key questions, prefer literal matches. If no exact literal match is found, say so and give the closest candidate with uncertainty.";
+          "Use memory_search before memory-based answers. Prefer literal matches for marker/id/key questions; if no exact match exists, say so and give the closest candidate with uncertainty.";
       } else if (hasMemoryGet) {
         toolGuidance =
-          "Before answering about prior work that already points to a specific memory item, run memory_get to pull only the needed lines. If memory gives enough evidence, answer from it and do not scan workspace files unless the user asks for files/calendar. If confidence stays low after reading them, say you checked.";
+          "Use memory_get for specific memory paths and file-like lookups. If confidence stays low after reading them, say you checked.";
       }
 
       const citationsMode = params?.citationsMode ?? "inline";
@@ -92,11 +92,10 @@ export function registerAnchorClawMemoryCapability(params: {
         ...(toolGuidance ? ["## Memory Search", toolGuidance, citationsLine, ""] : []),
         "## Memory Writes",
         "A save request means the user wants information preserved beyond this reply.",
-        "For any save request, emit exactly one write tool call before final text: memory_store for durable facts, preferences, recurring schedules, decisions, settings, project rules, and curated notes; memory_log for today, now, current conversation, events, meeting notes, and temporary notes.",
+        "Call exactly one write tool before final text: memory_store for durable facts, preferences, recurring schedules, decisions, settings, project rules, and curated notes; memory_log for today, now, current conversation, events, meeting notes, and temporary notes.",
         "If lifetime is unclear, ask one brief clarification instead of writing.",
         "Never say saved, remembered, or recorded unless the write tool returned success.",
         "Use canonicalKey only for updateable durable facts, preferences, schedules, or settings.",
-        "If AGENTS.md or the user refers to MEMORY.md, use memory_store/memory_search/memory_get as the DB-backed implementation; if they refer to memory/YYYY-MM-DD.md, use memory_log/memory_get. Edit those files directly only when the user explicitly asks for file editing or export.",
         "",
         ...(sessionsCorpusNote ? ["## Sessions", sessionsCorpusNote, ""] : []),
         ...cacheNotice,

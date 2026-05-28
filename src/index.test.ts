@@ -387,10 +387,11 @@ describe("tool registration", () => {
     expect(hook).toBeTypeOf("function");
 
     const result = await hook({ prompt: "какой мой любимый цвет?", messages: [] });
-    expect(result?.prependSystemContext).toContain("AnchorClaw memory override:");
-    expect(result?.prependSystemContext).toContain("MEMORY.md as AnchorClaw DB durable memory");
-    expect(result?.prependSystemContext).toContain("memory/YYYY-MM-DD.md as AnchorClaw DB daily memory");
-    expect(result?.prependSystemContext).toContain("Before answering that a remembered fact");
+    expect(result?.prependSystemContext).toContain("AnchorClaw memory contract:");
+    expect(result?.prependSystemContext).toContain("Do not answer remembered facts/preferences/people/recurring schedules/todos");
+    expect(result?.prependSystemContext).toContain("check AnchorClaw daily memory first");
+    expect(result?.prependSystemContext).toContain("Save requests require one successful write tool before final text");
+    expect(result?.prependSystemContext).toContain("MEMORY.md and memory/YYYY-MM-DD.md are DB-backed concepts");
   });
 });
 
