@@ -256,7 +256,6 @@ Safety behavior:
 - idempotent setup for existing database/user/schema
 - no destructive operations on existing databases/schemas
 - fail-fast on schema conflicts that look AnchorClaw-related but have no `schema_migrations`
-- legacy `--patch-agents` troubleshooting mode, if used, writes a backup under `.openclaw-repair/anchorclaw/` before changing `AGENTS.md`
 
 ---
 
@@ -307,8 +306,6 @@ AnchorClaw does not require rewriting workspace instructions. Existing OpenClaw-
 - `memory/YYYY-MM-DD.md` appends/reads map to `memory_log` and `memory_get("memory/YYYY-MM-DD.md")`
 
 Direct edits to those files should only happen when the user explicitly asks for file editing or export.
-
-The legacy `--patch-agents` flag still exists as a troubleshooting escape hatch for old installs, but it is not part of the normal install path. It backs up the original file to `.openclaw-repair/anchorclaw/AGENTS.md.anchorclaw-backup.<timestamp>.md` before removing known default file-memory writer sections.
 
 ---
 

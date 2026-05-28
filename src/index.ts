@@ -41,8 +41,6 @@ export default definePluginEntry({
           .option("--workspace-dir <path>", "OpenClaw workspace directory for AnchorClaw import/scope")
           .option("--schema-none", "Disable dedicated schema and use default PostgreSQL search_path")
           .option("--skip-config", "Do not update ~/.openclaw/openclaw.json")
-          .option("--patch-agents", "Optionally patch workspace AGENTS.md to remove known legacy file-memory instructions")
-          .option("--skip-agents-patch", "Deprecated no-op unless --patch-agents is also passed")
           .option("--enable-prompt-injection", "Set plugins.entries.anchorclaw.hooks.allowPromptInjection=true in openclaw.json")
           .option("--non-interactive", "Disable prompts and use defaults/flags only")
           .action(async (opts: {
@@ -55,8 +53,6 @@ export default definePluginEntry({
             workspaceDir?: string;
             schemaNone?: boolean;
             skipConfig?: boolean;
-            patchAgents?: boolean;
-            skipAgentsPatch?: boolean;
             enablePromptInjection?: boolean;
             nonInteractive?: boolean;
           }) => {
@@ -70,8 +66,6 @@ export default definePluginEntry({
               workspaceDir: opts.workspaceDir,
               schemaNone: opts.schemaNone,
               skipConfig: opts.skipConfig,
-              patchAgents: opts.patchAgents,
-              skipAgentsPatch: opts.skipAgentsPatch,
               enablePromptInjection: opts.enablePromptInjection,
               nonInteractive: opts.nonInteractive,
             });

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Client } from "pg";
@@ -16,8 +16,6 @@ export type AnchorClawSetupOptions = {
   workspaceDir?: string;
   schemaNone?: boolean;
   skipConfig?: boolean;
-  patchAgents?: boolean;
-  skipAgentsPatch?: boolean;
   enablePromptInjection?: boolean;
   nonInteractive?: boolean;
 };
@@ -31,20 +29,11 @@ type ResolvedSetupOptions = {
   schema: string | undefined;
   workspaceDir: string | undefined;
   skipConfig: boolean;
-  patchAgents: boolean;
-  skipAgentsPatch: boolean;
   enablePromptInjection: boolean;
   nonInteractive: boolean;
 };
 
 type PromptInjectionConfigState = "enabled" | "disabled" | "unset";
-
-export type AgentsInstructionPatchResult =
-  | { status: "skipped"; reason: string }
-  | { status: "not_found"; path: string }
-  | { status: "unchanged"; path: string }
-  | { status: "patched"; path: string; backupPath: string }
-  | { status: "failed"; path: string; reason: string };
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -133,41 +122,6 @@ function resolveOptionalWorkspaceDir(value: string | undefined): string | undefi
   return trimmed ? resolve(trimmed) : undefined;
 }
 
-function removeKnownSection(content: string, pattern: RegExp, requiredMarkers: string[]): string {
-  return content.replace(pattern, (match, prefix = "") => {
-    if (!requiredMarkers.every((marker) => match.includes(marker))) {
-      return match;
-    }
-    return prefix;
-  });
-}
-
-function removeKnownOpenClawFileMemoryInstructions(content: string): string {
-  let updated = content;
-
-  updated = removeKnownSection(
-    updated,
-    /(^|\r?\n)## Memory\r?\n[\s\S]*?(?=\r?\n## Red Lines\r?\n)/,
-    [
-      "### MEMORY.md - Your Long-Term Memory",
-      "Write It Down - No \"Mental Notes\"!",
-      "- **Long-term:** `MEMORY.md`",
-    ],
-  );
-  updated = removeKnownSection(
-    updated,
-    /(^|\r?\n)(?:- \*\*Review and update MEMORY\.md\*\* \(see below\)\r?\n(?:\r?\n)?)?### [^\r\n]*Memory Maintenance \(During Heartbeats\)\r?\n[\s\S]*?(?=\r?\nThe goal: Be helpful without being annoying\.)/,
-    [
-      "- **Review and update MEMORY.md** (see below)",
-      "1. Read through recent `memory/YYYY-MM-DD.md` files",
-      "2. Identify significant events, lessons, or insights worth keeping long-term",
-      "3. Update `MEMORY.md` with distilled learnings",
-    ],
-  );
-
-  return updated;
-}
-
 function readPromptInjectionConfigState(cfg: Record<string, any>): PromptInjectionConfigState {
   const hooks = cfg.plugins?.entries?.anchorclaw?.hooks;
   if (!hooks || typeof hooks !== "object") {
@@ -196,44 +150,6 @@ function readPromptInjectionStateFromConfigFile(): PromptInjectionConfigState {
   }
 }
 
-function backupStamp(): string {
-  return new Date().toISOString().replace(/[:.]/g, "-");
-}
-
-export function patchWorkspaceAgentsInstructions(params: {
-  workspaceDir: string | undefined;
-}): AgentsInstructionPatchResult {
-  if (!params.workspaceDir) {
-    return { status: "skipped", reason: "workspaceDir is not configured" };
-  }
-
-  const agentsPath = resolve(params.workspaceDir, "AGENTS.md");
-  if (!existsSync(agentsPath)) {
-    return { status: "not_found", path: agentsPath };
-  }
-
-  try {
-    const original = readFileSync(agentsPath, "utf-8");
-    const updated = removeKnownOpenClawFileMemoryInstructions(original);
-    if (updated === original) {
-      return { status: "unchanged", path: agentsPath };
-    }
-
-    const backupDir = resolve(params.workspaceDir, ".openclaw-repair", "anchorclaw");
-    mkdirSync(backupDir, { recursive: true });
-    const backupPath = join(backupDir, `AGENTS.md.anchorclaw-backup.${backupStamp()}.md`);
-    writeFileSync(backupPath, original);
-    writeFileSync(agentsPath, updated);
-    return { status: "patched", path: agentsPath, backupPath };
-  } catch (error) {
-    return {
-      status: "failed",
-      path: agentsPath,
-      reason: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
 function ensureWorkspaceDirForConfig(params: {
   workspaceDir: string | undefined;
   skipConfig: boolean;
@@ -257,8 +173,6 @@ async function promptIfNeeded(params: {
   };
   const nonInteractive = Boolean(params.options.nonInteractive);
   const skipConfig = Boolean(params.options.skipConfig);
-  let patchAgents = Boolean(params.options.patchAgents);
-  let skipAgentsPatch = Boolean(params.options.skipAgentsPatch);
   let rotateDbPassword = Boolean(params.options.rotateDbPassword);
   let enablePromptInjection = Boolean(params.options.enablePromptInjection);
 
@@ -322,10 +236,6 @@ async function promptIfNeeded(params: {
         ? !["n", "no"].includes(updateAnswer)
         : shouldUpdateByDefault;
       params.options.skipConfig = !update;
-      if (!update) {
-        patchAgents = false;
-        skipAgentsPatch = true;
-      }
 
       const existingPromptInjectionState = update ? readPromptInjectionStateFromConfigFile() : "unset";
       if (update && !enablePromptInjection && existingPromptInjectionState === "disabled") {
@@ -373,8 +283,6 @@ async function promptIfNeeded(params: {
     schema,
     workspaceDir,
     skipConfig: Boolean(params.options.skipConfig),
-    patchAgents,
-    skipAgentsPatch,
     enablePromptInjection,
     nonInteractive,
   };
@@ -583,11 +491,6 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     });
   }
 
-  const agentsPatch =
-    !options.skipConfig && configUpdate?.updated && options.patchAgents && !options.skipAgentsPatch
-      ? patchWorkspaceAgentsInstructions({ workspaceDir: options.workspaceDir })
-      : undefined;
-
   console.log("\nAnchorClaw setup complete");
   console.log(`- database: ${options.dbName} (${dbState.databaseExists ? "already existed" : "created"})`);
   console.log(`- user: ${options.dbUser} (${dbState.userExists ? "already existed" : "created"})`);
@@ -623,24 +526,6 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
       console.warn("Warning: AnchorClaw daily startup injection will stay degraded until prompt injection is enabled.");
       console.warn("Warning: Re-run `openclaw anchorclaw setup --enable-prompt-injection` to enable it automatically.");
     }
-  }
-  if (options.skipConfig) {
-    console.log("- AGENTS.md patch: skipped (config update disabled)");
-  } else if (options.patchAgents && options.skipAgentsPatch) {
-    console.log("- AGENTS.md patch: skipped (--skip-agents-patch)");
-  } else if (!options.patchAgents) {
-    console.log("- AGENTS.md patch: not requested (use --patch-agents if legacy file-memory instructions conflict)");
-  } else if (options.skipAgentsPatch) {
-    console.log("- AGENTS.md patch: skipped (--skip-agents-patch)");
-  } else if (agentsPatch?.status === "patched") {
-    console.log(`- AGENTS.md patch: updated ${agentsPatch.path}`);
-    console.log(`- AGENTS.md backup: ${agentsPatch.backupPath}`);
-  } else if (agentsPatch?.status === "unchanged") {
-    console.log(`- AGENTS.md patch: no matching OpenClaw file-memory instructions found (${agentsPatch.path})`);
-  } else if (agentsPatch?.status === "not_found") {
-    console.log(`- AGENTS.md patch: not found (${agentsPatch.path})`);
-  } else if (agentsPatch?.status === "failed") {
-    console.warn(`- AGENTS.md patch: failed (${agentsPatch.reason}); AGENTS.md was left unchanged`);
   }
   if (options.workspaceDir) {
     console.log(`- workspaceDir: ${options.workspaceDir}`);
