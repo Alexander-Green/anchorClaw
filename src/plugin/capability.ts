@@ -70,10 +70,10 @@ export function registerAnchorClawMemoryCapability(params: {
       let toolGuidance = "";
       if (hasMemorySearch && hasMemoryGet) {
         toolGuidance =
-          "Use memory_search before memory-based answers and memory_get for returned paths or exact file-like lookups. Prefer literal matches for marker/id/key questions; if no exact match exists, say so and give the closest candidate with uncertainty.";
+          "Use memory_search before memory-based answers and memory_get for returned paths or exact file-like lookups. Prefer literal matches for marker/id/key questions; if no exact match exists, say so and give the closest candidate with uncertainty. If a direct durable fact hit answers the question, answer with it plainly.";
       } else if (hasMemorySearch) {
         toolGuidance =
-          "Use memory_search before memory-based answers. Prefer literal matches for marker/id/key questions; if no exact match exists, say so and give the closest candidate with uncertainty.";
+          "Use memory_search before memory-based answers. Prefer literal matches for marker/id/key questions; if no exact match exists, say so and give the closest candidate with uncertainty. If a direct durable fact hit answers the question, answer with it plainly.";
       } else if (hasMemoryGet) {
         toolGuidance =
           "Use memory_get for specific memory paths and file-like lookups. If confidence stays low after reading them, say you checked.";
@@ -93,6 +93,7 @@ export function registerAnchorClawMemoryCapability(params: {
         "## Memory Writes",
         "A save request means the user wants information preserved beyond this reply.",
         "Call exactly one write tool before final text: memory_store for durable facts, preferences, recurring schedules, decisions, settings, project rules, and curated notes; memory_log for today, now, current conversation, events, meeting notes, and temporary notes.",
+        "When writing durable facts about the current user or named people, make the content self-contained and explicit about the subject instead of saving a fragment or bare value.",
         "If lifetime is unclear, ask one brief clarification instead of writing.",
         "Never say saved, remembered, or recorded unless the write tool returned success.",
         "Use canonicalKey only for updateable durable facts, preferences, schedules, or settings.",

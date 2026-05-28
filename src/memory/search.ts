@@ -13,6 +13,7 @@ export type MemorySearchHit = {
   path: string;
   title?: string;
   kind?: string;
+  canonicalKey?: string;
   score: number;
   snippet: string;
   id?: string;
@@ -50,6 +51,7 @@ function mapRowsToHits(rows: MemorySearchRow[], relaxedQuery?: string): MemorySe
       id: row.id,
       title: row.title ?? undefined,
       kind: row.type,
+      canonicalKey: row.canonical_key ?? undefined,
       score: Number.isFinite(row.score) ? row.score : 0,
       snippet,
       updatedAt: row.updated_at,

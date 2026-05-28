@@ -85,6 +85,8 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     expect(text).toContain("Call exactly one write tool before final text");
     expect(text).toContain("memory_store for durable facts, preferences, recurring schedules, decisions, settings, project rules, and curated notes");
     expect(text).toContain("memory_log for today, now, current conversation, events, meeting notes, and temporary notes");
+    expect(text).toContain("If a direct durable fact hit answers the question, answer with it plainly.");
+    expect(text).toContain("make the content self-contained and explicit about the subject");
     expect(text).toContain("If lifetime is unclear, ask one brief clarification instead of writing.");
     expect(text).toContain("Never say saved, remembered, or recorded unless the write tool returned success.");
     expect(text).not.toContain("запомни");

@@ -6,6 +6,7 @@ type Hit = {
   snippet?: string;
   corpus?: string;
   title?: string;
+  canonicalKey?: string;
 };
 
 export function formatSearchLikeVisibleOutput(params: {
@@ -33,16 +34,24 @@ export function formatSearchLikeVisibleOutput(params: {
     const path = typeof hit.path === "string" ? hit.path : "";
     const snippetRaw = typeof hit.snippet === "string" ? hit.snippet : "";
     const corpus = typeof hit.corpus === "string" ? hit.corpus : "memory";
+    const canonicalKey = typeof hit.canonicalKey === "string" ? hit.canonicalKey : "";
     const startLine = 1;
     const endLine = 1;
     const citation = path ? `${path}#L${startLine}` : "";
+    const notes: string[] = [];
+    if (corpus === "daily") {
+      notes.push("Note: daily memory is one-day context unless explicitly recurring.");
+    } else if (canonicalKey) {
+      notes.push(`Canonical key: ${canonicalKey}`);
+    }
+    const suffix = notes.length > 0 ? `\n\n${notes.join("\n")}` : "";
     const sourceLabel = path ? `\n\nSource: ${corpus === "daily" ? "DB daily entry " : ""}${citation}` : "";
     return {
       path,
       startLine,
       endLine,
       score: typeof hit.score === "number" ? hit.score : 0,
-      snippet: snippetRaw ? `${snippetRaw}${sourceLabel}` : "",
+      snippet: snippetRaw ? `${snippetRaw}${suffix}${sourceLabel}` : "",
       source: hit.corpus === "sessions" ? "sessions" : hit.corpus === "daily" ? "daily" : "memory",
       citation,
       corpus,
@@ -99,16 +108,24 @@ export function buildSearchLikeDetailsEnvelope(params: {
     const path = typeof hit.path === "string" ? hit.path : "";
     const snippetRaw = typeof hit.snippet === "string" ? hit.snippet : "";
     const corpus = typeof hit.corpus === "string" ? hit.corpus : "memory";
+    const canonicalKey = typeof hit.canonicalKey === "string" ? hit.canonicalKey : "";
     const startLine = 1;
     const endLine = 1;
     const citation = path ? `${path}#L${startLine}` : "";
+    const notes: string[] = [];
+    if (corpus === "daily") {
+      notes.push("Note: daily memory is one-day context unless explicitly recurring.");
+    } else if (canonicalKey) {
+      notes.push(`Canonical key: ${canonicalKey}`);
+    }
+    const suffix = notes.length > 0 ? `\n\n${notes.join("\n")}` : "";
     const sourceLabel = path ? `\n\nSource: ${corpus === "daily" ? "DB daily entry " : ""}${citation}` : "";
     return {
       path,
       startLine,
       endLine,
       score: typeof hit.score === "number" ? hit.score : 0,
-      snippet: snippetRaw ? `${snippetRaw}${sourceLabel}` : "",
+      snippet: snippetRaw ? `${snippetRaw}${suffix}${sourceLabel}` : "",
       source: hit.corpus === "sessions" ? "sessions" : hit.corpus === "daily" ? "daily" : "memory",
       citation,
       corpus,

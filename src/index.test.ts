@@ -389,7 +389,9 @@ describe("tool registration", () => {
     const result = await hook({ prompt: "какой мой любимый цвет?", messages: [] });
     expect(result?.prependSystemContext).toContain("AnchorClaw memory contract:");
     expect(result?.prependSystemContext).toContain("Do not answer remembered facts/preferences/people/recurring schedules/todos");
+    expect(result?.prependSystemContext).toContain("If memory_search returns a direct durable fact hit, answer with it plainly");
     expect(result?.prependSystemContext).toContain("check AnchorClaw daily memory first");
+    expect(result?.prependSystemContext).toContain("Treat daily memory as one-day context only");
     expect(result?.prependSystemContext).toContain("Save requests require one successful write tool before final text");
     expect(result?.prependSystemContext).toContain("MEMORY.md and memory/YYYY-MM-DD.md are DB-backed concepts");
   });

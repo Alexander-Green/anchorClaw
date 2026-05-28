@@ -192,6 +192,7 @@ describe("memorySearchDb ranking contract", () => {
     expect(hits[0]).toMatchObject({
       title: "Любимый цвет Сабиры — жёлтый.",
       path: "db-memory/items/sabira-color.md",
+      canonicalKey: "sabira_favorite_color",
     });
   });
 
