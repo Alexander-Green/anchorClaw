@@ -93,6 +93,22 @@ describe("runAnchorClawSetup", () => {
     expect(allSql).toContain("CREATE DATABASE");
   });
 
+  it("accepts database names with hyphens", async () => {
+    await runAnchorClawSetup({
+      nonInteractive: true,
+      skipConfig: true,
+      adminUrl: "postgres://localhost/postgres",
+      dbName: "anchorclaw-memory",
+      dbUser: "anchorclaw",
+      dbPassword: "secret",
+      schema: "memory",
+    });
+
+    const allSql = pgState.clients.flatMap((c) => c.queries.map((q) => q.text)).join("\n");
+    expect(allSql).toContain('CREATE DATABASE "anchorclaw-memory"');
+    expect(allSql).toContain('ALTER DATABASE "anchorclaw-memory" OWNER TO "anchorclaw"');
+  });
+
   it("fails fast when schema has conflicting tables but no schema_migrations", async () => {
     pgState.dbExists = true;
     pgState.userExists = true;

@@ -36,6 +36,7 @@ type ResolvedSetupOptions = {
 type PromptInjectionConfigState = "enabled" | "disabled" | "unset";
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const DATABASE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 function validateIdentifier(value: string, label: string): string {
   const trimmed = value.trim();
@@ -44,6 +45,17 @@ function validateIdentifier(value: string, label: string): string {
   }
   if (!IDENTIFIER_RE.test(trimmed)) {
     throw new Error(`${label} must be a simple identifier (letters/numbers/underscore)`);
+  }
+  return trimmed;
+}
+
+function validateDatabaseName(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error("db-name must be non-empty");
+  }
+  if (!DATABASE_NAME_RE.test(trimmed)) {
+    throw new Error("db-name must contain only letters, numbers, underscores, or hyphens");
   }
   return trimmed;
 }
@@ -264,7 +276,7 @@ async function promptIfNeeded(params: {
     }
   }
 
-  validateIdentifier(dbName, "db-name");
+  validateDatabaseName(dbName);
   validateIdentifier(dbUser, "db-user");
   if (schema) {
     validateIdentifier(schema, "schema");
