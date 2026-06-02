@@ -1,24 +1,55 @@
+import { createHash } from "node:crypto";
+
 import type { OpenClawPluginApi } from "../api.js";
 import type { AnchorClawConfig } from "../config.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
-import type { PostgresPool } from "../postgres.js";
 import { memoryStoreDb } from "../memory/store.js";
+import type { PostgresPool } from "../postgres.js";
 import { extractMaintenanceCandidates } from "./extractor.js";
 
-const SOURCE_KIND = "episodic_events";
+const SOURCE_KIND = "daily_entries";
+const DAILY_WINDOW_HEADER_RESERVE = 128;
 
 type ExistingContentRow = { content: string };
-type EpisodicRow = {
+
+type DailyEntryRow = {
   id: string;
-  event_type: string;
+  path: string;
+  logical_date: string;
   content: string;
-  created_at: string;
+  content_sha256: string;
+  updated_at: string;
+};
+
+type ProcessedWindowRow = {
+  daily_entry_id: string;
+  content_sha256: string;
+  window_index: number;
+};
+
+type DailyWindow = {
+  dailyEntryId: string;
+  path: string;
+  logicalDate: string;
+  contentSha256: string;
+  updatedAt: string;
+  windowIndex: number;
+  windowSha256: string;
+  charStart: number;
+  charEnd: number;
+  content: string;
 };
 
 type PreparedTranscript = {
   transcript: string;
-  includedRows: EpisodicRow[];
+  sourcePath: string;
+  fileHash: string;
+  includedWindows: DailyWindow[];
 };
+
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 function normalizeComparableContent(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
@@ -120,37 +151,161 @@ function isDurableCandidate(text: string): boolean {
   return signals.some((token) => normalized.includes(token));
 }
 
-function renderEpisodicLine(row: EpisodicRow): string {
-  return `[${row.created_at}] [${row.event_type}] ${row.content}`;
+function splitDailyIntoWindows(row: DailyEntryRow, maxChars: number): DailyWindow[] {
+  const normalized = row.content.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const safeMaxChars = Math.max(1, maxChars - DAILY_WINDOW_HEADER_RESERVE);
+  const rawBlocks = normalized
+    .split(/\n{2,}/u)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  let searchStart = 0;
+  const blocks = rawBlocks.map((block) => {
+    const start = normalized.indexOf(block, searchStart);
+    const safeStart = start >= 0 ? start : searchStart;
+    searchStart = safeStart + block.length;
+    return {
+      text: block,
+      start: safeStart,
+    };
+  });
+
+  const windows: DailyWindow[] = [];
+  let windowIndex = 0;
+  let currentParts: string[] = [];
+  let currentStart = 0;
+  let currentEnd = 0;
+
+  const flushCurrent = () => {
+    if (currentParts.length === 0) {
+      return;
+    }
+    const content = currentParts.join("\n\n");
+    windows.push({
+      dailyEntryId: row.id,
+      path: row.path,
+      logicalDate: row.logical_date,
+      contentSha256: row.content_sha256,
+      updatedAt: row.updated_at,
+      windowIndex,
+      windowSha256: sha256Hex(content),
+      charStart: currentStart,
+      charEnd: currentEnd,
+      content,
+    });
+    windowIndex += 1;
+    currentParts = [];
+    currentStart = 0;
+    currentEnd = 0;
+  };
+
+  for (const block of blocks) {
+    const blockLength = block.text.length;
+    if (blockLength > safeMaxChars) {
+      flushCurrent();
+      for (let offset = 0; offset < block.text.length; offset += safeMaxChars) {
+        const slice = block.text.slice(offset, offset + safeMaxChars);
+        const charStart = block.start + offset;
+        const charEnd = charStart + slice.length;
+        windows.push({
+          dailyEntryId: row.id,
+          path: row.path,
+          logicalDate: row.logical_date,
+          contentSha256: row.content_sha256,
+          updatedAt: row.updated_at,
+          windowIndex,
+          windowSha256: sha256Hex(slice),
+          charStart,
+          charEnd,
+          content: slice,
+        });
+        windowIndex += 1;
+      }
+      continue;
+    }
+
+    const currentLength = currentParts.length === 0 ? 0 : currentParts.join("\n\n").length;
+    const addition = currentParts.length === 0 ? blockLength : blockLength + 2;
+    if (currentLength + addition > safeMaxChars) {
+      flushCurrent();
+    }
+
+    if (currentParts.length === 0) {
+      currentStart = block.start;
+      currentEnd = block.start + block.text.length;
+      currentParts = [block.text];
+      continue;
+    }
+
+    currentParts.push(block.text);
+    currentEnd = block.start + block.text.length;
+  }
+
+  flushCurrent();
+  return windows;
 }
 
-function prepareTranscript(rows: EpisodicRow[], maxChars: number): PreparedTranscript {
+function renderDailyWindow(window: DailyWindow): string {
+  return [
+    `Source: ${window.path}`,
+    `Logical-Date: ${window.logicalDate}`,
+    `Window: ${window.windowIndex + 1}`,
+    `Chars: ${window.charStart}-${window.charEnd}`,
+    "",
+    window.content,
+  ].join("\n");
+}
+
+function buildSourcePath(windows: DailyWindow[]): string {
+  const first = windows[0];
+  const last = windows[windows.length - 1];
+  if (!first || !last) {
+    return "daily";
+  }
+  if (first.path === last.path && first.windowIndex === last.windowIndex) {
+    return `${first.path}#window=${first.windowIndex + 1}`;
+  }
+  return `${first.path}#window=${first.windowIndex + 1}..${last.path}#window=${last.windowIndex + 1}`;
+}
+
+function prepareTranscript(windows: DailyWindow[], maxChars: number): PreparedTranscript {
   const safeMaxChars = Math.max(1, maxChars);
-  const lines: string[] = [];
-  const includedRows: EpisodicRow[] = [];
+  const chunks: string[] = [];
+  const includedWindows: DailyWindow[] = [];
   let length = 0;
 
-  for (const row of rows) {
-    const line = renderEpisodicLine(row);
-    const addition = lines.length === 0 ? line.length : line.length + 1;
+  for (const window of windows) {
+    const chunk = renderDailyWindow(window);
+    const addition = chunks.length === 0 ? chunk.length : chunk.length + 2;
     if (length + addition > safeMaxChars) {
       break;
     }
-    lines.push(line);
-    includedRows.push(row);
+    chunks.push(chunk);
+    includedWindows.push(window);
     length += addition;
   }
 
-  if (includedRows.length === 0 && rows.length > 0) {
+  if (includedWindows.length === 0 && windows.length > 0) {
     throw new Error(
-      `maintenance transcript window too small for a single episodic row (maxCharsPerRun=${safeMaxChars})`,
+      `maintenance transcript window too small for a single daily window (maxCharsPerRun=${safeMaxChars})`,
     );
   }
 
+  const transcript = chunks.join("\n\n");
   return {
-    transcript: lines.join("\n"),
-    includedRows,
+    transcript,
+    sourcePath: buildSourcePath(includedWindows),
+    fileHash: sha256Hex(transcript),
+    includedWindows,
   };
+}
+
+function buildProcessedWindowKey(window: DailyWindow): string {
+  return `${window.dailyEntryId}:${window.contentSha256}:${window.windowIndex}`;
 }
 
 export type MaintenanceCycleResult = {
@@ -201,28 +356,52 @@ export async function runMaintenanceCycle(params: {
       [scope.userId, scope.workspaceId, SOURCE_KIND, params.dryRun],
     );
     runId = runInsert.rows[0]?.id ?? null;
-    const episodicRows = await params.pool.query<EpisodicRow>(
+
+    const dailyRows = await params.pool.query<DailyEntryRow>(
       `
-      SELECT id, event_type, content, created_at
-      FROM memory_episodic
+      SELECT id, path, logical_date::text AS logical_date, content, content_sha256, updated_at
+      FROM memory_daily_entries
       WHERE user_id = $1
         AND workspace_id = $2
-        AND is_archived = false
-      ORDER BY created_at ASC, id ASC
+      ORDER BY logical_date ASC, updated_at ASC, id ASC
       LIMIT $3
       `,
-      [scope.userId, scope.workspaceId, params.batchSize],
+      [scope.userId, scope.workspaceId, Math.max(1, params.batchSize)],
     );
-    const maxChars = params.cfg.maintenance?.extractor?.maxCharsPerRun ?? 12_000;
-    const preparedTranscript = prepareTranscript(episodicRows.rows, maxChars);
-    const transcript = preparedTranscript.transcript;
-    const archivalRows = preparedTranscript.includedRows;
-    scannedCount = archivalRows.length;
-    heuristicCandidateCount = archivalRows.filter((row) => isDurableCandidate(row.content)).length;
 
-    if (!params.dryRun && archivalRows.length > 0) {
+    const maxChars = params.cfg.maintenance?.extractor?.maxCharsPerRun ?? 12_000;
+    const allWindows = dailyRows.rows.flatMap((row) => splitDailyIntoWindows(row, maxChars));
+    const dailyEntryIds = Array.from(new Set(allWindows.map((window) => window.dailyEntryId)));
+    const processedRows =
+      dailyEntryIds.length > 0
+        ? await params.pool.query<ProcessedWindowRow>(
+            `
+            SELECT daily_entry_id, content_sha256, window_index
+            FROM memory_daily_extraction_windows
+            WHERE user_id = $1
+              AND workspace_id = $2
+              AND daily_entry_id = ANY($3::uuid[])
+            `,
+            [scope.userId, scope.workspaceId, dailyEntryIds],
+          )
+        : { rows: [], rowCount: 0 };
+
+    const processedKeys = new Set(
+      processedRows.rows.map((row) => `${row.daily_entry_id}:${row.content_sha256}:${row.window_index}`),
+    );
+
+    const pendingWindows = allWindows
+      .filter((window) => !processedKeys.has(buildProcessedWindowKey(window)))
+      .slice(0, Math.max(1, params.batchSize));
+    const preparedTranscript = prepareTranscript(pendingWindows, maxChars);
+    const transcript = preparedTranscript.transcript;
+    const processedWindows = preparedTranscript.includedWindows;
+
+    scannedCount = processedWindows.length;
+    heuristicCandidateCount = processedWindows.filter((window) => isDurableCandidate(window.content)).length;
+
+    if (!params.dryRun && processedWindows.length > 0) {
       const extractorCfg = params.cfg.maintenance?.extractor;
-      let shouldArchiveRows = false;
       if (!extractorCfg?.enabled) {
         skippedCount += heuristicCandidateCount;
         params.api.logger.warn(
@@ -231,11 +410,12 @@ export async function runMaintenanceCycle(params: {
       } else {
         const extracted = await extractMaintenanceCandidates({
           agentId: extractorCfg.agentId ?? "main",
-          sourcePath: "episodic",
-          fileHash: "episodic",
+          sourcePath: preparedTranscript.sourcePath,
+          fileHash: preparedTranscript.fileHash,
           transcript,
           maxCandidates: extractorCfg.maxCandidates ?? 20,
         });
+
         let accepted = 0;
         let persistenceFailure: string | null = null;
         for (const candidate of extracted.candidates) {
@@ -264,7 +444,9 @@ export async function runMaintenanceCycle(params: {
               source: "system",
               metadata: {
                 extractor: "anchorclaw-maintenance",
-                sourceKind: "episodic",
+                sourceKind: SOURCE_KIND,
+                sourcePath: preparedTranscript.sourcePath,
+                transcriptHash: preparedTranscript.fileHash,
               },
             },
           });
@@ -278,23 +460,44 @@ export async function runMaintenanceCycle(params: {
         if (persistenceFailure) {
           throw new Error(`maintenance candidate store failed (${persistenceFailure})`);
         }
+
+        for (const window of processedWindows) {
+          await params.pool.query(
+            `
+            INSERT INTO memory_daily_extraction_windows (
+              user_id,
+              workspace_id,
+              daily_entry_id,
+              maintenance_run_id,
+              daily_path,
+              logical_date,
+              content_sha256,
+              window_index,
+              window_sha256,
+              char_start,
+              char_end
+            )
+            VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, $9, $10, $11)
+            ON CONFLICT (user_id, workspace_id, daily_entry_id, content_sha256, window_index) DO NOTHING
+            `,
+            [
+              scope.userId,
+              scope.workspaceId,
+              window.dailyEntryId,
+              runId,
+              window.path,
+              window.logicalDate,
+              window.contentSha256,
+              window.windowIndex,
+              window.windowSha256,
+              window.charStart,
+              window.charEnd,
+            ],
+          );
+        }
+
         params.api.logger.info(
           `anchorclaw: maintenance extractor accepted ${accepted}/${extracted.candidates.length} candidates`,
-        );
-        shouldArchiveRows = true;
-      }
-
-      const ids = shouldArchiveRows ? archivalRows.map((row) => row.id) : [];
-      if (ids.length > 0) {
-        await params.pool.query(
-          `
-          UPDATE memory_episodic
-          SET is_archived = true
-          WHERE user_id = $1
-            AND workspace_id = $2
-            AND id = ANY($3::uuid[])
-          `,
-          [scope.userId, scope.workspaceId, ids],
         );
       }
     } else if (params.dryRun) {

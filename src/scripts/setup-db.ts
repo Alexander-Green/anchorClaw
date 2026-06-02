@@ -34,6 +34,7 @@ type ResolvedSetupOptions = {
 };
 
 type PromptInjectionConfigState = "enabled" | "disabled" | "unset";
+type SessionMemoryHookConfigState = "enabled" | "disabled" | "unset";
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DATABASE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -143,6 +144,26 @@ function readPromptInjectionConfigState(cfg: Record<string, any>): PromptInjecti
     return "disabled";
   }
   if (hooks.allowPromptInjection === true) {
+    return "enabled";
+  }
+  return "unset";
+}
+
+function asRecord(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, any>)
+    : {};
+}
+
+function readSessionMemoryHookConfigState(cfg: Record<string, any>): SessionMemoryHookConfigState {
+  const entry = cfg.hooks?.internal?.entries?.["session-memory"];
+  if (!entry || typeof entry !== "object") {
+    return "unset";
+  }
+  if ((entry as Record<string, any>).enabled === false) {
+    return "disabled";
+  }
+  if ((entry as Record<string, any>).enabled === true) {
     return "enabled";
   }
   return "unset";
@@ -408,6 +429,8 @@ function updateOpenClawConfig(params: {
   updated: boolean;
   promptInjectionBefore: PromptInjectionConfigState;
   promptInjectionAfter: PromptInjectionConfigState;
+  sessionMemoryBefore: SessionMemoryHookConfigState;
+  sessionMemoryAfter: SessionMemoryHookConfigState;
 } {
   const cfgPath = resolveOpenClawConfigPath();
   if (!existsSync(cfgPath)) {
@@ -416,12 +439,15 @@ function updateOpenClawConfig(params: {
       updated: false,
       promptInjectionBefore: "unset",
       promptInjectionAfter: "unset",
+      sessionMemoryBefore: "unset",
+      sessionMemoryAfter: "unset",
     };
   }
 
   const raw = readFileSync(cfgPath, "utf-8");
   const cfg = JSON.parse(raw) as Record<string, any>;
   const promptInjectionBefore = readPromptInjectionConfigState(cfg);
+  const sessionMemoryBefore = readSessionMemoryHookConfigState(cfg);
   const parsedAdmin = new URL(params.adminUrl);
   const host = parsedAdmin.hostname || "localhost";
   const port = parsedAdmin.port ? Number(parsedAdmin.port) : 5432;
@@ -458,7 +484,20 @@ function updateOpenClawConfig(params: {
     cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection = true;
   }
 
+  const hooks = asRecord(cfg.hooks);
+  cfg.hooks = hooks;
+  const internalHooks = asRecord(hooks.internal);
+  hooks.internal = internalHooks;
+  const internalEntries = asRecord(internalHooks.entries);
+  internalHooks.entries = internalEntries;
+  const sessionMemoryEntry = asRecord(internalEntries["session-memory"]);
+  internalEntries["session-memory"] = {
+    ...sessionMemoryEntry,
+    enabled: false,
+  };
+
   const promptInjectionAfter = readPromptInjectionConfigState(cfg);
+  const sessionMemoryAfter = readSessionMemoryHookConfigState(cfg);
 
   writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
   return {
@@ -466,6 +505,8 @@ function updateOpenClawConfig(params: {
     updated: true,
     promptInjectionBefore,
     promptInjectionAfter,
+    sessionMemoryBefore,
+    sessionMemoryAfter,
   };
 }
 
@@ -531,6 +572,9 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     console.log(`- config: not found (${configUpdate.path})`);
   }
   if (!options.skipConfig && configUpdate?.updated) {
+    if (configUpdate.sessionMemoryAfter === "disabled" && configUpdate.sessionMemoryBefore !== "disabled") {
+      console.log("- bundled session-memory hook: disabled for DB-backed /new and /reset daily capture");
+    }
     if (configUpdate.promptInjectionAfter === "enabled" && configUpdate.promptInjectionBefore !== "enabled") {
       console.log("- hooks.allowPromptInjection: enabled for DB-backed daily startup injection");
     } else if (configUpdate.promptInjectionBefore === "disabled" && configUpdate.promptInjectionAfter === "disabled") {

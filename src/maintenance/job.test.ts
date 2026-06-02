@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import { runMaintenanceCycle } from "./job.js";
 
 const resolveUserAndWorkspaceScope = vi.hoisted(() => vi.fn());
@@ -35,25 +36,25 @@ function buildCfg() {
   } as any;
 }
 
-function buildEpisodicRow(content: string) {
+function buildDailyRow(params: {
+  id?: string;
+  path?: string;
+  logicalDate?: string;
+  contentSha?: string;
+  updatedAt?: string;
+  content: string;
+}) {
   return {
-    id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-    event_type: "user_prompt",
-    content,
-    created_at: "2026-05-20T00:00:00.000Z",
+    id: params.id ?? "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    path: params.path ?? "memory/2026-05-20.md",
+    logical_date: params.logicalDate ?? "2026-05-20",
+    content: params.content,
+    content_sha256: params.contentSha ?? "sha-1",
+    updated_at: params.updatedAt ?? "2026-05-20T00:00:00.000Z",
   };
 }
 
-function buildEpisodicRowWithId(id: string, content: string, createdAt = "2026-05-20T00:00:00.000Z") {
-  return {
-    id,
-    event_type: "user_prompt",
-    content,
-    created_at: createdAt,
-  };
-}
-
-describe("runMaintenanceCycle episodic", () => {
+describe("runMaintenanceCycle daily maintenance", () => {
   beforeEach(() => {
     resolveUserAndWorkspaceScope.mockReset();
     extractMaintenanceCandidates.mockReset();
@@ -64,7 +65,7 @@ describe("runMaintenanceCycle episodic", () => {
     });
   });
 
-  it("does not archive episodic rows in dryRun", async () => {
+  it("does not mark processed windows in dryRun", async () => {
     const queries: string[] = [];
     const pool = {
       query: vi.fn(async (sql: string) => {
@@ -72,18 +73,18 @@ describe("runMaintenanceCycle episodic", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-1" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_episodic")) {
+        if (sql.includes("FROM memory_daily_entries")) {
           return {
             rows: [
-              {
-                id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                event_type: "user_prompt",
-                content: "remember this decision for future work in this project",
-                created_at: "2026-05-20T00:00:00.000Z",
-              },
+              buildDailyRow({
+                content: "remember this project rule for future work and stable decisions",
+              }),
             ],
             rowCount: 1,
           };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
           return { rows: [], rowCount: 1 };
@@ -102,12 +103,13 @@ describe("runMaintenanceCycle episodic", () => {
     });
 
     expect(result.status).toBe("completed");
+    expect(result.scannedCount).toBe(1);
     expect(result.insertedCount).toBe(0);
-    expect(queries.some((sql) => sql.includes("UPDATE memory_episodic"))).toBe(false);
     expect(extractMaintenanceCandidates).not.toHaveBeenCalled();
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(false);
   });
 
-  it("does not archive episodic rows when extractor is disabled", async () => {
+  it("does not mark processed windows when extractor is disabled", async () => {
     const queries: string[] = [];
     const pool = {
       query: vi.fn(async (sql: string) => {
@@ -115,18 +117,18 @@ describe("runMaintenanceCycle episodic", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-2" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_episodic")) {
+        if (sql.includes("FROM memory_daily_entries")) {
           return {
             rows: [
-              {
-                id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                event_type: "user_prompt",
-                content: "remember this preference for future tasks and decisions",
-                created_at: "2026-05-20T00:00:00.000Z",
-              },
+              buildDailyRow({
+                content: "remember this preference for future tasks and repeated work",
+              }),
             ],
             rowCount: 1,
           };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
           return { rows: [], rowCount: 1 };
@@ -148,11 +150,11 @@ describe("runMaintenanceCycle episodic", () => {
 
     expect(result.status).toBe("completed");
     expect(result.insertedCount).toBe(0);
-    expect(queries.some((sql) => sql.includes("UPDATE memory_episodic"))).toBe(false);
     expect(extractMaintenanceCandidates).not.toHaveBeenCalled();
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(false);
   });
 
-  it("extracts, stores and archives episodic rows when extractor is enabled", async () => {
+  it("extracts, stores, and marks processed daily windows", async () => {
     extractMaintenanceCandidates.mockResolvedValue({
       summary: "summary",
       candidates: [{ content: "User prefers green color.", type: "fact", canonicalKey: "favorite_color" }],
@@ -174,19 +176,26 @@ describe("runMaintenanceCycle episodic", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-3" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_episodic")) {
+        if (sql.includes("FROM memory_daily_entries")) {
           return {
-            rows: [buildEpisodicRow("Please remember my favorite color is green")],
+            rows: [
+              buildDailyRow({
+                content: "Please remember that the favorite color for UI accents is green.",
+              }),
+            ],
             rowCount: 1,
           };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
         }
         if (sql.includes("FROM memory_items")) {
           return { rows: [], rowCount: 0 };
         }
-        if (sql.includes("UPDATE memory_maintenance_runs")) {
+        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
           return { rows: [], rowCount: 1 };
         }
-        if (sql.includes("UPDATE memory_episodic")) {
+        if (sql.includes("UPDATE memory_maintenance_runs")) {
           return { rows: [], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
@@ -205,14 +214,15 @@ describe("runMaintenanceCycle episodic", () => {
     expect(result.status).toBe("completed");
     expect(result.insertedCount).toBe(1);
     expect(extractMaintenanceCandidates).toHaveBeenCalledTimes(1);
+    expect(extractMaintenanceCandidates.mock.calls[0]?.[0]?.sourcePath).toBe("memory/2026-05-20.md#window=1");
     expect(memoryStoreDb).toHaveBeenCalledTimes(1);
-    expect(queries.some((sql) => sql.includes("UPDATE memory_episodic"))).toBe(true);
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(true);
     expect(
       queries.some((sql) => sql.includes("regexp_replace(content, '\\s+', ' ', 'g')")),
     ).toBe(true);
   });
 
-  it("fails without archiving episodic rows when a candidate store fails", async () => {
+  it("fails without marking processed windows when a candidate store fails", async () => {
     extractMaintenanceCandidates.mockResolvedValue({
       summary: "summary",
       candidates: [
@@ -242,19 +252,23 @@ describe("runMaintenanceCycle episodic", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-4" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_episodic")) {
+        if (sql.includes("FROM memory_daily_entries")) {
           return {
-            rows: [buildEpisodicRow("Please remember my favorite color is green")],
+            rows: [
+              buildDailyRow({
+                content: "Please remember my favorite color is green and avoid purple in most contexts.",
+              }),
+            ],
             rowCount: 1,
           };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
         }
         if (sql.includes("FROM memory_items")) {
           return { rows: [], rowCount: 0 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
-          return { rows: [], rowCount: 1 };
-        }
-        if (sql.includes("UPDATE memory_episodic")) {
           return { rows: [], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
@@ -273,37 +287,44 @@ describe("runMaintenanceCycle episodic", () => {
     expect(result.status).toBe("failed");
     expect(result.insertedCount).toBe(1);
     expect(result.error).toContain("maintenance candidate store failed");
-    expect(queries.some((sql) => sql.includes("UPDATE memory_episodic"))).toBe(false);
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(false);
   });
 
-  it("archives only episodic rows that fit into the extractor transcript window", async () => {
-    const extractorArgs: Array<{ transcript: string }> = [];
-    extractMaintenanceCandidates.mockImplementation(async (params: { transcript: string }) => {
-      extractorArgs.push({ transcript: params.transcript });
-      return { summary: "summary", candidates: [] };
-    });
+  it("marks only windows that fit into the transcript limit", async () => {
+    const extractorArgs: Array<{ transcript: string; sourcePath: string }> = [];
+    extractMaintenanceCandidates.mockImplementation(
+      async (params: { transcript: string; sourcePath: string }) => {
+        extractorArgs.push(params);
+        return { summary: "summary", candidates: [] };
+      },
+    );
 
-    const archivedValues: unknown[][] = [];
-    const firstRow = buildEpisodicRowWithId(
-      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      "remember this project rule for future work",
-      "2026-05-20T00:00:00.000Z",
-    );
-    const secondRow = buildEpisodicRowWithId(
-      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-      "remember this second rule that should stay pending because it is outside the transcript window",
-      "2026-05-20T00:01:00.000Z",
-    );
+    const recordedLedgerInserts: unknown[][] = [];
+    const firstParagraph =
+      "remember this project rule for future work and keep the implementation path stable for follow-up";
+    const secondParagraph =
+      "remember this second rule that should remain pending because it falls outside the current transcript window";
     const pool = {
       query: vi.fn(async (sql: string, values?: unknown[]) => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-5" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_episodic")) {
-          return { rows: [firstRow, secondRow], rowCount: 2 };
+        if (sql.includes("FROM memory_daily_entries")) {
+          return {
+            rows: [
+              buildDailyRow({
+                id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                content: `${firstParagraph}\n\n${secondParagraph}`,
+              }),
+            ],
+            rowCount: 1,
+          };
         }
-        if (sql.includes("UPDATE memory_episodic")) {
-          archivedValues.push(values ?? []);
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+          recordedLedgerInserts.push(values ?? []);
           return { rows: [], rowCount: 1 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
@@ -314,7 +335,7 @@ describe("runMaintenanceCycle episodic", () => {
     } as any;
 
     const cfg = buildCfg();
-    cfg.maintenance.extractor.maxCharsPerRun = 120;
+    cfg.maintenance.extractor.maxCharsPerRun = 260;
     const result = await runMaintenanceCycle({
       api: buildApi(),
       cfg,
@@ -326,13 +347,13 @@ describe("runMaintenanceCycle episodic", () => {
 
     expect(result.status).toBe("completed");
     expect(extractorArgs).toHaveLength(1);
-    expect(extractorArgs[0]?.transcript).toContain(firstRow.content);
-    expect(extractorArgs[0]?.transcript).not.toContain(secondRow.content);
-    expect(archivedValues).toHaveLength(1);
-    expect(archivedValues[0]?.[2]).toEqual([firstRow.id]);
+    expect(extractorArgs[0]?.transcript).toContain(firstParagraph);
+    expect(extractorArgs[0]?.transcript).not.toContain(secondParagraph);
+    expect(recordedLedgerInserts).toHaveLength(1);
+    expect(recordedLedgerInserts[0]?.[7]).toBe(0);
   });
 
-  it("fails without archiving episodic rows when extractor output is malformed", async () => {
+  it("fails when extractor output is malformed", async () => {
     extractMaintenanceCandidates.mockRejectedValue(new Error("extractor output.candidates must be an array"));
 
     const queries: string[] = [];
@@ -342,11 +363,18 @@ describe("runMaintenanceCycle episodic", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-6" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_episodic")) {
+        if (sql.includes("FROM memory_daily_entries")) {
           return {
-            rows: [buildEpisodicRow("Please remember my favorite color is green")],
+            rows: [
+              buildDailyRow({
+                content: "Please remember my favorite color is green for future UI work.",
+              }),
+            ],
             rowCount: 1,
           };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
           return { rows: [], rowCount: 1 };
@@ -366,43 +394,6 @@ describe("runMaintenanceCycle episodic", () => {
 
     expect(result.status).toBe("failed");
     expect(result.error).toContain("extractor output.candidates must be an array");
-    expect(queries.some((sql) => sql.includes("UPDATE memory_episodic"))).toBe(false);
-  });
-
-  it("fails when maxCharsPerRun cannot fit even a single episodic row", async () => {
-    const queries: string[] = [];
-    const pool = {
-      query: vi.fn(async (sql: string) => {
-        queries.push(sql);
-        if (sql.includes("INSERT INTO memory_maintenance_runs")) {
-          return { rows: [{ id: "run-7" }], rowCount: 1 };
-        }
-        if (sql.includes("FROM memory_episodic")) {
-          return {
-            rows: [buildEpisodicRow("remember this project rule for future work")],
-            rowCount: 1,
-          };
-        }
-        if (sql.includes("UPDATE memory_maintenance_runs")) {
-          return { rows: [], rowCount: 1 };
-        }
-        return { rows: [], rowCount: 0 };
-      }),
-    } as any;
-
-    const cfg = buildCfg();
-    cfg.maintenance.extractor.maxCharsPerRun = 20;
-    const result = await runMaintenanceCycle({
-      api: buildApi(),
-      cfg,
-      pool,
-      workspaceDir: "/workspace",
-      dryRun: false,
-      batchSize: 100,
-    });
-
-    expect(result.status).toBe("failed");
-    expect(result.error).toContain("maintenance transcript window too small");
-    expect(queries.some((sql) => sql.includes("UPDATE memory_episodic"))).toBe(false);
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(false);
   });
 });

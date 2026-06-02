@@ -4,6 +4,7 @@ import {
   type AnchorClawMemorySearchManagerOptions,
 } from "../memory/manager.js";
 import { resolveSessionsSearchState } from "../config.js";
+import { createFlushInboxPlanResolver } from "./flush-inbox.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 
 export function registerAnchorClawMemoryCapability(params: {
@@ -13,6 +14,10 @@ export function registerAnchorClawMemoryCapability(params: {
 }) {
   const { ctx, refreshPromptCache, ensureSessionsIndexBootstrapped } = params;
   const api = ctx.api;
+  const timezone =
+    typeof api?.runtime?.config?.current === "function"
+      ? (api.runtime.config.current() as any)?.agents?.defaults?.userTimezone
+      : undefined;
 
   registerMemoryCapability("anchorclaw", {
     promptBuilder: (params?: { availableTools: Set<string>; citationsMode?: "off" | "inline" | "block" | string }) => {
@@ -129,5 +134,8 @@ export function registerAnchorClawMemoryCapability(params: {
         return { backend: "builtin" as const };
       },
     },
+    flushPlanResolver: createFlushInboxPlanResolver({
+      timezone: typeof timezone === "string" && timezone.trim() ? timezone.trim() : undefined,
+    }),
   });
 }

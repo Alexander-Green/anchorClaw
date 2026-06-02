@@ -4,6 +4,8 @@ export type SessionDeltaState = {
   pendingMessages: number;
 };
 
+export type LegacyFileState = "absent" | "stub" | "pending" | "already_imported_active";
+
 export type DurableOverallState = "pending" | "ready" | "blocked" | "degraded";
 export type DurableStepState = "pending" | "ready" | "failed";
 export type DurableImportState = "pending" | "not_needed" | "ready" | "failed_retryable" | "failed_permanent";
@@ -61,6 +63,14 @@ export type MemoryStatusCheckResult = {
     startupPromptEffective: boolean;
     readCompatibilityPath: "db-first";
     importMode: "canonical_table";
+  };
+  legacyImport?: {
+    active: boolean;
+    memoryMdState: LegacyFileState;
+    pendingCount: number;
+    unsupportedCount: number;
+    unreadableCount?: number;
+    dailyFileCount: number;
   };
   sessions?: {
     enabled: boolean;

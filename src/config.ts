@@ -29,13 +29,6 @@ export type AnchorClawConfig = {
       idleTimeoutMs?: number;
     };
   };
-  import?: {
-    /**
-     * After successfully importing `MEMORY.md` into Postgres, overwrite `MEMORY.md` with an empty stub
-     * (to prevent duplicate prompt injection from OpenClaw bootstrap + AnchorClaw DB injection).
-     */
-    cleanupMemoryMdAfterImport?: boolean;
-  };
   maintenance?: {
     enabled?: boolean;
     dryRun?: boolean;
@@ -188,7 +181,7 @@ export const anchorClawConfigSchema = {
     if (!obj) {
       throw new Error("anchorclaw config required");
     }
-    assertAllowedKeys(obj, ["workspaceDir", "sessions", "identity", "postgres", "import", "maintenance", "limits"], "anchorclaw config");
+    assertAllowedKeys(obj, ["workspaceDir", "sessions", "identity", "postgres", "maintenance", "limits"], "anchorclaw config");
     const workspaceDir = readRequiredString(obj.workspaceDir, "workspaceDir");
 
     const sessionsObj = asRecord(obj.sessions);
@@ -326,17 +319,6 @@ export const anchorClawConfigSchema = {
         })
       : undefined;
 
-    const importObj = asRecord(obj.import);
-    if (obj.import !== undefined && !importObj) {
-      throw new Error("import must be an object");
-    }
-    if (importObj) {
-      assertAllowedKeys(importObj, ["cleanupMemoryMdAfterImport"], "import");
-    }
-    const cleanupMemoryMdAfterImport = importObj
-      ? readOptionalBoolean(importObj.cleanupMemoryMdAfterImport, "import.cleanupMemoryMdAfterImport")
-      : undefined;
-
     const maintenanceObj = asRecord(obj.maintenance);
     if (obj.maintenance !== undefined && !maintenanceObj) {
       throw new Error("maintenance must be an object");
@@ -467,7 +449,6 @@ export const anchorClawConfigSchema = {
             }
           : {}),
       },
-      import: { cleanupMemoryMdAfterImport: cleanupMemoryMdAfterImport ?? true },
       maintenance: {
         enabled: maintenanceEnabled ?? false,
         dryRun: maintenanceDryRun ?? true,

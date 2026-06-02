@@ -239,6 +239,79 @@ describe("runAnchorClawSetup", () => {
     }
   });
 
+  it("disables bundled session-memory hook while preserving its config", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    const workspaceDir = resolve(home, "workspace");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          hooks: {
+            internal: {
+              entries: {
+                "session-memory": {
+                  enabled: true,
+                  llmSlug: "existing-slug",
+                },
+              },
+            },
+          },
+          plugins: {},
+        }, null, 2) + "\n",
+      );
+
+      await runAnchorClawSetup({
+        nonInteractive: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+        workspaceDir,
+      });
+
+      const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(cfg.hooks.internal.entries["session-memory"].enabled).toBe(false);
+      expect(cfg.hooks.internal.entries["session-memory"].llmSlug).toBe("existing-slug");
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        "- bundled session-memory hook: disabled for DB-backed /new and /reset daily capture",
+      );
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("does not overwrite config password for an existing user when password rotation is disabled", async () => {
     const previousHome = process.env.HOME;
     const previousOpenClawHome = process.env.OPENCLAW_HOME;

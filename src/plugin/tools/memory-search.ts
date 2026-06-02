@@ -1,4 +1,5 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
+import { scanLegacyWorkspace } from "../../importer.js";
 import { resolveSessionsSearchState } from "../../config.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { memorySearchDailyDb, memorySearchDb } from "../../memory/search.js";
@@ -76,6 +77,36 @@ function markerBoostForHit(hit: any): number {
   const title = typeof hit?.title === "string" ? hit.title : "";
   const snippet = typeof hit?.snippet === "string" ? hit.snippet : "";
   return isMarkerLike(title) || isMarkerLike(snippet) ? 2 : 0;
+}
+
+async function buildLegacyImportWarning(params: {
+  ctx: ToolRegistrationParams["ctx"];
+  api: any;
+  corpus: string;
+}): Promise<string | null> {
+  if (params.corpus !== "memory" && params.corpus !== "all") {
+    return null;
+  }
+  const workspaceDir = resolveConfiguredWorkspaceDir(params.ctx.cfg);
+  if (!workspaceDir || !params.ctx.cfg) {
+    return null;
+  }
+  try {
+    const legacyScan = await scanLegacyWorkspace({
+      api: params.api,
+      cfg: params.ctx.cfg,
+      pool: params.ctx.getPool(),
+      workspaceDir,
+      agentId: (params.api as any)?.runtime?.agentId,
+      sessionKey: (params.api as any)?.runtime?.sessionKey,
+    });
+    if (!legacyScan.hasActiveLegacy) {
+      return null;
+    }
+    return "Legacy memory import is still pending, so missing DB results do not prove the memory does not exist.";
+  } catch {
+    return null;
+  }
 }
 
 export function registerMemorySearchTool({
@@ -424,11 +455,20 @@ export function registerMemorySearchTool({
         provider: "anchorclaw",
         model: "postgres-fts",
       });
+      const legacyImportWarning =
+        hits.length === 0
+          ? await buildLegacyImportWarning({
+              ctx,
+              api,
+              corpus: trimmedCorpus,
+            })
+          : null;
+      const text = legacyImportWarning ? `${visible}\n\n${legacyImportWarning}` : visible;
       return {
         content: [
           {
             type: "text",
-            text: visible,
+            text,
           },
         ],
         details: {
@@ -442,6 +482,7 @@ export function registerMemorySearchTool({
             exactTop1,
             exactTop1Value,
             recommendedAction,
+            ...(legacyImportWarning ? { legacyImportWarning } : {}),
             sessions: {
               configured: sessionsSearch.configured,
               effective: sessionsSearch.effective,

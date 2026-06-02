@@ -3,7 +3,7 @@ import {
   anchorClawConfigSchema,
   type AnchorClawConfig,
 } from "./config.js";
-import { runOneTimeWorkspaceImport } from "./importer.js";
+import { scanLegacyWorkspace } from "./importer.js";
 import { getIdentityStartupWarning } from "./identity-policy.js";
 import {
   createPluginRuntimeContext,
@@ -12,11 +12,15 @@ import {
 import { createPromptCacheRuntime } from "./plugin/prompt-cache.js";
 import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
 import { registerDailyPromptHook } from "./plugin/daily-prompt.js";
+import { drainFlushInbox, registerAnchorClawFlushInboxHook } from "./plugin/flush-inbox.js";
 import { registerSessionDeltaLifecycle } from "./plugin/lifecycle.js";
+import { createMaintenanceRuntime, registerMaintenanceLifecycle } from "./plugin/maintenance.js";
 import { createSessionDeltaRuntime } from "./plugin/session-delta.js";
+import { registerAnchorClawSessionCaptureHook } from "./plugin/session-capture.js";
 import { registerAnchorClawSystemOverrideHook } from "./plugin/system-override.js";
 import { registerAnchorClawTools } from "./plugin/tools/index.js";
 import { runAnchorClawSetup } from "./scripts/setup-db.js";
+import { runAnchorClawImport } from "./scripts/import-legacy.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "./workspace.js";
 
 export default definePluginEntry({
@@ -70,6 +74,23 @@ export default definePluginEntry({
               nonInteractive: opts.nonInteractive,
             });
           });
+        anchorclaw
+          .command("import")
+          .description("Scan or migrate legacy MEMORY.md and memory/YYYY-MM-DD.md files into AnchorClaw DB storage")
+          .option("--workspace-dir <path>", "Override AnchorClaw workspace directory from plugin config")
+          .option("--apply", "Import and archive active legacy files")
+          .option("--keep-files", "Do not stub/archive legacy files after import")
+          .action(async (opts: {
+            workspaceDir?: string;
+            apply?: boolean;
+            keepFiles?: boolean;
+          }) => {
+            await runAnchorClawImport(api, {
+              workspaceDir: opts.workspaceDir,
+              apply: opts.apply,
+              keepFiles: opts.keepFiles,
+            });
+          });
       }, { commands: ["anchorclaw"] });
     }
 
@@ -97,11 +118,6 @@ export default definePluginEntry({
       if (warning) {
         api.logger.warn(warning);
       }
-      if (cfg.maintenance?.enabled || cfg.maintenance?.extractor?.enabled) {
-        api.logger.warn(
-          "anchorclaw: maintenance/extractor config is ignored in this release build; experimental extractor remains archived on branch old/extractor",
-        );
-      }
     }
 
     const ctx: PluginRuntimeContext = createPluginRuntimeContext({
@@ -112,6 +128,7 @@ export default definePluginEntry({
     const { refreshPromptCache } = createPromptCacheRuntime({ api, ctx });
     const { ensureSessionsIndexBootstrapped, ensureSessionDeltaListener, cleanupSessionDelta } =
       createSessionDeltaRuntime({ api, ctx });
+    const { cleanupMaintenance } = createMaintenanceRuntime({ api, ctx });
 
     api.logger.info(
       ctx.cfg
@@ -127,7 +144,7 @@ export default definePluginEntry({
           overall: "pending",
           database: "pending",
           migrations: "pending",
-          import: "pending",
+          import: "not_needed",
           cleanup: "not_needed",
           reason: null,
           lastImportRunId: null,
@@ -185,74 +202,84 @@ export default definePluginEntry({
           api.logger.warn(`anchorclaw: startup step prompt-cache-warmup failed (${message})`);
         }
 
-        api.logger.info("anchorclaw: startup step workspace-import started");
+        api.logger.info("anchorclaw: startup step flush-inbox-recovery started");
+        try {
+          const workspaceDir = resolveConfiguredWorkspaceDir(importCfg);
+          if (workspaceDir) {
+            const flushStats = await drainFlushInbox({
+              api,
+              ctx,
+              workspaceDir,
+            });
+            api.logger.info(
+              `anchorclaw: startup step flush-inbox-recovery succeeded (scanned=${flushStats.scannedFiles}, imported=${flushStats.importedFiles}, skipped=${flushStats.skippedImportedFiles})`,
+            );
+          } else {
+            api.logger.warn(
+              `anchorclaw: startup step flush-inbox-recovery skipped (${WORKSPACE_DIR_UNAVAILABLE})`,
+            );
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`anchorclaw: startup step flush-inbox-recovery failed (${message})`);
+        }
+
+        api.logger.info("anchorclaw: startup step legacy-import-scan started");
         try {
           const workspaceDir = resolveConfiguredWorkspaceDir(importCfg);
           if (!workspaceDir) {
             const reason = WORKSPACE_DIR_UNAVAILABLE;
             ctx.setDurableState({
-              overall: "blocked",
-              import: "failed_retryable",
+              overall: "ready",
+              import: "not_needed",
               cleanup: "not_needed",
               reason,
             });
-            ctx.setStartupCriticalFailure(reason);
-            api.logger.warn(`anchorclaw: startup step workspace-import blocked (${reason})`);
-            return;
+            api.logger.warn(`anchorclaw: startup step legacy-import-scan skipped (${reason})`);
+          } else {
+            const legacyScan = await scanLegacyWorkspace({
+              api,
+              cfg: importCfg,
+              pool: ctx.getPool(),
+              workspaceDir,
+              agentId: (api as any)?.runtime?.agentId,
+              sessionKey: (api as any)?.runtime?.sessionKey,
+            });
+            if (legacyScan.hasActiveLegacy) {
+              api.logger.warn(
+                `anchorclaw: active legacy memory files detected (${legacyScan.activeLegacyCount}); run openclaw anchorclaw import --dry-run`,
+              );
+            } else {
+              api.logger.info("anchorclaw: startup step legacy-import-scan found no active legacy files");
+            }
           }
-          const importResult = await runOneTimeWorkspaceImport({
-            api,
-            cfg: importCfg,
-            pool: ctx.getPool(),
-            workspaceDir,
-            agentId: (api as any)?.runtime?.agentId,
-            sessionKey: (api as any)?.runtime?.sessionKey,
-          });
           ctx.setDurableState({
-            overall: importResult.overall,
+            overall: "ready",
             database: "ready",
             migrations: "ready",
-            import: importResult.import,
-            cleanup: importResult.cleanup,
-            reason: importResult.reason ?? null,
-            lastImportRunId: importResult.lastImportRunId ?? null,
-            lastSourceSha256: importResult.lastSourceSha256 ?? null,
+            import: "not_needed",
+            cleanup: "not_needed",
+            lastImportRunId: null,
+            lastSourceSha256: null,
           });
-          if (importResult.overall === "blocked") {
-            ctx.setStartupCriticalFailure(importResult.reason ?? "workspace_import_failed");
-            api.logger.warn(
-              `anchorclaw: startup step workspace-import blocked (${importResult.reason ?? "durable memory import blocked"})`,
-            );
+          ctx.setStartupCriticalFailure(undefined);
+          if (!workspaceDir) {
             return;
           }
-          ctx.setStartupCriticalFailure(undefined);
-          if (importResult.overall === "degraded") {
-            api.logger.warn(
-              `anchorclaw: startup step workspace-import degraded (${importResult.reason ?? "cleanup failed"})`,
-            );
-          } else {
-            api.logger.info("anchorclaw: startup step workspace-import succeeded");
-          }
-          if (importResult.cleanup === "failed" && importResult.reason) {
-            api.logger.warn(`anchorclaw: workspace import cleanup warning (${importResult.reason})`);
-          }
-          await refreshPromptCache({ force: true });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           ctx.setDurableState({
-            overall: "blocked",
-            import: "failed_retryable",
+            overall: "ready",
+            import: "not_needed",
             cleanup: "not_needed",
-            reason: `workspace_import_failed: ${message}`,
+            reason: `legacy_import_scan_failed: ${message}`,
           });
-          ctx.setStartupCriticalFailure(`workspace_import_failed: ${message}`);
           api.logger.warn(
-            `anchorclaw: workspace import failed (${message})`,
+            `anchorclaw: legacy import scan failed (${message})`,
           );
           api.logger.warn(
-            `anchorclaw: startup step workspace-import failed (${message})`,
+            `anchorclaw: startup step legacy-import-scan failed (${message})`,
           );
-          return;
         }
         if (ctx.durableState.overall !== "blocked") {
           ensureSessionDeltaListener();
@@ -260,6 +287,7 @@ export default definePluginEntry({
       })();
     }
     registerSessionDeltaLifecycle({ api, cleanupSessionDelta });
+    registerMaintenanceLifecycle({ api, cleanupMaintenance });
     registerAnchorClawMemoryCapability({
       ctx,
       refreshPromptCache,
@@ -267,6 +295,8 @@ export default definePluginEntry({
     });
     registerAnchorClawSystemOverrideHook({ api, ctx });
     registerDailyPromptHook({ api, ctx });
+    registerAnchorClawFlushInboxHook({ api, ctx });
+    registerAnchorClawSessionCaptureHook({ api, ctx });
     registerAnchorClawTools({
       ctx,
       refreshPromptCache,

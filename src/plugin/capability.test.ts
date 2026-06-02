@@ -252,4 +252,41 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     expect(text).toContain("## Daily Memory (AnchorClaw/Postgres)");
     expect(text).toContain("transient recent context");
   });
+
+  it("registers a flushPlanResolver that targets the controlled flush inbox", () => {
+    const ctx = {
+      api: {
+        runtime: {
+          config: {
+            current: () => ({
+              agents: { defaults: { userTimezone: "Asia/Almaty" } },
+            }),
+          },
+        },
+      },
+      disabledReason: null,
+      durableState: { overall: "ready", cleanup: "not_needed" },
+      promptCache: { lines: ["(cached memory block)"], error: null },
+      sdkHealth: { degraded: false },
+      cfg: {},
+      ensureReady: vi.fn(async () => undefined),
+      getPool: vi.fn(() => ({ query: vi.fn() })),
+    } as any;
+
+    registerAnchorClawMemoryCapability({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+
+    const capabilityDef = registerMemoryCapabilityMock.mock.calls[0]?.[1];
+    const flushPlan = capabilityDef.flushPlanResolver({
+      nowMs: Date.parse("2026-06-02T10:11:12.345Z"),
+    });
+
+    expect(flushPlan).toBeTruthy();
+    expect(flushPlan.relativePath).toContain(".anchorclaw/flush-inbox/2026-06-02/");
+    expect(flushPlan.relativePath).toMatch(/flush-2026-06-02T10-11-12-345Z-[0-9a-f-]{36}\.md$/u);
+    expect(flushPlan.prompt).toContain("Pre-compaction memory flush.");
+  });
 });

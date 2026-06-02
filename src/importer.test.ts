@@ -1,26 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { readFile, readdir, mkdir, writeFile, resolveScope } = vi.hoisted(() => ({
+const { readFile, readdir, mkdir, writeFile, rename, resolveScope } = vi.hoisted(() => ({
   readFile: vi.fn(),
   readdir: vi.fn(),
   mkdir: vi.fn(),
   writeFile: vi.fn(),
+  rename: vi.fn(),
   resolveScope: vi.fn(async () => ({ userId: "user-1", workspaceId: "workspace-1" })),
 }));
 
 vi.mock("node:fs/promises", () => ({
-  default: { readFile, readdir, mkdir, writeFile },
+  default: { readFile, readdir, mkdir, writeFile, rename },
   readFile,
   readdir,
   mkdir,
   writeFile,
+  rename,
 }));
 
 vi.mock("./identity.js", () => ({
   resolveUserAndWorkspaceScope: resolveScope,
 }));
 
-import { runOneTimeWorkspaceImport } from "./importer.js";
+import { runLegacyWorkspaceImport, runOneTimeWorkspaceImport, scanLegacyWorkspace } from "./importer.js";
 
 function createApi() {
   return {
@@ -58,11 +60,12 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     readdir.mockRejectedValue(new Error("missing"));
     mkdir.mockResolvedValue(undefined);
     writeFile.mockResolvedValue(undefined);
+    rename.mockResolvedValue(undefined);
   });
 
   it("imports MEMORY.md through batched inserts with local timeouts and cleanup", async () => {
     const content = ["# Long-Term Memory", "", "## Facts", "", "Alpha", "", "## Notes", "", "Beta"].join("\n");
-    readFile.mockResolvedValueOnce(content).mockResolvedValueOnce(content);
+    readFile.mockResolvedValue(content);
 
     const clientCalls: string[] = [];
     const poolCalls: string[] = [];
@@ -95,12 +98,12 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
       cfg: {
         workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
-        import: { cleanupMemoryMdAfterImport: true },
       },
       pool,
       workspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
+      cleanupMemoryMdAfterImport: true,
     });
 
     expect(result).toMatchObject({
@@ -127,7 +130,7 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
 
   it("returns degraded when cleanup fails after successful import", async () => {
     const content = ["## Facts", "Alpha"].join("\n");
-    readFile.mockResolvedValueOnce(content).mockResolvedValueOnce(content);
+    readFile.mockResolvedValue(content);
     writeFile.mockRejectedValueOnce(new Error("EACCES"));
 
     const pool = {
@@ -155,12 +158,12 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
       cfg: {
         workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
-        import: { cleanupMemoryMdAfterImport: true },
       },
       pool,
       workspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
+      cleanupMemoryMdAfterImport: true,
     });
 
     expect(result.overall).toBe("degraded");
@@ -170,7 +173,7 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
 
   it("skips reinserting when the same source hash already completed cleanly", async () => {
     const content = ["## Facts", "Alpha"].join("\n");
-    readFile.mockResolvedValueOnce(content);
+    readFile.mockResolvedValue(content);
 
     const pool = {
       query: vi.fn(async (sql?: string) => {
@@ -198,12 +201,12 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
       cfg: {
         workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
-        import: { cleanupMemoryMdAfterImport: true },
       },
       pool,
       workspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
+      cleanupMemoryMdAfterImport: true,
     });
 
     expect(result).toMatchObject({
@@ -229,7 +232,7 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
       "",
       "Green is the favorite color.",
     ].join("\n");
-    readFile.mockResolvedValueOnce(content).mockResolvedValueOnce(content);
+    readFile.mockResolvedValue(content);
 
     const clientQuery = vi.fn(async (sql?: string) => {
       const text = String(sql ?? "");
@@ -257,12 +260,12 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
       cfg: {
         workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
-        import: { cleanupMemoryMdAfterImport: true },
       },
       pool,
       workspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
+      cleanupMemoryMdAfterImport: true,
     });
 
     expect(result.overall).toBe("ready");
@@ -286,5 +289,209 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     expect(insertedItems[2]?.metadata).toMatchObject({
       legacy_heading_path: ["Long-Term Memory", "Preferences", "Favorite color"],
     });
+  });
+
+  it("re-stubs MEMORY.md when the same imported content reappears after previous cleanup", async () => {
+    const content = ["## Facts", "Alpha"].join("\n");
+    readFile.mockResolvedValue(content);
+
+    const pool = {
+      query: vi.fn(async (sql?: string) => {
+        const text = String(sql ?? "");
+        if (text.includes("FROM memory_import_runs")) {
+          return {
+            rows: [
+              {
+                id: "run-existing",
+                source_sha256: "same",
+                status: "completed",
+                cleanup_status: "completed",
+                attempt_count: 1,
+              },
+            ],
+          };
+        }
+        if (text.includes("UPDATE memory_import_runs")) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn(),
+    } as any;
+
+    const result = await runOneTimeWorkspaceImport({
+      api: createApi(),
+      cfg: {
+        workspaceDir: "/tmp/work",
+        postgres: { host: "localhost", database: "db", user: "user" },
+      },
+      pool,
+      workspaceDir: "/tmp/work",
+      agentId: "main",
+      sessionKey: "agent:main:test",
+      cleanupMemoryMdAfterImport: true,
+    });
+
+    expect(result).toMatchObject({
+      overall: "ready",
+      import: "ready",
+      cleanup: "completed",
+      lastImportRunId: "run-existing",
+    });
+    expect(writeFile).toHaveBeenCalledTimes(2);
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it("archives a same-sha daily file that reappears without reinserting DB rows", async () => {
+    readFile.mockImplementation(async (targetPath: string) => {
+      if (targetPath.endsWith("/MEMORY.md")) {
+        throw new Error("missing");
+      }
+      if (targetPath.endsWith("/memory/2026-06-01.md")) {
+        return "same daily content";
+      }
+      throw new Error(`unexpected path: ${targetPath}`);
+    });
+    readdir.mockResolvedValue([{ isFile: () => true, name: "2026-06-01.md" }] as any);
+
+    const pool = {
+      query: vi.fn(async (sql?: string) => {
+        const text = String(sql ?? "");
+        if (text.includes("FROM memory_import_files")) {
+          return { rows: [{ id: "file-1" }] };
+        }
+        if (text.includes("INSERT INTO memory_daily_entries")) {
+          throw new Error("should not reinsert daily entry");
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn(),
+    } as any;
+
+    const result = await runLegacyWorkspaceImport({
+      api: createApi(),
+      cfg: {
+        workspaceDir: "/tmp/work",
+        postgres: { host: "localhost", database: "db", user: "user" },
+      },
+      pool,
+      workspaceDir: "/tmp/work",
+      agentId: "main",
+      sessionKey: "agent:main:test",
+      cleanupMemoryMdAfterImport: true,
+      archiveImportedFiles: true,
+    });
+
+    expect(result.dailyImportedCount).toBe(0);
+    expect(result.dailySkippedImportedCount).toBe(1);
+    expect(result.dailyArchivedCount).toBe(1);
+    expect(rename).toHaveBeenCalledTimes(1);
+  });
+
+  it("reimports and archives a changed daily file when it reappears with a new sha", async () => {
+    readFile.mockImplementation(async (targetPath: string) => {
+      if (targetPath.endsWith("/MEMORY.md")) {
+        throw new Error("missing");
+      }
+      if (targetPath.endsWith("/memory/2026-06-01.md")) {
+        return "updated daily content";
+      }
+      throw new Error(`unexpected path: ${targetPath}`);
+    });
+    readdir.mockResolvedValue([{ isFile: () => true, name: "2026-06-01.md" }] as any);
+
+    const queryCalls: string[] = [];
+    const pool = {
+      query: vi.fn(async (sql?: string) => {
+        const text = String(sql ?? "");
+        queryCalls.push(text);
+        if (text.includes("FROM memory_import_files")) {
+          return { rows: [] };
+        }
+        if (text.includes("INSERT INTO memory_daily_entries")) {
+          return { rows: [{ id: "daily-row-1" }] };
+        }
+        if (text.includes("INSERT INTO memory_import_files")) {
+          return { rows: [{ id: "ledger-row-1" }] };
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn(),
+    } as any;
+
+    const result = await runLegacyWorkspaceImport({
+      api: createApi(),
+      cfg: {
+        workspaceDir: "/tmp/work",
+        postgres: { host: "localhost", database: "db", user: "user" },
+      },
+      pool,
+      workspaceDir: "/tmp/work",
+      agentId: "main",
+      sessionKey: "agent:main:test",
+      cleanupMemoryMdAfterImport: true,
+      archiveImportedFiles: true,
+    });
+
+    expect(result.dailyImportedCount).toBe(1);
+    expect(result.dailySkippedImportedCount).toBe(0);
+    expect(result.dailyArchivedCount).toBe(1);
+    expect(queryCalls.some((sql) => sql.includes("INSERT INTO memory_daily_entries"))).toBe(true);
+    expect(queryCalls.some((sql) => sql.includes("INSERT INTO memory_import_files"))).toBe(true);
+    expect(rename).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps legacy scan alive when one daily file is unreadable", async () => {
+    readFile.mockImplementation(async (targetPath: string) => {
+      if (targetPath.endsWith("/MEMORY.md")) {
+        throw new Error("missing");
+      }
+      if (targetPath.endsWith("/memory/2026-06-01.md")) {
+        return "daily content";
+      }
+      if (targetPath.endsWith("/memory/2026-06-02.md")) {
+        throw new Error("EACCES");
+      }
+      throw new Error(`unexpected path: ${targetPath}`);
+    });
+    readdir.mockResolvedValue([
+      { isFile: () => true, name: "2026-06-01.md" },
+      { isFile: () => true, name: "2026-06-02.md" },
+    ] as any);
+
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+    } as any;
+
+    const result = await scanLegacyWorkspace({
+      api: createApi(),
+      cfg: {
+        workspaceDir: "/tmp/work",
+        postgres: { host: "localhost", database: "db", user: "user" },
+      },
+      pool,
+      workspaceDir: "/tmp/work",
+      agentId: "main",
+      sessionKey: "agent:main:test",
+    });
+
+    expect(result.dailyFiles).toHaveLength(2);
+    expect(result.dailyFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "memory/2026-06-01.md",
+          state: "pending",
+          supported: true,
+        }),
+        expect.objectContaining({
+          path: "memory/2026-06-02.md",
+          state: "unreadable",
+          supported: false,
+          error: "EACCES",
+        }),
+      ]),
+    );
+    expect(result.unreadableCount).toBe(1);
+    expect(result.pendingCount).toBe(1);
   });
 });

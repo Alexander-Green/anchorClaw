@@ -10,6 +10,7 @@ const {
   hasSessionsIndexRowsMock,
   memorySearchSessionsIndexDbMock,
   filterSessionHitsByVisibilityMock,
+  scanLegacyWorkspaceMock,
 } = vi.hoisted(() => ({
   resolveScopeMock: vi.fn(async () => ({ userId: "u1", workspaceId: "w1" })),
   resolveLimitsMock: vi.fn(() => ({ maxResults: 10 })),
@@ -19,6 +20,15 @@ const {
   hasSessionsIndexRowsMock: vi.fn(async () => false),
   memorySearchSessionsIndexDbMock: vi.fn(async () => []),
   filterSessionHitsByVisibilityMock: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
+  scanLegacyWorkspaceMock: vi.fn(async () => ({
+    workspaceDir: "/workspace",
+    memoryMd: { path: "MEMORY.md", state: "absent", sha256: null, importedSameSha: false },
+    dailyFiles: [],
+    activeLegacyCount: 0,
+    pendingCount: 0,
+    unsupportedCount: 0,
+    hasActiveLegacy: false,
+  })),
 }));
 
 vi.mock("../../identity.js", () => ({
@@ -45,6 +55,10 @@ vi.mock("../../memory/sessions-index.js", () => ({
 
 vi.mock("../../memory/sessions-visibility.js", () => ({
   filterSessionHitsByVisibility: filterSessionHitsByVisibilityMock,
+}));
+
+vi.mock("../../importer.js", () => ({
+  scanLegacyWorkspace: scanLegacyWorkspaceMock,
 }));
 
 function buildCtx() {
@@ -170,6 +184,33 @@ describe("memory_search tool exactTop1 metadata", () => {
       exactTop1Value: null,
       recommendedAction: "stop_not_found",
     });
+    expect(result.details.meta.legacyImportWarning).toBeUndefined();
+  });
+
+  it("adds a legacy import warning on empty memory results when active legacy files still exist", async () => {
+    (memorySearchDbMock as any).mockResolvedValueOnce([]);
+    scanLegacyWorkspaceMock.mockResolvedValueOnce({
+      workspaceDir: "/workspace",
+      memoryMd: { path: "MEMORY.md", state: "pending", sha256: "sha-memory", importedSameSha: false },
+      dailyFiles: [],
+      activeLegacyCount: 1,
+      pendingCount: 1,
+      unsupportedCount: 0,
+      hasActiveLegacy: true,
+    } as any);
+    const { ctx, registerTool } = buildCtx();
+    registerMemorySearchTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-3b", { query: "favorite pizza", corpus: "memory" });
+
+    expect(result.content[0].text).toContain("Legacy memory import is still pending");
+    expect(result.details.meta.legacyImportWarning).toContain("missing DB results do not prove");
+    expect(scanLegacyWorkspaceMock).toHaveBeenCalledTimes(1);
   });
 
   it("boosts marker-like candidates in exact_value mode", async () => {

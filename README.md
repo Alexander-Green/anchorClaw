@@ -16,7 +16,7 @@ This package currently targets a **Track A core runtime** release:
 - durable memory is DB-backed
 - daily memory is DB-owned and injected on first-turn/new-session
 - sessions search exists as an explicit opt-in
-- maintenance/extractor flows remain experimental and disabled by default
+- maintenance/extractor remains experimental but now runs from DB daily windows when enabled
 
 ## Why We Built This
 
@@ -58,16 +58,17 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
     - `visible`: cross-agent delta updates are accepted and indexed
     - `off`: sessions delta listener is disabled
 - **Migration support**
-  - One-time idempotent import of legacy `MEMORY.md` into Postgres (by file hash)
-  - Optional (default on) cleanup of `MEMORY.md` after import to avoid duplicate prompt injection
+  - Explicit operator CLI for one-time or repair-style legacy import/backfill
+  - `MEMORY.md` is imported into Postgres durable memory, then backed up and stubbed
+  - `memory/YYYY-MM-DD.md` files are imported into DB daily entries, then archived out of the active workspace path
 - **Phase 4 maintenance foundation (backend-owned, still evolving)**
   - Optional background maintenance scheduler (`maintenance.enabled`)
-  - DB-owned cycle over `memory_episodic` with `dryRun` support
+  - DB-owned cycle over `memory_daily_entries` windows with `dryRun` support
   - Extractor + dedupe checks before write into `memory_items`
-  - Archives processed episodic rows only after successful extractor cycle
+  - Records processed daily windows in `memory_daily_extraction_windows` only after successful extractor cycle
   - Non-dry-run maintenance waits for durable startup state to become `ready`
   - `dryRun` reports heuristic candidate counts only; it does not run the extractor
-  - Current Track A runtime uses `memory_daily_entries`; extractor promotion from daily windows is a later Phase 4 workstream
+  - Legacy `memory_episodic` runtime scaffold is removed from the active path and dropped by cleanup migration
 
 ---
 
@@ -99,10 +100,36 @@ By default, setup updates `~/.openclaw/openclaw.json` with the required runtime 
 - `plugins.entries.anchorclaw.enabled = true`
 - `plugins.entries.anchorclaw.config.postgres` (`host`, `port`, `database`, `schema`, `user`, `password`)
 - `plugins.entries.anchorclaw.config.workspaceDir`
+- `hooks.internal.entries["session-memory"].enabled = false`
 
-`workspaceDir` is AnchorClaw's source of truth for startup import, workspace scoping, prompt cache, and `memory/*` reads. Setup accepts `--workspace-dir`; otherwise it uses `OPENCLAW_WORKSPACE_DIR` when present, then the OpenClaw default workspace path. If config update is enabled and no workspace path can be resolved, setup fails fast instead of writing a partial config.
+`workspaceDir` is AnchorClaw's source of truth for workspace scoping, legacy import scans, prompt cache, and DB-backed `memory/*` compatibility reads. Setup accepts `--workspace-dir`; otherwise it uses `OPENCLAW_WORKSPACE_DIR` when present, then the OpenClaw default workspace path. If config update is enabled and no workspace path can be resolved, setup fails fast instead of writing a partial config.
 
 Setup does **not** need to mutate `<workspaceDir>/AGENTS.md`. Default OpenClaw instructions that mention `MEMORY.md` or `memory/YYYY-MM-DD.md` remain compatible: when AnchorClaw is active, the runtime prompt and tool schemas map those concepts to DB-backed `memory_store`, `memory_log`, `memory_search`, and `memory_get`.
+
+Setup disables OpenClaw's bundled file-based `session-memory` hook because AnchorClaw captures `/new` and `/reset` session summaries into DB-backed daily memory. Leaving both enabled can create active Markdown daily files plus DB daily entries for the same reset context.
+
+If you run setup with `--skip-config`, add this manually to `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": {
+          "enabled": false
+        }
+      }
+    }
+  }
+}
+```
+
+If legacy memory files already exist in the workspace, setup leaves them untouched. After setup, review and migrate them with:
+
+```bash
+openclaw anchorclaw import --dry-run
+openclaw anchorclaw import --apply
+```
 
 ### 3) Optional config overrides
 
@@ -125,9 +152,6 @@ Common overrides:
       "deltaBytes": 100000,
       "deltaMessages": 50
     }
-  },
-  "import": {
-    "cleanupMemoryMdAfterImport": true
   },
   "maintenance": {
     "enabled": false,
@@ -156,9 +180,9 @@ Common overrides:
 - `off`: disable sessions indexing/listener behavior
 
 `sessions.sync.deltaBytes` and `sessions.sync.deltaMessages` control when transcript deltas trigger a
-targeted sessions reindex. `import.cleanupMemoryMdAfterImport` controls the default post-import `MEMORY.md`
-stub cleanup. Track A runtime daily memory is owned by `memory_daily_entries`; the current maintenance
-extractor path is still experimental and does not yet represent the final daily-promotion pipeline.
+targeted sessions reindex. Track A runtime daily memory is owned by `memory_daily_entries`; the maintenance
+extractor now reads bounded DB daily windows and promotes durable candidates into `memory_items`, but this path
+is still considered experimental while we tune windowing and operator validation.
 `limits` can reduce search/read caps below the built-in maximums. `maintenance.dryRun` currently reports
 heuristic candidate counts only; it is meant for cheap backlog visibility, not extractor-faithful validation.
 
@@ -246,7 +270,8 @@ Config update behavior:
 - writes `plugins.slots.memory = "anchorclaw"` even if install already selected the memory slot
 - writes `plugins.entries.anchorclaw.enabled = true`
 - writes the required `postgres` connection block
-- preserves unrelated top-level `anchorclaw.config` keys such as `identity`, `sessions`, `import`, and `limits`
+- disables bundled `hooks.internal.entries["session-memory"]` so `/new` and `/reset` daily capture stays DB-backed
+- preserves unrelated top-level `anchorclaw.config` keys such as `identity`, `sessions`, `maintenance`, and `limits`
 - rewrites `anchorclaw.config.postgres`; re-add `postgres.sslMode`, `postgres.sslCa`, or `postgres.pool` after setup if you use them
 - leaves `AGENTS.md` unchanged; legacy file-memory instructions are handled through AnchorClaw runtime/tool compatibility
 - fails fast if config update is enabled but `workspaceDir` cannot be resolved
@@ -279,24 +304,47 @@ AnchorClaw exposes both “native” and compatibility surfaces via OpenClaw too
 - `memory_forget({ lookup|path? , id? })`
 - `memory_status({ check? })`
   - default (`check` omitted / `false`): cached runtime degraded-state report
-  - active mode (`check: true`): lightweight healthcheck for DB connectivity/schema + sessions dir accessibility (`exists` + explicit `readable` check)
+  - active mode (`check: true`): lightweight healthcheck for DB connectivity/schema + sessions dir accessibility (`exists` + explicit `readable` check), plus legacy import diagnostics
 
 ---
 
-## Importing `MEMORY.md` and Avoiding Duplicate Prompt Memory
+## Legacy Import and File Handling
 
-OpenClaw core injects `MEMORY.md` as a bootstrap file. AnchorClaw also injects Postgres-backed durable memory via its memory capability.
+Track B moves legacy migration out of startup and setup. AnchorClaw does not auto-import workspace files on boot; instead it scans for active legacy files and warns the operator when import is pending.
 
-To avoid duplicated prompt memory, AnchorClaw **cleans up `MEMORY.md` after a successful import by default**:
+Dry-run the current workspace state:
 
-- backup: `.openclaw-repair/anchorclaw/MEMORY.md.anchorclaw-backup.<timestamp>.md`
-- replacement: `MEMORY.md` becomes an HTML-comment-only stub
-
-To disable cleanup:
-
-```json
-{ "import": { "cleanupMemoryMdAfterImport": false } }
+```bash
+openclaw anchorclaw import --dry-run
 ```
+
+Apply the migration:
+
+```bash
+openclaw anchorclaw import --apply
+```
+
+What `--apply` does:
+
+- `MEMORY.md` -> import into Postgres durable memory (`memory_items`)
+- `MEMORY.md` -> backup to `.openclaw-repair/anchorclaw/`
+- `MEMORY.md` -> replace with an HTML-comment-only stub
+- `memory/YYYY-MM-DD.md` -> import into DB daily entries (`memory_daily_entries`)
+- `memory/YYYY-MM-DD.md` -> archive out of the active `memory/` directory into `.openclaw-repair/anchorclaw/legacy-daily/`
+
+Why the daily files are archived instead of left in place:
+
+- leaving them in `memory/` allows legacy file-oriented instructions to keep treating them as active daily memory
+- that can lead to duplicate prompt injection or repeated promotion into durable memory
+- archiving preserves the original files without keeping them on the active runtime path
+
+Escape hatch:
+
+```bash
+openclaw anchorclaw import --apply --keep-files
+```
+
+`--keep-files` is only for exceptional situations. It leaves active legacy files in place and can reintroduce duplicate prompt injection risk.
 
 ### `AGENTS.md` Compatibility
 
@@ -318,7 +366,6 @@ Direct edits to those files should only happen when the user explicitly asks for
 - `postgres.pool.idleTimeoutMs`: `30000`
 - `sessions.sync.deltaBytes`: `100000` (OpenClaw-compatible default)
 - `sessions.sync.deltaMessages`: `50` (OpenClaw-compatible default)
-- Import cleanup: `import.cleanupMemoryMdAfterImport = true`
 
 ---
 

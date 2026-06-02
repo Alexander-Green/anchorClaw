@@ -1,5 +1,6 @@
 import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
 import { resolveSessionsSearchState } from "../../config.js";
+import { scanLegacyWorkspace } from "../../importer.js";
 import type { MemoryStatusCheckResult } from "../types.js";
 import type { ToolRegistrationParams } from "./common.js";
 import { constants as fsConstants } from "node:fs";
@@ -169,6 +170,36 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
           pendingBytes: pending.pendingBytes,
           pendingMessages: pending.pendingMessages,
         };
+        try {
+          const legacyScan = await scanLegacyWorkspace({
+            api,
+            cfg: ctx.cfg!,
+            pool: ctx.getPool(),
+            workspaceDir: ctx.cfg!.workspaceDir,
+            agentId: (api as any)?.runtime?.agentId,
+            sessionKey: (api as any)?.runtime?.sessionKey,
+          });
+          base.legacyImport = {
+            active: legacyScan.hasActiveLegacy,
+            memoryMdState: legacyScan.memoryMd.state,
+            pendingCount: legacyScan.pendingCount,
+            unsupportedCount: legacyScan.unsupportedCount,
+            unreadableCount: legacyScan.unreadableCount,
+            dailyFileCount: legacyScan.dailyFiles.length,
+          };
+        } catch (error) {
+          base.legacyImport = {
+            active: false,
+            memoryMdState: "absent",
+            pendingCount: 0,
+            unsupportedCount: 0,
+            unreadableCount: 0,
+            dailyFileCount: 0,
+          };
+          api.logger.warn(
+            `anchorclaw: legacy import status scan failed (${error instanceof Error ? error.message : String(error)})`,
+          );
+        }
       }
       return {
         content: [

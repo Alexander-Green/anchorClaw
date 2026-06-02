@@ -41,16 +41,6 @@
       "help": "Minimum appended message records before reindexing sessions transcripts.",
       "advanced": true
     },
-    "import": {
-      "label": "Import",
-      "help": "Migration behavior when legacy memory files exist",
-      "advanced": true
-    },
-    "import.cleanupMemoryMdAfterImport": {
-      "label": "Cleanup MEMORY.md After Import",
-      "help": "When true (default), after importing legacy MEMORY.md into Postgres AnchorClaw writes a backup into .openclaw-repair/anchorclaw/ and stubs MEMORY.md to avoid duplicate prompt injection.",
-      "advanced": true
-    },
     "identity": {
       "label": "Identity",
       "help": "Stable owner identity for memory scoping",
@@ -200,16 +190,6 @@
                 "minimum": 0
               }
             }
-          }
-        }
-      },
-      "import": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "cleanupMemoryMdAfterImport": {
-            "type": "boolean",
-            "default": true
           }
         }
       },

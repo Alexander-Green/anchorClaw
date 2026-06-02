@@ -15,7 +15,7 @@ import { isTransientDbError } from "./db-errors.js";
 import { resolveUserAndWorkspaceScope } from "./identity.js";
 import { parseLogicalDateFromDailyPath } from "./memory/daily.js";
 import type { PostgresPool } from "./postgres.js";
-import type { DurableCleanupState, DurableImportState, DurableOverallState } from "./plugin/types.js";
+import type { DurableCleanupState, DurableImportState, DurableOverallState, LegacyFileState } from "./plugin/types.js";
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -81,6 +81,43 @@ export type WorkspaceImportResult = {
   reason?: string | null;
   lastImportRunId?: string | null;
   lastSourceSha256?: string | null;
+};
+
+export type LegacyMemoryMdScan = {
+  path: "MEMORY.md";
+  state: LegacyFileState;
+  sha256: string | null;
+  importedSameSha: boolean;
+};
+
+export type LegacyDailyFileScan = {
+  path: string;
+  logicalDate: string | null;
+  sha256: string | null;
+  supported: boolean;
+  importedSameSha: boolean;
+  state: "pending" | "already_imported_active" | "unsupported" | "unreadable";
+  error?: string;
+};
+
+export type LegacyWorkspaceScanResult = {
+  workspaceDir: string;
+  memoryMd: LegacyMemoryMdScan;
+  dailyFiles: LegacyDailyFileScan[];
+  activeLegacyCount: number;
+  pendingCount: number;
+  unsupportedCount: number;
+  unreadableCount: number;
+  hasActiveLegacy: boolean;
+};
+
+export type LegacyWorkspaceImportSummary = {
+  scan: LegacyWorkspaceScanResult;
+  memoryMdResult: WorkspaceImportResult;
+  dailyImportedCount: number;
+  dailyArchivedCount: number;
+  dailySkippedImportedCount: number;
+  dailyUnsupportedCount: number;
 };
 
 function parseMemoryMdToItems(params: { content: string; relPath: string }): MemoryMdItem[] {
@@ -456,21 +493,42 @@ async function cleanupMemoryMd(params: {
   }
 }
 
+function buildArchiveStamp() {
+  return new Date().toISOString().replaceAll(":", "").replaceAll(".", "");
+}
+
+async function archiveLegacyFile(params: {
+  workspaceDir: string;
+  absPath: string;
+  archiveSubdir: string;
+  fileName: string;
+  sha256: string;
+}): Promise<string> {
+  const archiveDir = path.join(params.workspaceDir, ".openclaw-repair", "anchorclaw", params.archiveSubdir);
+  await fs.mkdir(archiveDir, { recursive: true });
+  const ext = path.extname(params.fileName);
+  const baseName = path.basename(params.fileName, ext);
+  const archiveName = `${baseName}.${buildArchiveStamp()}.sha-${params.sha256.slice(0, 12)}${ext || ".md"}`;
+  const archivePath = path.join(archiveDir, archiveName);
+  await fs.rename(params.absPath, archivePath);
+  return path.relative(params.workspaceDir, archivePath);
+}
+
 async function retryExistingCleanupIfNeeded(params: {
   api: OpenClawPluginApi;
-  cfg: AnchorClawConfig;
   pool: PostgresPool;
   workspaceDir: string;
   absPath: string;
   content: string;
   sourceSha256: string;
   latestRun: MemoryImportRunRow;
+  cleanupMemoryMdAfterImport: boolean;
 }): Promise<WorkspaceImportResult> {
-  if (params.latestRun.cleanup_status === "completed" || !params.cfg.import?.cleanupMemoryMdAfterImport) {
+  if (!params.cleanupMemoryMdAfterImport) {
     return {
       overall: "ready",
       import: "ready",
-      cleanup: params.latestRun.cleanup_status === "completed" ? "completed" : "not_needed",
+      cleanup: "not_needed",
       reason: null,
       lastImportRunId: params.latestRun.id,
       lastSourceSha256: params.sourceSha256,
@@ -508,6 +566,7 @@ async function importMemoryMd(params: {
   workspaceDir: string;
   agentId?: string;
   sessionKey?: string;
+  cleanupMemoryMdAfterImport: boolean;
 }): Promise<WorkspaceImportResult> {
   const relPath = "MEMORY.md";
   const absPath = path.join(params.workspaceDir, relPath);
@@ -557,13 +616,13 @@ async function importMemoryMd(params: {
   if (latestRun?.status === "completed") {
     return retryExistingCleanupIfNeeded({
       api: params.api,
-      cfg: params.cfg,
       pool: params.pool,
       workspaceDir: params.workspaceDir,
       absPath,
       content,
       sourceSha256,
       latestRun,
+      cleanupMemoryMdAfterImport: params.cleanupMemoryMdAfterImport,
     });
   }
 
@@ -620,10 +679,10 @@ async function importMemoryMd(params: {
     status: "completed",
     insertedCount,
     skippedCount,
-    cleanupStatus: params.cfg.import?.cleanupMemoryMdAfterImport ? "failed" : "not_needed",
+    cleanupStatus: params.cleanupMemoryMdAfterImport ? "failed" : "not_needed",
   });
 
-  if (!params.cfg.import?.cleanupMemoryMdAfterImport) {
+  if (!params.cleanupMemoryMdAfterImport) {
     return {
       overall: "ready",
       import: "ready",
@@ -691,6 +750,25 @@ async function ensureImportRecorded(params: {
   return inserted.rows.length > 0;
 }
 
+async function hasImportRecord(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+  relPath: string;
+  sha256: string;
+}): Promise<boolean> {
+  const existing = await params.pool.query<{ id: string }>(
+    `
+    SELECT id
+    FROM memory_import_files
+    WHERE user_id = $1 AND workspace_id = $2 AND rel_path = $3 AND sha256 = $4
+    LIMIT 1
+  `,
+    [params.userId, params.workspaceId, params.relPath, params.sha256],
+  );
+  return Boolean(existing.rows[0]?.id);
+}
+
 async function removeImportRecord(params: {
   pool: PostgresPool;
   userId: string;
@@ -714,13 +792,24 @@ async function importDailyMemory(params: {
   workspaceDir: string;
   agentId?: string;
   sessionKey?: string;
-}): Promise<void> {
+  archiveImportedFiles: boolean;
+}): Promise<{
+  importedCount: number;
+  archivedCount: number;
+  skippedImportedCount: number;
+  unsupportedCount: number;
+}> {
   const memoryDir = path.join(params.workspaceDir, "memory");
   let dirents: Dirent[] = [];
   try {
     dirents = (await fs.readdir(memoryDir, { withFileTypes: true })) as Dirent[];
   } catch {
-    return;
+    return {
+      importedCount: 0,
+      archivedCount: 0,
+      skippedImportedCount: 0,
+      unsupportedCount: 0,
+    };
   }
 
   const scope = await resolveUserAndWorkspaceScope({
@@ -731,6 +820,11 @@ async function importDailyMemory(params: {
     sessionKey: params.sessionKey,
     configuredExternalId: params.cfg.identity?.externalId,
   });
+
+  let importedCount = 0;
+  let archivedCount = 0;
+  let skippedImportedCount = 0;
+  let unsupportedCount = 0;
 
   for (const entry of dirents) {
     if (!entry.isFile()) {
@@ -748,79 +842,279 @@ async function importDailyMemory(params: {
       continue;
     }
     const digest = sha256Hex(content);
-    const shouldProceed = await ensureImportRecorded({
+    const alreadyImported = await hasImportRecord({
       pool: params.pool,
       userId: scope.userId,
       workspaceId: scope.workspaceId,
       relPath,
       sha256: digest,
-      sourceType: "daily-memory",
-      metadata: { legacy_file: relPath, absolute_path: absPath },
     });
-    if (!shouldProceed) {
-      continue;
-    }
 
     try {
       const logicalDate = parseLogicalDateFromDailyPath(relPath);
       if (!logicalDate) {
-        throw new Error(`unsupported daily path ${relPath}`);
+        unsupportedCount += 1;
+        params.api.logger.warn(`anchorclaw: skipping unsupported legacy daily path ${relPath}`);
+        continue;
       }
-      const inserted = await params.pool.query<{ id: string }>(
-        `
-        INSERT INTO memory_daily_entries (
-          user_id,
-          workspace_id,
-          logical_date,
-          path,
-          content,
-          content_sha256,
-          source_kind,
-          source_path,
-          metadata,
-          created_by
-        )
-        VALUES ($1, $2, $3::date, $4, $5, $6, 'legacy_import', $7, $8::jsonb, $9)
-        ON CONFLICT (user_id, workspace_id, path)
-        DO UPDATE SET
-          logical_date = EXCLUDED.logical_date,
-          content = EXCLUDED.content,
-          content_sha256 = EXCLUDED.content_sha256,
-          source_kind = EXCLUDED.source_kind,
-          source_path = EXCLUDED.source_path,
-          metadata = EXCLUDED.metadata,
-          updated_at = now(),
-          created_by = EXCLUDED.created_by
-        RETURNING id
-      `,
-        [
-          scope.userId,
-          scope.workspaceId,
-          logicalDate,
+      if (!alreadyImported) {
+        const inserted = await params.pool.query<{ id: string }>(
+          `
+          INSERT INTO memory_daily_entries (
+            user_id,
+            workspace_id,
+            logical_date,
+            path,
+            content,
+            content_sha256,
+            source_kind,
+            source_path,
+            metadata,
+            created_by
+          )
+          VALUES ($1, $2, $3::date, $4, $5, $6, 'legacy_import', $7, $8::jsonb, $9)
+          ON CONFLICT (user_id, workspace_id, path)
+          DO UPDATE SET
+            logical_date = EXCLUDED.logical_date,
+            content = EXCLUDED.content,
+            content_sha256 = EXCLUDED.content_sha256,
+            source_kind = EXCLUDED.source_kind,
+            source_path = EXCLUDED.source_path,
+            metadata = EXCLUDED.metadata,
+            updated_at = now(),
+            created_by = EXCLUDED.created_by
+          RETURNING id
+        `,
+          [
+            scope.userId,
+            scope.workspaceId,
+            logicalDate,
+            relPath,
+            content,
+            digest,
+            absPath,
+            JSON.stringify({ legacy_file: relPath, legacy_sha256: digest, absolute_path: absPath }),
+            "anchorclaw-import",
+          ],
+        );
+        if (!inserted.rows[0]?.id) {
+          throw new Error(`failed to import ${relPath} into memory_daily_entries`);
+        }
+        await ensureImportRecorded({
+          pool: params.pool,
+          userId: scope.userId,
+          workspaceId: scope.workspaceId,
           relPath,
-          content,
-          digest,
+          sha256: digest,
+          sourceType: "daily-memory",
+          metadata: { legacy_file: relPath, absolute_path: absPath },
+        });
+        importedCount += 1;
+      } else {
+        skippedImportedCount += 1;
+      }
+      if (params.archiveImportedFiles) {
+        const archiveRelPath = await archiveLegacyFile({
+          workspaceDir: params.workspaceDir,
           absPath,
-          JSON.stringify({ legacy_file: relPath, legacy_sha256: digest, absolute_path: absPath }),
-          "anchorclaw-import",
-        ],
-      );
-      if (!inserted.rows[0]?.id) {
-        throw new Error(`failed to import ${relPath} into memory_daily_entries`);
+          archiveSubdir: "legacy-daily",
+          fileName: entry.name,
+          sha256: digest,
+        });
+        archivedCount += 1;
+        params.api.logger.info(`anchorclaw: archived legacy daily file ${relPath} -> ${archiveRelPath}`);
       }
     } catch (error) {
-      await removeImportRecord({
+      if (!alreadyImported) {
+        await removeImportRecord({
+          pool: params.pool,
+          userId: scope.userId,
+          workspaceId: scope.workspaceId,
+          relPath,
+          sha256: digest,
+        });
+      }
+      params.api.logger.warn(
+        `anchorclaw: failed to import ${relPath} into memory_daily_entries (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+  }
+
+  return {
+    importedCount,
+    archivedCount,
+    skippedImportedCount,
+    unsupportedCount,
+  };
+}
+
+export async function scanLegacyWorkspace(params: {
+  api: OpenClawPluginApi;
+  cfg: AnchorClawConfig;
+  pool: PostgresPool;
+  workspaceDir: string;
+  agentId?: string;
+  sessionKey?: string;
+}): Promise<LegacyWorkspaceScanResult> {
+  const memoryPath = path.join(params.workspaceDir, "MEMORY.md");
+  let memoryMd: LegacyMemoryMdScan = {
+    path: "MEMORY.md",
+    state: "absent",
+    sha256: null,
+    importedSameSha: false,
+  };
+  try {
+    const content = await fs.readFile(memoryPath, "utf8");
+    const sourceSha256 = sha256Hex(content);
+    if (isStubOnlyMemoryMd(content)) {
+      memoryMd = {
+        path: "MEMORY.md",
+        state: "stub",
+        sha256: sourceSha256,
+        importedSameSha: false,
+      };
+    } else {
+      const scope = await resolveUserAndWorkspaceScope({
+        api: params.api,
+        pool: params.pool,
+        workspaceDir: params.workspaceDir,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        configuredExternalId: params.cfg.identity?.externalId,
+      });
+      const latestRun = await getLatestMemoryImportRun({
+        pool: params.pool,
+        userId: scope.userId,
+        workspaceId: scope.workspaceId,
+        sourceKind: "workspace_memory_md",
+        sourcePath: "MEMORY.md",
+        sourceSha256,
+      });
+      const importedSameSha = latestRun?.status === "completed";
+      memoryMd = {
+        path: "MEMORY.md",
+        state: importedSameSha ? "already_imported_active" : "pending",
+        sha256: sourceSha256,
+        importedSameSha,
+      };
+    }
+  } catch {
+    // ignore missing MEMORY.md
+  }
+
+  const dailyFiles: LegacyDailyFileScan[] = [];
+  const memoryDir = path.join(params.workspaceDir, "memory");
+  try {
+    const dirents = (await fs.readdir(memoryDir, { withFileTypes: true })) as Dirent[];
+    const scope = await resolveUserAndWorkspaceScope({
+      api: params.api,
+      pool: params.pool,
+      workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      configuredExternalId: params.cfg.identity?.externalId,
+    });
+    for (const entry of dirents) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) {
+        continue;
+      }
+      const relPath = `memory/${entry.name}`;
+      const absPath = path.join(memoryDir, entry.name);
+      let content: string;
+      try {
+        content = await fs.readFile(absPath, "utf8");
+      } catch (error) {
+        dailyFiles.push({
+          path: relPath,
+          logicalDate: null,
+          sha256: null,
+          supported: false,
+          importedSameSha: false,
+          state: "unreadable",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+      const digest = sha256Hex(content);
+      const logicalDate = parseLogicalDateFromDailyPath(relPath);
+      if (!logicalDate) {
+        dailyFiles.push({
+          path: relPath,
+          logicalDate: null,
+          sha256: digest,
+          supported: false,
+          importedSameSha: false,
+          state: "unsupported",
+        });
+        continue;
+      }
+      const importedSameSha = await hasImportRecord({
         pool: params.pool,
         userId: scope.userId,
         workspaceId: scope.workspaceId,
         relPath,
         sha256: digest,
       });
-      params.api.logger.warn(
-        `anchorclaw: failed to import ${relPath} into memory_daily_entries (${error instanceof Error ? error.message : String(error)})`,
-      );
+      dailyFiles.push({
+        path: relPath,
+        logicalDate,
+        sha256: digest,
+        supported: true,
+        importedSameSha,
+        state: importedSameSha ? "already_imported_active" : "pending",
+      });
     }
+  } catch {
+    // ignore missing memory dir
   }
+
+  const activeLegacyCount =
+    (memoryMd.state === "pending" || memoryMd.state === "already_imported_active" ? 1 : 0) +
+    dailyFiles.filter((file) => file.state === "pending" || file.state === "already_imported_active").length;
+  const pendingCount =
+    (memoryMd.state === "pending" ? 1 : 0) + dailyFiles.filter((file) => file.state === "pending").length;
+  const unsupportedCount = dailyFiles.filter((file) => file.state === "unsupported").length;
+  const unreadableCount = dailyFiles.filter((file) => file.state === "unreadable").length;
+
+  return {
+    workspaceDir: params.workspaceDir,
+    memoryMd,
+    dailyFiles,
+    activeLegacyCount,
+    pendingCount,
+    unsupportedCount,
+    unreadableCount,
+    hasActiveLegacy: activeLegacyCount > 0,
+  };
+}
+
+export async function runLegacyWorkspaceImport(params: {
+  api: OpenClawPluginApi;
+  cfg: AnchorClawConfig;
+  pool: PostgresPool;
+  workspaceDir: string;
+  agentId?: string;
+  sessionKey?: string;
+  cleanupMemoryMdAfterImport?: boolean;
+  archiveImportedFiles?: boolean;
+}): Promise<LegacyWorkspaceImportSummary> {
+  const scan = await scanLegacyWorkspace(params);
+  const memoryMdResult = await importMemoryMd({
+    ...params,
+    cleanupMemoryMdAfterImport: params.cleanupMemoryMdAfterImport ?? true,
+  });
+  const dailyResult = await importDailyMemory({
+    ...params,
+    archiveImportedFiles: params.archiveImportedFiles ?? true,
+  });
+  return {
+    scan,
+    memoryMdResult,
+    dailyImportedCount: dailyResult.importedCount,
+    dailyArchivedCount: dailyResult.archivedCount,
+    dailySkippedImportedCount: dailyResult.skippedImportedCount,
+    dailyUnsupportedCount: dailyResult.unsupportedCount,
+  };
 }
 
 export async function runOneTimeWorkspaceImport(params: {
@@ -830,8 +1124,9 @@ export async function runOneTimeWorkspaceImport(params: {
   workspaceDir: string;
   agentId?: string;
   sessionKey?: string;
+  cleanupMemoryMdAfterImport?: boolean;
+  archiveImportedFiles?: boolean;
 }): Promise<WorkspaceImportResult> {
-  const memoryResult = await importMemoryMd(params);
-  await importDailyMemory(params);
-  return memoryResult;
+  const result = await runLegacyWorkspaceImport(params);
+  return result.memoryMdResult;
 }

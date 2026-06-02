@@ -16,6 +16,7 @@ const {
   syncSessionsIndexDb,
   syncVisibleSessionsIndexDb,
   runImport,
+  scanLegacyWorkspaceMock,
   getIdentityWarning,
   isSessionFileForAgent,
   isSessionFileForAnyKnownAgent,
@@ -23,11 +24,17 @@ const {
   memoryGetFromDb,
   canAccessSessionPathByVisibility,
   filterSessionHitsByVisibility,
+  createMaintenanceRuntimeMock,
+  registerMaintenanceLifecycleMock,
   statFs,
   accessFs,
   openFs,
+  readdirFs,
+  readFileFs,
+  unlinkFs,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
+  runCliImport,
 } = vi.hoisted(() => ({
   registerMemoryCapability: vi.fn(),
   definePluginEntry: vi.fn((entry: unknown) => entry),
@@ -60,6 +67,15 @@ const {
     lastImportRunId: null,
     lastSourceSha256: null,
   })),
+  scanLegacyWorkspaceMock: vi.fn(async () => ({
+    workspaceDir: "/tmp/work",
+    memoryMd: { path: "MEMORY.md", state: "absent", sha256: null, importedSameSha: false },
+    dailyFiles: [],
+    activeLegacyCount: 0,
+    pendingCount: 0,
+    unsupportedCount: 0,
+    hasActiveLegacy: false,
+  })),
   getIdentityWarning: vi.fn(() => null),
   isSessionFileForAgent: vi.fn(async () => true),
   isSessionFileForAnyKnownAgent: vi.fn(async () => true),
@@ -67,16 +83,25 @@ const {
   memoryGetFromDb: vi.fn(),
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
+  createMaintenanceRuntimeMock: vi.fn(() => ({ cleanupMaintenance: vi.fn() })),
+  registerMaintenanceLifecycleMock: vi.fn(),
   statFs: vi.fn(async () => ({ size: 0 })),
   accessFs: vi.fn(async () => undefined),
   openFs: vi.fn(async () => ({
     read: vi.fn(async () => ({ bytesRead: 0 })),
     close: vi.fn(async () => undefined),
   })),
+  readdirFs: vi.fn(async () => {
+    const error = Object.assign(new Error("not found"), { code: "ENOENT" });
+    throw error;
+  }),
+  readFileFs: vi.fn(async () => ""),
+  unlinkFs: vi.fn(async () => undefined),
   isSessionArchiveArtifactName: vi.fn((fileName: string) => /\.jsonl\.(reset|deleted)\./i.test(fileName)),
   isUsageCountedSessionTranscriptFileName: vi.fn((fileName: string) =>
     /\.jsonl($|\.reset\.|\.deleted\.)/i.test(fileName),
   ),
+  runCliImport: vi.fn(async () => undefined),
 }));
 
 vi.mock("./api.js", () => ({
@@ -160,10 +185,20 @@ vi.mock("./memory/sessions-visibility.js", () => ({
 }));
 
 vi.mock("node:fs/promises", () => ({
-  default: { stat: statFs, access: accessFs, open: openFs },
+  default: {
+    stat: statFs,
+    access: accessFs,
+    open: openFs,
+    readdir: readdirFs,
+    readFile: readFileFs,
+    unlink: unlinkFs,
+  },
   stat: statFs,
   access: accessFs,
   open: openFs,
+  readdir: readdirFs,
+  readFile: readFileFs,
+  unlink: unlinkFs,
 }));
 
 vi.mock("./memory/manager.js", () => ({
@@ -172,6 +207,16 @@ vi.mock("./memory/manager.js", () => ({
 
 vi.mock("./importer.js", () => ({
   runOneTimeWorkspaceImport: runImport,
+  scanLegacyWorkspace: scanLegacyWorkspaceMock,
+}));
+
+vi.mock("./scripts/import-legacy.js", () => ({
+  runAnchorClawImport: runCliImport,
+}));
+
+vi.mock("./plugin/maintenance.js", () => ({
+  createMaintenanceRuntime: createMaintenanceRuntimeMock,
+  registerMaintenanceLifecycle: registerMaintenanceLifecycleMock,
 }));
 
 vi.mock("./identity-policy.js", () => ({
@@ -394,6 +439,36 @@ describe("tool registration", () => {
     expect(result?.prependSystemContext).toContain("Daily memory answers date-specific questions; only durable memory implies recurring facts.");
     expect(result?.prependSystemContext).toContain("Save requests require one successful write tool before final text");
     expect(result?.prependSystemContext).toContain("MEMORY.md and memory/YYYY-MM-DD.md are DB-backed concepts");
+  });
+
+  it("registers after_compaction hook for flush inbox drain", () => {
+    const { api } = buildApi();
+
+    (plugin as any).register(api);
+
+    const calls = (api.registerHook as any).mock.calls;
+    const hasFlushHook = calls.some(
+      (call: any[]) =>
+        call[0] === "after_compaction" &&
+        typeof call[1] === "function" &&
+        (call[2] === undefined || call[2]?.name === "anchorclaw-flush-inbox-drain"),
+    );
+    expect(hasFlushHook).toBe(true);
+  });
+
+  it("registers before_reset hook for DB-backed session capture", () => {
+    const { api } = buildApi();
+
+    (plugin as any).register(api);
+
+    const calls = (api.registerHook as any).mock.calls;
+    const hasSessionCaptureHook = calls.some(
+      (call: any[]) =>
+        call[0] === "before_reset" &&
+        typeof call[1] === "function" &&
+        (call[2] === undefined || call[2]?.name === "anchorclaw-session-capture"),
+    );
+    expect(hasSessionCaptureHook).toBe(true);
   });
 });
 
@@ -1124,45 +1199,50 @@ describe("phase2 session delta listener", () => {
     });
   });
 
-  it("logs workspace import degraded when importer returns degraded result", async () => {
-    runImport.mockResolvedValueOnce({
-      overall: "degraded",
-      import: "ready",
-      cleanup: "failed",
-      reason: "legacy MEMORY.md cleanup failed; duplicate prompt injection risk remains",
-      lastImportRunId: "run-1",
-      lastSourceSha256: "sha-1",
+  it("warns when startup scan finds active legacy files", async () => {
+    scanLegacyWorkspaceMock.mockResolvedValueOnce({
+      workspaceDir: "/tmp/work",
+      memoryMd: { path: "MEMORY.md", state: "pending", sha256: "sha-1", importedSameSha: false },
+      dailyFiles: [
+        {
+          path: "memory/2026-06-01.md",
+          logicalDate: "2026-06-01",
+          sha256: "sha-daily-1",
+          supported: true,
+          importedSameSha: false,
+          state: "pending",
+        },
+      ],
+      activeLegacyCount: 2,
+      pendingCount: 2,
+      unsupportedCount: 0,
+      hasActiveLegacy: true,
     } as any);
     const { api } = buildApi();
 
     await registerAndWaitStartup(api);
 
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("anchorclaw: startup step workspace-import degraded"),
+      expect.stringContaining("anchorclaw: active legacy memory files detected (2); run openclaw anchorclaw import --dry-run"),
     );
-    expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step workspace-import succeeded");
+    expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step legacy-import-scan found no active legacy files");
   });
 
-  it("logs workspace import blocked when importer returns blocked result", async () => {
-    runImport.mockResolvedValueOnce({
-      overall: "blocked",
-      import: "failed_retryable",
-      cleanup: "not_needed",
-      reason: "workspace_import_failed: connection timeout",
-      lastImportRunId: "run-2",
-      lastSourceSha256: "sha-2",
-    } as any);
-  const { api } = buildApi();
+  it("logs legacy import scan failure without blocking startup", async () => {
+    scanLegacyWorkspaceMock.mockRejectedValueOnce(new Error("EACCES"));
+    const { api } = buildApi();
 
     await registerAndWaitStartup(api);
 
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("anchorclaw: startup step workspace-import blocked"),
+      expect.stringContaining("anchorclaw: legacy import scan failed (EACCES)"),
     );
-    expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step workspace-import succeeded");
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("anchorclaw: startup step legacy-import-scan failed (EACCES)"),
+    );
   });
 
-  it("uses cfg.workspaceDir as the startup import source of truth", async () => {
+  it("uses cfg.workspaceDir as the startup scan source of truth", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
@@ -1174,14 +1254,14 @@ describe("phase2 session delta listener", () => {
 
     await registerAndWaitStartup(api);
 
-    expect(runImport).toHaveBeenCalledWith(
+    expect(scanLegacyWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: path.resolve("/cfg/workspace"),
       }),
     );
   });
 
-  it("blocks startup import when cfg.workspaceDir is not set", async () => {
+  it("skips startup legacy scan when cfg.workspaceDir is not set", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
@@ -1192,10 +1272,9 @@ describe("phase2 session delta listener", () => {
 
     await registerAndWaitStartup(api);
 
-    expect(runImport).not.toHaveBeenCalled();
+    expect(scanLegacyWorkspaceMock).not.toHaveBeenCalled();
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("anchorclaw: startup step workspace-import blocked (workspace_dir_unavailable)"),
+      expect.stringContaining("anchorclaw: startup step legacy-import-scan skipped (workspace_dir_unavailable)"),
     );
-    expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step workspace-import succeeded");
   });
 });
