@@ -480,6 +480,21 @@ export function registerAnchorClawSessionCaptureHook(params: {
     return undefined;
   };
 
+  const onAny = (api as any).on;
+  if (typeof onAny === "function") {
+    try {
+      onAny("before_reset", handler, {
+        name: "anchorclaw-session-capture",
+      });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      api.logger.debug?.(
+        `anchorclaw: typed before_reset hook registration failed, trying legacy registerHook (${message})`,
+      );
+    }
+  }
+
   const registerHookAny = (api as any).registerHook;
   if (typeof registerHookAny !== "function") {
     return;

@@ -265,6 +265,7 @@ function buildApi() {
     },
     registerTool: vi.fn(),
     registerCli: vi.fn(),
+    on: vi.fn(),
     registerHook: vi.fn(),
     registerHttpRoute: vi.fn(),
     registerHostedMediaResolver: vi.fn(),
@@ -461,7 +462,7 @@ describe("tool registration", () => {
 
     (plugin as any).register(api);
 
-    const calls = (api.registerHook as any).mock.calls;
+    const calls = (api.on as any).mock.calls;
     const hasSessionCaptureHook = calls.some(
       (call: any[]) =>
         call[0] === "before_reset" &&
