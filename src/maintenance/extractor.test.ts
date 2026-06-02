@@ -1,51 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const execFileMock = vi.hoisted(() => vi.fn());
-
-vi.mock("node:child_process", () => ({
-  execFile: execFileMock,
-}));
-
 describe("extractMaintenanceCandidates", () => {
+  const completeMock = vi.fn();
+
   beforeEach(() => {
     vi.resetModules();
-    execFileMock.mockReset();
+    completeMock.mockReset();
   });
 
-  it("re-exports maintenance constants and parses openclaw --json output", async () => {
-    execFileMock.mockImplementation(
-      (
-        _file: string,
-        _args: string[],
-        _options: Record<string, unknown>,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => {
-        callback(
-          null,
-          JSON.stringify({
-            status: "ok",
-            result: {
-              payloads: [
-                {
-                  text: JSON.stringify({
-                    summary: "daily summary",
-                    candidates: [
-                      {
-                        content: "User prefers green accents in the UI.",
-                        type: "fact",
-                        canonicalKey: "ui:favorite-color",
-                        confidence: 91.8,
-                      },
-                    ],
-                  }),
-                },
-              ],
-            },
-          }),
-          "",
-        );
-      },
-    );
+  it("re-exports maintenance constants and parses runtime llm output", async () => {
+    completeMock.mockResolvedValue({
+      text: JSON.stringify({
+        summary: "daily summary",
+        candidates: [
+          {
+            content: "User prefers green accents in the UI.",
+            type: "fact",
+            canonicalKey: "ui:favorite-color",
+            confidence: 91.8,
+          },
+        ],
+      }),
+    });
 
     const { extractMaintenanceCandidates, MAINTENANCE_INTERNAL_MARKER, MAINTENANCE_SESSION_ID_PREFIX } =
       await import("./extractor.js");
@@ -54,7 +30,13 @@ describe("extractMaintenanceCandidates", () => {
     expect(MAINTENANCE_SESSION_ID_PREFIX).toBe("anchorclaw-maintenance-");
 
     const result = await extractMaintenanceCandidates({
-      agentId: "main",
+      api: {
+        runtime: {
+          llm: {
+            complete: completeMock,
+          },
+        },
+      } as any,
       sourcePath: "memory/2026-06-02.md#window=1",
       fileHash: "abc123",
       transcript: "remember that green is the preferred accent color",
@@ -73,42 +55,57 @@ describe("extractMaintenanceCandidates", () => {
       ],
     });
 
-    expect(execFileMock).toHaveBeenCalledTimes(1);
-    expect(execFileMock.mock.calls[0]?.[1]).toEqual(
-      expect.arrayContaining([
-        "agent",
-        "--agent",
-        "main",
-        "--session-id",
-        "anchorclaw-maintenance-main",
-        "--json",
-      ]),
+    expect(completeMock).toHaveBeenCalledTimes(1);
+    expect(completeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purpose: "anchorclaw.maintenance.extractor",
+        maxTokens: 1200,
+        temperature: 0,
+        messages: [
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining("AnchorClaw daily memory"),
+          }),
+        ],
+      }),
     );
-    expect(String(execFileMock.mock.calls[0]?.[1]?.[6] ?? "")).toContain("AnchorClaw daily memory");
   });
 
-  it("surfaces invocation failures", async () => {
-    execFileMock.mockImplementation(
-      (
-        _file: string,
-        _args: string[],
-        _options: Record<string, unknown>,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => {
-        callback(new Error("spawn failed"), "", "boom");
-      },
-    );
-
+  it("fails fast on older hosts without runtime.llm.complete", async () => {
     const { extractMaintenanceCandidates } = await import("./extractor.js");
 
     await expect(
       extractMaintenanceCandidates({
-        agentId: "main",
+        api: {
+          runtime: {},
+        } as any,
         sourcePath: "memory/2026-06-02.md#window=1",
         fileHash: "abc123",
         transcript: "remember something durable",
         maxCandidates: 5,
       }),
-    ).rejects.toThrow("extractor invocation failed (boom)");
+    ).rejects.toThrow("OpenClaw >= 2026.5.12");
+  });
+
+  it("surfaces runtime completion failures", async () => {
+    completeMock.mockRejectedValue(new Error("boom"));
+
+    const { extractMaintenanceCandidates } = await import("./extractor.js");
+
+    await expect(
+      extractMaintenanceCandidates({
+        api: {
+          runtime: {
+            llm: {
+              complete: completeMock,
+            },
+          },
+        } as any,
+        sourcePath: "memory/2026-06-02.md#window=1",
+        fileHash: "abc123",
+        transcript: "remember something durable",
+        maxCandidates: 5,
+      }),
+    ).rejects.toThrow("extractor completion failed (boom)");
   });
 });

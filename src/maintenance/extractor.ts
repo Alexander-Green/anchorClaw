@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import type { OpenClawPluginApi } from "../api.js";
 
 export type ExtractorCandidate = {
   content: string;
@@ -21,21 +21,6 @@ import {
   MAINTENANCE_INTERNAL_MARKER,
   MAINTENANCE_SESSION_ID_PREFIX,
 } from "./constants.js";
-
-const DEFAULT_EXTRACTOR_TIMEOUT_MS = 60_000;
-
-function execFileAsync(file: string, args: string[], timeoutMs: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs }, (error, stdout, stderr) => {
-      if (error) {
-        const message = stderr?.trim() || error.message;
-        reject(new Error(`extractor invocation failed (${message})`));
-        return;
-      }
-      resolve(stdout);
-    });
-  });
-}
 
 function extractJsonFragment(raw: string): string {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/u);
@@ -139,38 +124,48 @@ function buildPrompt(params: {
   ].join("\n");
 }
 
+function resolveRuntimeLlm(api: OpenClawPluginApi): {
+  complete: (params: Record<string, unknown>) => Promise<{ text: string }>;
+} {
+  const runtimeLlm = (api as any)?.runtime?.llm;
+  if (typeof runtimeLlm?.complete !== "function") {
+    throw new Error(
+      "extractor runtime requires api.runtime.llm.complete (OpenClaw >= 2026.5.12)",
+    );
+  }
+  return runtimeLlm;
+}
+
 export async function extractMaintenanceCandidates(params: {
-  agentId: string;
+  api: OpenClawPluginApi;
   sourcePath: string;
   fileHash: string;
   transcript: string;
   maxCandidates: number;
-  timeoutMs?: number;
 }): Promise<ExtractorResult> {
-  const output = await execFileAsync(
-    "openclaw",
-    [
-      "agent",
-      "--agent",
-      params.agentId,
-      "--session-id",
-      `${MAINTENANCE_SESSION_ID_PREFIX}${params.agentId}`,
-      "--message",
-      buildPrompt(params),
-      "--json",
-    ],
-    params.timeoutMs ?? DEFAULT_EXTRACTOR_TIMEOUT_MS,
-  );
-
-  const outer = JSON.parse(output) as unknown;
-  const outerRecord = asRecord(outer);
-  if (outerRecord?.status === "ok") {
-    const result = asRecord(outerRecord.result);
-    const payloads = Array.isArray(result?.payloads) ? result.payloads : [];
-    const firstPayload = asRecord(payloads[0]);
-    const text = typeof firstPayload?.text === "string" ? firstPayload.text : "";
-    return parseExtractorResult(text);
+  try {
+    const llm = resolveRuntimeLlm(params.api);
+    const result = await llm.complete({
+      messages: [
+        {
+          role: "user",
+          content: buildPrompt(params),
+        },
+      ],
+      purpose: "anchorclaw.maintenance.extractor",
+      maxTokens: 1200,
+      temperature: 0,
+    });
+    return parseExtractorResult(result.text);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("api.runtime.llm.complete")
+    ) {
+      throw error;
+    }
+    throw new Error(
+      `extractor completion failed (${error instanceof Error ? error.message : String(error)})`,
+    );
   }
-
-  return parseExtractorResult(output);
 }

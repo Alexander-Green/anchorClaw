@@ -409,7 +409,7 @@ export async function runMaintenanceCycle(params: {
         );
       } else {
         const extracted = await extractMaintenanceCandidates({
-          agentId: extractorCfg.agentId ?? "main",
+          api: params.api,
           sourcePath: preparedTranscript.sourcePath,
           fileHash: preparedTranscript.fileHash,
           transcript,
