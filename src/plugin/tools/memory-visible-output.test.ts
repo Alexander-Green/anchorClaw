@@ -68,4 +68,28 @@ describe("memory search visible output", () => {
     expect(visible).toContain("Scope: date-specific daily memory.");
     expect(details.results[0]?.snippet).toContain("Scope: date-specific daily memory.");
   });
+
+  it("labels session-capture daily hits explicitly", () => {
+    const visible = formatSearchLikeVisibleOutput({
+      hits: [
+        {
+          corpus: "daily",
+          path: "memory/2026-05-28-1819-a1b2c3d4-session-capture.md",
+          title: "memory/2026-05-28-1819-a1b2c3d4-session-capture.md",
+          snippet: "user: remember the reset marker",
+          sourceKind: "session_memory",
+          score: 0.9,
+        },
+      ],
+      retrievalMode: "fts_daily",
+      queryMode: "contextual",
+      exactTop1: false,
+      exactTop1Value: null,
+      recommendedAction: "inspect_top",
+      provider: "anchorclaw",
+      model: "postgres-fts",
+    });
+
+    expect(visible).toContain("Entry type: session capture from /new or /reset.");
+  });
 });

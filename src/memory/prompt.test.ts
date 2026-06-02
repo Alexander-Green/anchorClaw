@@ -59,6 +59,7 @@ describe("buildPromptMemorySection", () => {
           path: "memory/2026-05-20.md",
           content: "today we discussed sessions opt-in and daily injection".repeat(40),
           createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         },
       ],
       maxTotalChars: 900,

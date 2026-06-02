@@ -111,7 +111,7 @@ describe("session capture", () => {
     expect(result).toEqual({
       status: "captured",
       relPath: expect.stringMatching(/^\.anchorclaw\/session-capture\/2026-06-02\/[0-9a-f]{32}\.md$/u),
-      targetPath: "memory/2026-06-02.md",
+      targetPath: expect.stringMatching(/^memory\/2026-06-02-\d{4}-[0-9a-f]{8}-session-capture\.md$/u),
       dailyEntryId: "daily-1",
     });
     expect(resolveScopeMock).toHaveBeenCalledWith(
@@ -138,7 +138,7 @@ describe("session capture", () => {
         "user-1",
         "workspace-1",
         "2026-06-02",
-        "memory/2026-06-02.md",
+        expect.stringMatching(/^memory\/2026-06-02-\d{4}-[0-9a-f]{8}-session-capture\.md$/u),
         expect.stringMatching(/### Conversation Summary[\s\S]*user: Remember the C0\.2 canary\.[\s\S]*assistant: I will keep it in daily memory\./u),
         expect.any(String),
         "session_memory",
@@ -236,7 +236,7 @@ describe("session capture", () => {
     expect(result).toEqual({
       status: "already_captured",
       relPath: expect.stringMatching(/^\.anchorclaw\/session-capture\/2026-06-02\/[0-9a-f]{32}\.md$/u),
-      targetPath: "memory/2026-06-02.md",
+      targetPath: expect.stringMatching(/^memory\/2026-06-02-\d{4}-[0-9a-f]{8}-session-capture\.md$/u),
     });
     expect(clientQuery).not.toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO memory_daily_entries"),

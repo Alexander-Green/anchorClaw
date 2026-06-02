@@ -52,6 +52,19 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function formatTimeSlug(params: { nowMs: number; timezone?: string }): string {
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    ...(params.timezone ? { timeZone: params.timezone } : {}),
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = formatter.formatToParts(new Date(params.nowMs));
+  const hour = parts.find((part) => part.type === "hour")?.value ?? "00";
+  const minute = parts.find((part) => part.type === "minute")?.value ?? "00";
+  return `${hour}${minute}`;
+}
+
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -166,6 +179,17 @@ function buildSessionSourceId(params: {
     fallbackContentSha256: params.sessionId || params.sessionFile || params.sessionKey ? null : params.contentSha256,
   };
   return sha256Hex(JSON.stringify(stableInput)).slice(0, 32);
+}
+
+function buildSessionCaptureTargetPath(params: {
+  logicalDate: string;
+  nowMs: number;
+  timezone?: string;
+  sourceId: string;
+}): string {
+  const timeSlug = formatTimeSlug({ nowMs: params.nowMs, timezone: params.timezone });
+  const shortId = params.sourceId.slice(0, 8);
+  return `memory/${params.logicalDate}-${timeSlug}-${shortId}-session-capture.md`;
 }
 
 function formatSessionCaptureBlock(params: {
@@ -394,11 +418,13 @@ export async function captureBeforeResetSessionMemory(params: {
   const sessionId = nonEmptyString(params.hookContext?.sessionId);
   const sessionFile = nonEmptyString(params.event?.sessionFile);
   const reason = nonEmptyString(params.event?.reason) ?? "unknown";
+  const runtimeTimezone = resolveRuntimeTimezone(params.api);
+  const capturedNowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const logicalDate = resolveDailyLogicalDate({
-    nowMs: params.nowMs,
-    timezone: resolveRuntimeTimezone(params.api),
+    nowMs: capturedNowMs,
+    timezone: runtimeTimezone,
   });
-  const capturedAtIso = new Date(Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now()).toISOString();
+  const capturedAtIso = new Date(capturedNowMs).toISOString();
   const block = formatSessionCaptureBlock({
     capturedAtIso,
     reason,
@@ -417,7 +443,12 @@ export async function captureBeforeResetSessionMemory(params: {
     contentSha256,
   });
   const relPath = path.posix.join(SESSION_CAPTURE_ROOT, logicalDate, `${sourceId}.md`);
-  const targetPath = `memory/${logicalDate}.md`;
+  const targetPath = buildSessionCaptureTargetPath({
+    logicalDate,
+    nowMs: capturedNowMs,
+    timezone: runtimeTimezone,
+    sourceId,
+  });
   const ledgerSha256 = sha256Hex(`anchorclaw-session-capture:v1:${relPath}`);
   const scope = await resolveUserAndWorkspaceScope({
     api: params.api,

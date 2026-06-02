@@ -13,6 +13,7 @@ export type MemorySearchHit = {
   path: string;
   title?: string;
   kind?: string;
+  sourceKind?: string;
   canonicalKey?: string;
   score: number;
   snippet: string;

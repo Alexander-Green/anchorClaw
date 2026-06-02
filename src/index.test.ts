@@ -519,6 +519,58 @@ describe("phase2 session delta listener", () => {
     expect(buildPromptDailySection).not.toHaveBeenCalled();
   });
 
+  it("passes fresh session-capture daily entries into first-turn startup injection", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
+      identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
+    });
+    queryPromptDailyEntries.mockResolvedValueOnce([
+      {
+        id: "capture-1",
+        path: "memory/2026-06-02-1819-a1b2c3d4-session-capture.md",
+        logicalDate: "2026-06-02",
+        content: "user: remember the reset capture canary",
+        sourceKind: "session_memory",
+        createdAt: "2026-06-02T18:19:00.000Z",
+        updatedAt: "2026-06-02T18:19:00.000Z",
+      },
+      {
+        id: "daily-1",
+        path: "memory/2026-06-02.md",
+        logicalDate: "2026-06-02",
+        content: "x".repeat(8_000),
+        sourceKind: "memory_log",
+        createdAt: "2026-06-02T10:00:00.000Z",
+        updatedAt: "2026-06-02T10:00:00.000Z",
+      },
+    ] as any);
+    buildPromptDailySection.mockReturnValueOnce(["session capture context"]);
+    const { api } = buildApi();
+    await registerAndWaitStartup(api);
+
+    const call = (api.registerHook as any).mock.calls.find(
+      (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-daily-startup-injection",
+    );
+    const hook = call?.[1];
+    expect(hook).toBeTypeOf("function");
+
+    const result = await hook({ prompt: "fresh turn", messages: [] });
+
+    expect(result).toEqual({ prependContext: "session capture context" });
+    expect(buildPromptDailySection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entries: expect.arrayContaining([
+          expect.objectContaining({
+            path: "memory/2026-06-02-1819-a1b2c3d4-session-capture.md",
+            sourceKind: "session_memory",
+          }),
+        ]),
+      }),
+    );
+  });
+
   it("filters out non-current-agent transcript updates in current visibility", async () => {
     isSessionFileForAgent.mockResolvedValue(false);
     const { api, getTranscriptListener } = buildApi();

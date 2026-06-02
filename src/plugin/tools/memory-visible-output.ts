@@ -7,6 +7,7 @@ type Hit = {
   corpus?: string;
   title?: string;
   canonicalKey?: string;
+  sourceKind?: string;
 };
 
 export function formatSearchLikeVisibleOutput(params: {
@@ -35,12 +36,16 @@ export function formatSearchLikeVisibleOutput(params: {
     const snippetRaw = typeof hit.snippet === "string" ? hit.snippet : "";
     const corpus = typeof hit.corpus === "string" ? hit.corpus : "memory";
     const canonicalKey = typeof hit.canonicalKey === "string" ? hit.canonicalKey : "";
+    const sourceKind = typeof hit.sourceKind === "string" ? hit.sourceKind : "";
     const startLine = 1;
     const endLine = 1;
     const citation = path ? `${path}#L${startLine}` : "";
     const notes: string[] = [];
     if (corpus === "daily") {
       notes.push("Scope: date-specific daily memory.");
+      if (sourceKind === "session_memory") {
+        notes.push("Entry type: session capture from /new or /reset.");
+      }
     } else if (canonicalKey) {
       notes.push(`Canonical key: ${canonicalKey}`);
     }
@@ -109,12 +114,16 @@ export function buildSearchLikeDetailsEnvelope(params: {
     const snippetRaw = typeof hit.snippet === "string" ? hit.snippet : "";
     const corpus = typeof hit.corpus === "string" ? hit.corpus : "memory";
     const canonicalKey = typeof hit.canonicalKey === "string" ? hit.canonicalKey : "";
+    const sourceKind = typeof hit.sourceKind === "string" ? hit.sourceKind : "";
     const startLine = 1;
     const endLine = 1;
     const citation = path ? `${path}#L${startLine}` : "";
     const notes: string[] = [];
     if (corpus === "daily") {
       notes.push("Scope: date-specific daily memory.");
+      if (sourceKind === "session_memory") {
+        notes.push("Entry type: session capture from /new or /reset.");
+      }
     } else if (canonicalKey) {
       notes.push(`Canonical key: ${canonicalKey}`);
     }

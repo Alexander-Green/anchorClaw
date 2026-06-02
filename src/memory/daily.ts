@@ -47,6 +47,7 @@ type DailySearchRow = {
   id: string;
   path: string;
   content: string;
+  source_kind: string;
   updated_at: string;
   score: number;
 };
@@ -179,12 +180,23 @@ export async function queryPromptDailyEntries(params: {
   userId: string;
   workspaceId: string;
   limit: number;
-}): Promise<Array<{ id: string; path: string; logicalDate: string; content: string; createdAt: string; updatedAt: string }>> {
+}): Promise<
+  Array<{
+    id: string;
+    path: string;
+    logicalDate: string;
+    content: string;
+    sourceKind: string;
+    createdAt: string;
+    updatedAt: string;
+  }>
+> {
   const result = await params.pool.query<{
     id: string;
     path: string;
     logical_date: string;
     content: string;
+    source_kind: string;
     created_at: string;
     updated_at: string;
   }>(
@@ -194,12 +206,13 @@ export async function queryPromptDailyEntries(params: {
       path,
       logical_date::text AS logical_date,
       content,
+      source_kind,
       created_at,
       updated_at
     FROM memory_daily_entries
     WHERE user_id = $1
       AND workspace_id = $2
-    ORDER BY logical_date DESC, updated_at DESC, id ASC
+    ORDER BY logical_date DESC, updated_at DESC, path ASC, id ASC
     LIMIT $3
   `,
     [params.userId, params.workspaceId, params.limit],
@@ -210,6 +223,7 @@ export async function queryPromptDailyEntries(params: {
     path: row.path,
     logicalDate: row.logical_date,
     content: row.content,
+    sourceKind: row.source_kind,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
@@ -229,6 +243,7 @@ export async function searchDailyEntriesDb(params: {
       id,
       path,
       content,
+      source_kind,
       updated_at,
       (
         ts_rank_cd(to_tsvector('simple', content), plainto_tsquery('simple', $3))
@@ -254,7 +269,8 @@ export async function searchDailyEntriesDb(params: {
       path: row.path,
       id: row.id,
       title: row.path,
-      kind: "daily-note",
+      kind: row.source_kind === "session_memory" ? "session-capture" : "daily-note",
+      sourceKind: row.source_kind,
       score: Number.isFinite(row.score) ? row.score : 0,
       snippet,
       updatedAt: row.updated_at,

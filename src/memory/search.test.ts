@@ -209,6 +209,7 @@ describe("memorySearchDb ranking contract", () => {
                 id: "daily-1",
                 path: "memory/2026-05-20.md",
                 content: "today we discussed daily memory behavior",
+                source_kind: "legacy_import",
                 updated_at: "2026-05-20T09:00:00.000Z",
                 score: 0.8,
               },
@@ -233,6 +234,7 @@ describe("memorySearchDb ranking contract", () => {
       corpus: "daily",
       path: "memory/2026-05-20.md",
       kind: "daily-note",
+      sourceKind: "legacy_import",
       title: "memory/2026-05-20.md",
     });
   });
@@ -261,6 +263,7 @@ describe("memorySearchDb ranking contract", () => {
                 id: "daily-1",
                 path: "memory/2026-05-20.md",
                 content: "team decision content",
+                source_kind: "memory_log",
                 updated_at: "2026-05-20T11:00:00.000Z",
                 score: 1,
               },
