@@ -17,6 +17,7 @@ This package currently targets a **Track A core runtime** release:
 - daily memory is DB-owned and injected on first-turn/new-session
 - sessions search exists as an explicit opt-in
 - maintenance/extractor remains experimental but now runs from DB daily windows when enabled
+- backend extractor transport uses host-owned `api.runtime.llm.complete`
 
 ## Why We Built This
 
@@ -65,6 +66,7 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
   - Optional background maintenance scheduler (`maintenance.enabled`)
   - DB-owned cycle over `memory_daily_entries` windows with `dryRun` support
   - Extractor + dedupe checks before write into `memory_items`
+  - Extractor uses host-owned `api.runtime.llm.complete` instead of plugin-side shell execution
   - Records processed daily windows in `memory_daily_extraction_windows` only after successful extractor cycle
   - Non-dry-run maintenance waits for durable startup state to become `ready`
   - `dryRun` reports heuristic candidate counts only; it does not run the extractor
@@ -74,7 +76,8 @@ AnchorClaw makes **Postgres the source of truth** for durable memory while prese
 
 ## 🛠 Prerequisites
 
-- OpenClaw host that supports memory plugin slots (see `package.json` → `openclaw.install.minHostVersion`)
+- OpenClaw host `>= 2026.5.12` that supports memory plugin slots
+  (see `package.json` → `openclaw.install.minHostVersion`)
 - Node.js (plugin runtime)
 - PostgreSQL (no embeddings required for MVP)
 
@@ -127,7 +130,7 @@ If you run setup with `--skip-config`, add this manually to `~/.openclaw/opencla
 If legacy memory files already exist in the workspace, setup leaves them untouched. After setup, review and migrate them with:
 
 ```bash
-openclaw anchorclaw import --dry-run
+openclaw anchorclaw import
 openclaw anchorclaw import --apply
 ```
 
@@ -315,7 +318,7 @@ Track B moves legacy migration out of startup and setup. AnchorClaw does not aut
 Dry-run the current workspace state:
 
 ```bash
-openclaw anchorclaw import --dry-run
+openclaw anchorclaw import
 ```
 
 Apply the migration:

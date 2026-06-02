@@ -62,7 +62,7 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
       }
       if (scan.unreadableCount > 0) {
         console.warn(
-          "Warning: unreadable legacy daily files were skipped; fix file permissions or contents, then rerun `openclaw anchorclaw import --dry-run`.",
+          "Warning: unreadable legacy daily files were skipped; fix file permissions or contents, then rerun `openclaw anchorclaw import`.",
         );
       }
       return;

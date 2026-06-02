@@ -247,7 +247,7 @@ export default definePluginEntry({
             });
             if (legacyScan.hasActiveLegacy) {
               api.logger.warn(
-                `anchorclaw: active legacy memory files detected (${legacyScan.activeLegacyCount}); run openclaw anchorclaw import --dry-run`,
+                `anchorclaw: active legacy memory files detected (${legacyScan.activeLegacyCount}); run openclaw anchorclaw import`,
               );
             } else {
               api.logger.info("anchorclaw: startup step legacy-import-scan found no active legacy files");

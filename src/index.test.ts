@@ -1223,7 +1223,7 @@ describe("phase2 session delta listener", () => {
     await registerAndWaitStartup(api);
 
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("anchorclaw: active legacy memory files detected (2); run openclaw anchorclaw import --dry-run"),
+      expect.stringContaining("anchorclaw: active legacy memory files detected (2); run openclaw anchorclaw import"),
     );
     expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step legacy-import-scan found no active legacy files");
   });

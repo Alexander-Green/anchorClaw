@@ -181,7 +181,7 @@ describe("runAnchorClawImport", () => {
 
     expect(consoleLogSpy).toHaveBeenCalledWith("- unreadable daily files: 1");
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      "Warning: unreadable legacy daily files were skipped; fix file permissions or contents, then rerun `openclaw anchorclaw import --dry-run`.",
+      "Warning: unreadable legacy daily files were skipped; fix file permissions or contents, then rerun `openclaw anchorclaw import`.",
     );
   });
 });
