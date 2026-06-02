@@ -434,7 +434,12 @@ describe("tool registration", () => {
 
     const result = await hook({ prompt: "какой мой любимый цвет?", messages: [] });
     expect(result?.prependSystemContext).toContain("AnchorClaw memory contract:");
-    expect(result?.prependSystemContext).toContain("Do not answer remembered facts/preferences/people/recurring schedules/todos");
+    expect(result?.prependSystemContext).toContain(
+      "If a durable fact/preference/person/recurring schedule is already clear in injected AnchorClaw memory",
+    );
+    expect(result?.prependSystemContext).toContain(
+      "Use memory_search or memory_get when the answer is not clearly visible in injected memory",
+    );
     expect(result?.prependSystemContext).toContain("If memory_search returns a direct durable fact hit, answer with it plainly");
     expect(result?.prependSystemContext).toContain("check AnchorClaw daily memory first");
     expect(result?.prependSystemContext).toContain("Daily memory answers date-specific questions; only durable memory implies recurring facts.");

@@ -107,6 +107,11 @@ By default, setup updates `~/.openclaw/openclaw.json` with the required runtime 
 
 `workspaceDir` is AnchorClaw's source of truth for workspace scoping, legacy import scans, prompt cache, and DB-backed `memory/*` compatibility reads. Setup accepts `--workspace-dir`; otherwise it uses `OPENCLAW_WORKSPACE_DIR` when present, then the OpenClaw default workspace path. If config update is enabled and no workspace path can be resolved, setup fails fast instead of writing a partial config.
 
+Current operational rule: agent workspaces should match AnchorClaw `workspaceDir`.
+If a live agent runs in a different workspace, runtime paths such as `/new` and
+`/reset` can write into a different DB workspace scope than import/search/store
+paths.
+
 Setup does **not** need to mutate `<workspaceDir>/AGENTS.md`. Default OpenClaw instructions that mention `MEMORY.md` or `memory/YYYY-MM-DD.md` remain compatible: when AnchorClaw is active, the runtime prompt and tool schemas map those concepts to DB-backed `memory_store`, `memory_log`, `memory_search`, and `memory_get`.
 
 Setup disables OpenClaw's bundled file-based `session-memory` hook because AnchorClaw captures `/new` and `/reset` session summaries into DB-backed daily memory. Leaving both enabled can create active Markdown daily files plus DB daily entries for the same reset context.
