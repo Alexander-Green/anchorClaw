@@ -95,6 +95,13 @@ describe("session capture", () => {
         reason: "new",
         sessionFile: "/tmp/.openclaw/agents/main/sessions/a.jsonl",
         messages: [
+          { role: "system", content: "ignore me" },
+          { role: "user", content: "/new" },
+          {
+            role: "user",
+            content: "inter-session carryover",
+            provenance: { kind: "inter_session", sourceSessionKey: "agent:main:older" },
+          },
           { role: "user", content: "Remember the C0.2 canary." },
           { role: "assistant", content: [{ type: "text", text: "I will keep it in daily memory." }] },
         ],
@@ -132,11 +139,68 @@ describe("session capture", () => {
         "workspace-1",
         "2026-06-02",
         "memory/2026-06-02.md",
-        expect.stringContaining("Remember the C0.2 canary."),
+        expect.stringMatching(/### Conversation Summary[\s\S]*user: Remember the C0\.2 canary\.[\s\S]*assistant: I will keep it in daily memory\./u),
         expect.any(String),
         "session_memory",
       ]),
     );
+  });
+
+  it("keeps only the last 15 user/assistant messages", async () => {
+    const capturedDailyArgs: unknown[][] = [];
+    const clientQuery = vi.fn(async (sql: string, args?: unknown[]) => {
+      const text = String(sql);
+      if (text === "BEGIN" || text === "COMMIT") return { rows: [] };
+      if (text.includes("INSERT INTO memory_import_files")) {
+        return { rows: [{ id: "ledger-1" }] };
+      }
+      if (text.includes("SELECT id, content, updated_at") && text.includes("FROM memory_daily_entries")) {
+        return { rows: [] };
+      }
+      if (text.includes("INSERT INTO memory_daily_entries")) {
+        if (Array.isArray(args)) {
+          capturedDailyArgs.push(args);
+        }
+        return { rows: [{ id: "daily-1", updated_at: "2026-06-02T10:12:00.000Z" }] };
+      }
+      if (text.includes("INSERT INTO memory_audit_log")) {
+        return { rows: [] };
+      }
+      throw new Error(`unexpected query: ${text}`);
+    });
+    const pool = {
+      connect: vi.fn(async () => ({
+        query: clientQuery,
+        release: vi.fn(),
+      })),
+    };
+
+    const messages = Array.from({ length: 17 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message-${index + 1}`,
+    }));
+
+    const result = await captureBeforeResetSessionMemory({
+      api: buildApi(),
+      ctx: buildCtx(pool),
+      nowMs: Date.parse("2026-06-02T10:11:12.345Z"),
+      hookContext: {
+        workspaceDir: "/tmp/work",
+        sessionId: "session-15",
+      },
+      event: {
+        reason: "reset",
+        messages,
+      },
+    });
+
+    expect(result.status).toBe("captured");
+    const content = capturedDailyArgs[0]?.[4];
+    expect(typeof content).toBe("string");
+    expect(String(content)).not.toMatch(/\bmessage-1\b/u);
+    expect(String(content)).not.toMatch(/\bmessage-2\b/u);
+    expect(String(content)).toMatch(/\bmessage-3\b/u);
+    expect(String(content)).toMatch(/\bmessage-17\b/u);
   });
 
   it("does not append duplicate daily blocks when the source was already captured", async () => {

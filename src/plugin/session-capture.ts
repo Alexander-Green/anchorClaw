@@ -10,7 +10,7 @@ import type { PluginRuntimeContext } from "./runtime-context.js";
 const SESSION_CAPTURE_SOURCE_TYPE = "session-capture";
 const SESSION_CAPTURE_SOURCE_KIND = "session_memory";
 const SESSION_CAPTURE_ROOT = path.posix.join(".anchorclaw", "session-capture");
-const SESSION_CAPTURE_MAX_MESSAGES = 20;
+const SESSION_CAPTURE_MAX_MESSAGES = 15;
 const SESSION_CAPTURE_MAX_MESSAGE_CHARS = 1_200;
 const SESSION_CAPTURE_MAX_BLOCK_CHARS = 16_000;
 
@@ -64,14 +64,14 @@ function truncateText(value: string, maxChars: number): string {
 }
 
 function stringifyMessagePart(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
   if (!value || typeof value !== "object") {
     return "";
   }
   const part = value as Record<string, unknown>;
-  const text = nonEmptyString(part.text) ?? nonEmptyString(part.content) ?? nonEmptyString(part.value);
+  const text =
+    nonEmptyString(part.text) ??
+    nonEmptyString(part.content) ??
+    nonEmptyString(part.value);
   if (text) {
     return text;
   }
@@ -83,12 +83,29 @@ function extractMessageContent(value: unknown): string {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map(stringifyMessagePart).filter(Boolean).join("\n");
+    for (const part of value) {
+      const text = stringifyMessagePart(part);
+      if (text) {
+        return text;
+      }
+    }
+    return "";
   }
   if (value && typeof value === "object") {
     return stringifyMessagePart(value);
   }
   return "";
+}
+
+function hasInterSessionUserProvenance(message: Record<string, unknown>): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+  const provenance = message.provenance;
+  if (!provenance || typeof provenance !== "object") {
+    return false;
+  }
+  return (provenance as Record<string, unknown>).kind === "inter_session";
 }
 
 function normalizeSessionMessages(messages: unknown): NormalizedSessionMessage[] {
@@ -102,9 +119,15 @@ function normalizeSessionMessages(messages: unknown): NormalizedSessionMessage[]
       continue;
     }
     const message = raw as Record<string, unknown>;
-    const role = nonEmptyString(message.role) ?? nonEmptyString(message.type) ?? "message";
+    const role = nonEmptyString(message.role) ?? nonEmptyString(message.type);
+    if (role !== "user" && role !== "assistant") {
+      continue;
+    }
+    if (hasInterSessionUserProvenance(message)) {
+      continue;
+    }
     const content = truncateText(extractMessageContent(message.content).trim(), SESSION_CAPTURE_MAX_MESSAGE_CHARS);
-    if (!content) {
+    if (!content || content.startsWith("/")) {
       continue;
     }
     normalized.push({ role, content });
@@ -163,11 +186,11 @@ function formatSessionCaptureBlock(params: {
     ...(params.sessionId ? [`- Session ID: ${params.sessionId}`] : []),
     ...(params.sessionFile ? [`- Session File: ${params.sessionFile}`] : []),
     "",
-    "### Recent Messages",
+    "### Conversation Summary",
   ];
 
   for (const message of params.messages) {
-    lines.push("", `#### ${message.role}`, message.content);
+    lines.push(`${message.role}: ${message.content}`);
   }
 
   return truncateText(lines.join("\n").replace(/\s+$/u, ""), SESSION_CAPTURE_MAX_BLOCK_CHARS);
