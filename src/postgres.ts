@@ -59,6 +59,7 @@ export function createPostgresPool(params: { cfg: AnchorClawConfig }): pg.Pool {
     max: poolMax,
     connectionTimeoutMillis,
     idleTimeoutMillis,
+    allowExitOnIdle: true,
     ...(schema ? { options: `-c search_path=${schema},public` } : {}),
   });
 }
