@@ -262,7 +262,6 @@ Useful flags:
 - `--skip-config`: keep `~/.openclaw/openclaw.json` unchanged
 - `--schema-none`: use PostgreSQL default `search_path` (no dedicated schema)
 - `--db-password <pass>`: set app user password explicitly
-- `--enable-prompt-injection`: automatically set `plugins.entries.anchorclaw.hooks.allowPromptInjection=true`
 
 Defaults (when omitted):
 
@@ -278,6 +277,7 @@ Config update behavior:
 - writes `plugins.slots.memory = "anchorclaw"` even if install already selected the memory slot
 - writes `plugins.entries.anchorclaw.enabled = true`
 - writes the required `postgres` connection block
+- writes `plugins.entries.anchorclaw.hooks.allowPromptInjection = true` for DB-backed daily startup injection
 - disables bundled `hooks.internal.entries["session-memory"]` so `/new` and `/reset` daily capture stays DB-backed
 - preserves unrelated top-level `anchorclaw.config` keys such as `identity`, `sessions`, `maintenance`, and `limits`
 - rewrites `anchorclaw.config.postgres`; re-add `postgres.sslMode`, `postgres.sslCa`, or `postgres.pool` after setup if you use them

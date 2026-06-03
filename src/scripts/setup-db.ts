@@ -16,7 +16,6 @@ export type AnchorClawSetupOptions = {
   workspaceDir?: string;
   schemaNone?: boolean;
   skipConfig?: boolean;
-  enablePromptInjection?: boolean;
   nonInteractive?: boolean;
 };
 
@@ -29,7 +28,6 @@ type ResolvedSetupOptions = {
   schema: string | undefined;
   workspaceDir: string | undefined;
   skipConfig: boolean;
-  enablePromptInjection: boolean;
   nonInteractive: boolean;
 };
 
@@ -169,20 +167,6 @@ function readSessionMemoryHookConfigState(cfg: Record<string, any>): SessionMemo
   return "unset";
 }
 
-function readPromptInjectionStateFromConfigFile(): PromptInjectionConfigState {
-  const cfgPath = resolveOpenClawConfigPath();
-  if (!existsSync(cfgPath)) {
-    return "unset";
-  }
-  try {
-    const raw = readFileSync(cfgPath, "utf-8");
-    const cfg = JSON.parse(raw) as Record<string, any>;
-    return readPromptInjectionConfigState(cfg);
-  } catch {
-    return "unset";
-  }
-}
-
 function ensureWorkspaceDirForConfig(params: {
   workspaceDir: string | undefined;
   skipConfig: boolean;
@@ -207,7 +191,6 @@ async function promptIfNeeded(params: {
   const nonInteractive = Boolean(params.options.nonInteractive);
   const skipConfig = Boolean(params.options.skipConfig);
   let rotateDbPassword = Boolean(params.options.rotateDbPassword);
-  let enablePromptInjection = Boolean(params.options.enablePromptInjection);
 
   let adminUrl = params.options.adminUrl?.trim() || defaults.adminUrl;
   let dbName = params.options.dbName?.trim() || defaults.dbName;
@@ -270,18 +253,6 @@ async function promptIfNeeded(params: {
         : shouldUpdateByDefault;
       params.options.skipConfig = !update;
 
-      const existingPromptInjectionState = update ? readPromptInjectionStateFromConfigFile() : "unset";
-      if (update && !enablePromptInjection && existingPromptInjectionState === "disabled") {
-        const promptInjectionAnswer = (
-          await rl.question(
-            "Enable hooks.allowPromptInjection in openclaw.json for DB-backed daily startup injection if it is currently false? [Y/n]: ",
-          )
-        )
-          .trim()
-          .toLowerCase();
-        enablePromptInjection = promptInjectionAnswer ? !["n", "no"].includes(promptInjectionAnswer) : true;
-      }
-
       if (dbPassword) {
         const rotateAnswer = (
           await rl.question(
@@ -316,7 +287,6 @@ async function promptIfNeeded(params: {
     schema,
     workspaceDir,
     skipConfig: Boolean(params.options.skipConfig),
-    enablePromptInjection,
     nonInteractive,
   };
 }
@@ -462,7 +432,6 @@ function updateOpenClawConfig(params: {
   adminUrl: string;
   schema: string | undefined;
   workspaceDir: string | undefined;
-  enablePromptInjection: boolean;
 }): {
   path: string;
   updated: boolean;
@@ -518,10 +487,8 @@ function updateOpenClawConfig(params: {
   if (params.workspaceDir) {
     cfg.plugins.entries.anchorclaw.config.workspaceDir = params.workspaceDir;
   }
-  if (params.enablePromptInjection) {
-    cfg.plugins.entries.anchorclaw.hooks ??= {};
-    cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection = true;
-  }
+  cfg.plugins.entries.anchorclaw.hooks ??= {};
+  cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection = true;
 
   const hooks = asRecord(cfg.hooks);
   cfg.hooks = hooks;
@@ -579,7 +546,6 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
       adminUrl: options.adminUrl,
       schema: options.schema,
       workspaceDir: options.workspaceDir,
-      enablePromptInjection: options.enablePromptInjection,
     });
   }
 
@@ -616,10 +582,6 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     }
     if (configUpdate.promptInjectionAfter === "enabled" && configUpdate.promptInjectionBefore !== "enabled") {
       console.log("- hooks.allowPromptInjection: enabled for DB-backed daily startup injection");
-    } else if (configUpdate.promptInjectionBefore === "disabled" && configUpdate.promptInjectionAfter === "disabled") {
-      console.warn("Warning: hooks.allowPromptInjection is false in openclaw.json.");
-      console.warn("Warning: AnchorClaw daily startup injection will stay degraded until prompt injection is enabled.");
-      console.warn("Warning: Re-run `openclaw anchorclaw setup --enable-prompt-injection` to enable it automatically.");
     }
   }
   if (options.workspaceDir) {

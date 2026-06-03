@@ -412,7 +412,7 @@ describe("runAnchorClawSetup", () => {
     }
   });
 
-  it("enables hooks.allowPromptInjection when explicitly requested", async () => {
+  it("enables hooks.allowPromptInjection automatically during config update", async () => {
     const previousHome = process.env.HOME;
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -450,87 +450,12 @@ describe("runAnchorClawSetup", () => {
         dbPassword: "secret",
         schema: "memory",
         workspaceDir,
-        enablePromptInjection: true,
       });
 
       const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
       expect(cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection).toBe(true);
       expect(consoleLogSpy).toHaveBeenCalledWith(
         "- hooks.allowPromptInjection: enabled for DB-backed daily startup injection",
-      );
-    } finally {
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
-      if (previousOpenClawHome === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = previousOpenClawHome;
-      }
-      if (previousConfigPath === undefined) {
-        delete process.env.OPENCLAW_CONFIG_PATH;
-      } else {
-        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-      }
-      if (previousConfigDir === undefined) {
-        delete process.env.OPENCLAW_CONFIG_DIR;
-      } else {
-        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
-      }
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-
-  it("warns in non-interactive mode when hooks.allowPromptInjection stays disabled", async () => {
-    const previousHome = process.env.HOME;
-    const previousOpenClawHome = process.env.OPENCLAW_HOME;
-    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
-    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
-    const configDir = join(home, ".openclaw");
-    const configPath = join(configDir, "openclaw.json");
-    const workspaceDir = resolve(home, "workspace");
-    try {
-      process.env.HOME = home;
-      delete process.env.OPENCLAW_HOME;
-      delete process.env.OPENCLAW_CONFIG_PATH;
-      delete process.env.OPENCLAW_CONFIG_DIR;
-      mkdirSync(configDir, { recursive: true });
-      writeFileSync(
-        configPath,
-        JSON.stringify({
-          plugins: {
-            entries: {
-              anchorclaw: {
-                hooks: {
-                  allowPromptInjection: false,
-                },
-              },
-            },
-          },
-        }, null, 2) + "\n",
-      );
-
-      await runAnchorClawSetup({
-        nonInteractive: true,
-        adminUrl: "postgres://localhost/postgres",
-        dbName: "anchorclaw",
-        dbUser: "anchorclaw",
-        dbPassword: "secret",
-        schema: "memory",
-        workspaceDir,
-      });
-
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        "Warning: hooks.allowPromptInjection is false in openclaw.json.",
-      );
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        "Warning: AnchorClaw daily startup injection will stay degraded until prompt injection is enabled.",
-      );
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        "Warning: Re-run `openclaw anchorclaw setup --enable-prompt-injection` to enable it automatically.",
       );
     } finally {
       if (previousHome === undefined) {
@@ -617,7 +542,7 @@ describe("runAnchorClawSetup", () => {
     }
   });
 
-  it("asks to enable prompt injection only when config explicitly disables it", async () => {
+  it("does not ask an extra prompt-injection question in interactive mode", async () => {
     const previousHome = process.env.HOME;
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -655,7 +580,6 @@ describe("runAnchorClawSetup", () => {
         "", // password
         "", // workspace dir
         "", // update config -> default yes
-        "", // enable prompt injection -> default yes
       ];
 
       await runAnchorClawSetup({
