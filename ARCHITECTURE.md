@@ -1,118 +1,305 @@
-# AnchorClaw — Architecture (vs OpenClaw memory-core / PostClaw)
+# AnchorClaw Architecture
 
-## TL;DR
+AnchorClaw is a SQL-first memory layer for OpenClaw. It makes PostgreSQL the
+source of truth for durable and daily memory while preserving OpenClaw's memory
+tooling, CLI/status/doctor flows, and legacy `MEMORY.md` expectations.
 
-AnchorClaw makes **Postgres the source of truth** for durable memory while preserving **compatibility with OpenClaw memory interfaces** (tools + `MemorySearchManager`) so that `status/doctor/CLI` keep working transparently.
+## Design Principles
 
-The MVP is intentionally **SQL-first and deterministic** (no embeddings). Semantics/persona/knowledge-graph features are separate, optional layers that can be added later without breaking core paths.
+- **Database first**: durable memory, daily memory, import state, session index
+  state, and maintenance progress live in Postgres.
+- **Compatibility second**: OpenClaw-facing tools and file-like paths remain
+  available, but they resolve through AnchorClaw's DB-backed layer.
+- **Deterministic before semantic**: canonical upserts, full-text search, stable
+  ordering, and auditability ship before embeddings.
+- **Semantics as enrichment**: embeddings, persona, episodes, and knowledge
+  graph features should enrich the SQL source of truth rather than replace it.
+- **Operator visibility**: setup, import, status, and maintenance are explicit
+  operator surfaces, not hidden prompt behavior.
 
-## Why Not Just PostClaw
+## Runtime Contract
 
-PostClaw is a DB+embeddings-first architecture with more AI-native features (semantics, persona, knowledge graph).
+Active tools:
 
-AnchorClaw solves a different problem:
+- `memory_store`: writes durable memory only.
+- `memory_log`: writes daily/current context only.
+- `memory_search`: searches durable memory plus DB-owned daily memory by
+  default.
+- `memory_get`: reads DB-backed synthetic paths, virtual `MEMORY.md`, and
+  DB-backed daily paths.
+- `memory_forget`: soft-deletes durable items.
+- `memory_status`: reports runtime and operator diagnostics.
 
-- preserve OpenClaw UX and compatibility (contracts, corpuses, CLI/doctor/status)
-- make durable memory **structured and updateable** (canonical upsert, stable ordering, audit trail)
-- provide baseline reliability and predictability **without requiring embeddings**
+Corpus behavior:
 
-## Data Sources (MVP)
+- `memory_search()` and `memory_search(corpus="memory")` search durable memory
+  plus DB-owned daily memory.
+- `memory_search(corpus="daily")` searches only daily memory.
+- `memory_search(corpus="sessions")` works only when
+  `sessions.search.enabled=true`.
+- `memory_search(corpus="all")` adds sessions only when sessions search is
+  explicitly enabled.
+- `corpus="wiki"` is a stub for now; use the `memory-wiki` integration where
+  available.
 
-- `corpus="memory"`: Postgres (`memory_items`) durable memory (MVP: `fact` + `note`)
-- `corpus="sessions"`: Postgres-backed lexical sessions index (`session_index_files` + `session_index_chunks`), DB-first reads/search with file fallback only on `index_miss`
-- `corpus="all"`: deterministic merge (`memory + sessions`)
-- `corpus="wiki"`: stub for now; wiki layer is future work
+Read behavior:
 
-Current delivery state:
+- `memory_get("MEMORY.md")` returns a virtual snapshot generated from
+  Postgres.
+- `memory_get("memory/YYYY-MM-DD.md")` resolves DB-first.
+- `memory_get("sessions/<agentId>/<file>")` is DB-first when sessions search is
+  enabled, with file fallback only on `index_miss`.
 
-- Sessions Phase 1 and Phase 2 are implemented, green in repo tests/typecheck, and runtime-verified on VPS (`server-166`).
-- Live/delta freshness loop is active: `onSessionTranscriptUpdate` listener + debounce + targeted sync.
-- Delta sync thresholds are config-driven via `sessions.sync.deltaBytes` / `sessions.sync.deltaMessages` (defaults: `100000` / `50`, aligned with OpenClaw defaults).
-- `sessions.visibility` behavior is runtime-verified:
-  - `current`: cross-agent delta updates are ignored
-  - `visible`: cross-agent delta updates are accepted and indexed
-  - `off`: sessions delta listener is disabled
-- Runtime lifecycle compatibility fallback is enabled:
-  - preferred: `api.lifecycle.registerRuntimeLifecycle`
-  - fallback: `api.registerRuntimeLifecycle` (legacy hosts)
-- State/session path resolution follows OpenClaw-compatible order:
-  - `OPENCLAW_STATE_DIR`
-  - `OPENCLAW_HOME/.openclaw` (or `HOME/.openclaw` when `OPENCLAW_HOME` is unset)
-  - legacy `HOME/.clawdbot` when present
-
-## `memory_status` Semantics
-
-`memory_status` is operator-focused diagnostics with two modes:
-
-- default (`check` omitted / `false`): cached runtime degraded-state (`sdkHealth`)
-- active (`check: true`): lightweight runtime checks for:
-  - DB connectivity (`SELECT 1`)
-  - required schema objects (`memory_items`, `session_index_files`, `session_index_chunks`, `schema_migrations`)
-  - latest applied migration id
-  - current-agent sessions directory status (`exists`) and explicit read-access check (`readable`)
-  - in-memory pending sessions delta counters
-
-This keeps default calls cheap, while allowing explicit active checks when health validation is needed.
-
-## Virtual `MEMORY.md`
-
-OpenClaw core historically expects `MEMORY.md` to be readable.
-
-In AnchorClaw:
-
-- `memory_get(path="MEMORY.md")` and `MemorySearchManager.readFile({relPath:"MEMORY.md"})` return a **Postgres snapshot** (virtual view)
-- after migration, the physical `MEMORY.md` becomes an HTML-comment-only stub by default so that:
-  - OpenClaw bootstrap does not duplicate memory in prompts
-  - users can see where backups are and that Postgres is the source of truth
-
-## Data Model (Simplified)
+## Data Model
 
 Durable layer:
 
-- `memory_items`: active durable knowledge
-  - canonical upsert via `(type, namespace, canonical_key)` (MVP namespace=default)
-  - `status='active'|'deleted'` (soft delete)
-- `memory_audit_log`: change history (before/after); future: retention/redaction policy
+- `memory_items`: active durable knowledge.
+- `memory_audit_log`: durable memory change history.
 
-History/episodes (foundation for PostClaw parity):
+Daily layer:
 
-- `memory_events`: append-only events (MVP: import `memory/*.md` as snapshot events)
+- `memory_daily_entries`: DB-owned daily/current context.
+- `memory_daily_extraction_windows`: processed maintenance windows for daily
+  extraction.
 
-## Identity and Scope Resolution (MVP)
+Sessions layer:
 
-All reads/writes run in scope `(user_id, workspace_id)`.
+- `session_index_files`: indexed session transcript files.
+- `session_index_chunks`: searchable transcript chunks.
 
-- `workspace_id`:
-  - derived from `workspaceDir` (`name = dir:<sha256(resolved workspaceDir)>`)
-  - changing workspace directory creates a new memory scope
-- `user_id`:
-  - priority: `identity.externalId` from plugin config (stable key, `channel=anchorclaw-config`)
-  - fallback: `sha256(normalized OS username)` (`channel=openclaw-cli`)
+Import and migration:
+
+- `memory_import_runs`: import run metadata.
+- `memory_import_files`: per-file import ledger and dedupe state.
+
+Schema management:
+
+- `schema_migrations`: applied migration history.
+
+Legacy cleanup:
+
+- `memory_episodic` was removed from the active runtime path and is dropped by
+  cleanup migration.
+
+## Durable Memory
+
+Durable memory is stored in `memory_items`.
+
+The MVP supports `fact` and `note` items. Writes use canonical upsert behavior
+through `(type, namespace, canonical_key)` so the system can update known facts
+instead of appending unlimited near-duplicates.
+
+Soft delete keeps an audit trail and avoids destructive removal as the normal
+runtime path.
+
+Use durable memory for:
+
+- stable user preferences;
+- recurring facts and habits;
+- project rules and decisions;
+- long-lived notes that should survive future sessions.
+
+## Daily Memory
+
+Daily memory is stored in `memory_daily_entries`.
+
+This layer is for current-day context, transient notes, session captures, and
+working information that should not immediately become durable memory.
+
+Current daily inputs:
+
+- `memory_log` writes directly into DB daily entries.
+- Pre-compaction flush writes into a controlled inbox, then drains into DB.
+- `/new` and `/reset` session capture writes DB-backed daily entries.
+- Legacy daily files can be imported into DB daily entries.
+
+Daily prompt injection is handled through AnchorClaw's `before_prompt_build`
+path and runs on first-turn/new-session flows, not on every prompt.
+
+## Compatibility Layer
+
+AnchorClaw registers the OpenClaw memory capability and provides a
+`MemorySearchManager` adapter so status, doctor, CLI, and prompt flows can keep
+using OpenClaw's expected interfaces.
+
+Supported parameter styles:
+
+- AnchorClaw-native: `{ lookup, fromLine, lineCount }`
+- OpenClaw aliases: `{ path, from, lines }`
+
+File-like compatibility:
+
+- `MEMORY.md` is a virtual DB snapshot.
+- `memory/YYYY-MM-DD.md` is a DB-backed daily view.
+- Direct file edits are not the normal runtime path.
+
+After legacy migration, the physical `MEMORY.md` becomes an HTML-comment-only
+stub by default so OpenClaw bootstrap does not duplicate memory in prompts.
+
+## Sessions Corpus
+
+Sessions search is opt-in. When `sessions.search.enabled=true`, AnchorClaw uses
+Postgres-backed lexical indexing for transcript search.
+
+Implemented behavior:
+
+- `session_index_files` and `session_index_chunks` store index state.
+- Live/delta indexing uses transcript update events plus debounce and targeted
+  sync.
+- `sessions.sync.deltaBytes` and `sessions.sync.deltaMessages` control reindex
+  thresholds.
+- Runtime lifecycle compatibility uses the preferred lifecycle registration
+  when available and a legacy fallback otherwise.
+
+Visibility modes:
+
+- `current`: index only the current agent/session scope; cross-agent delta
+  updates are ignored.
+- `visible`: accept visible cross-agent transcript updates.
+- `off`: disable sessions indexing/listener behavior.
+
+State/session path resolution follows OpenClaw-compatible order:
+
+- `OPENCLAW_STATE_DIR`
+- `OPENCLAW_HOME/.openclaw`
+- `HOME/.openclaw` when `OPENCLAW_HOME` is unset
+- legacy `HOME/.clawdbot` when present
+
+## Legacy Import
+
+Legacy import is explicit operator CLI, not startup side effect.
+
+Dry-run:
+
+```bash
+openclaw anchorclaw import
+```
+
+Apply:
+
+```bash
+openclaw anchorclaw import --apply
+```
+
+Import behavior:
+
+- `MEMORY.md` imports into durable `memory_items`.
+- `MEMORY.md` is backed up and replaced with a stub.
+- `memory/YYYY-MM-DD.md` files import into `memory_daily_entries`.
+- Imported daily files are archived outside the active `memory/` directory.
+- Import state is tracked in the DB ledger.
+
+Runtime/search warning behavior is scoped to actual risk: for example, zero
+search hits plus active legacy import state.
+
+## Maintenance and Extractor
+
+Maintenance is optional and currently experimental.
+
+When enabled, the scheduler reads bounded windows from `memory_daily_entries`,
+runs extractor logic, deduplicates candidates, and promotes durable candidates
+into `memory_items`.
+
+Current policy:
+
+- extractor reads only `memory_log` and `legacy_import` daily entries;
+- standalone `session_memory` captures and `compaction_flush` entries are
+  excluded from extractor source selection;
+- backend extractor transport uses host-owned `api.runtime.llm.complete`;
+- processed state is stored in `memory_daily_extraction_windows` only after a
+  successful extractor cycle;
+- non-dry-run maintenance waits for durable startup state to become `ready`;
+- dry-run reports heuristic candidate counts only and does not run the
+  extractor.
+
+The release-safe reliability claim is still the DB-backed durable/daily runtime.
+Automatic daily-to-durable promotion is a foundation path that needs ongoing
+live smoke validation and tuning.
+
+## Identity and Scope Resolution
+
+All reads and writes run in `(user_id, workspace_id)` scope.
+
+`workspace_id` is derived from `workspaceDir`:
+
+- name format: `dir:<sha256(resolved workspaceDir)>`
+- changing workspace directory creates a new memory scope
+
+`user_id` resolution:
+
+- preferred: `identity.externalId` from plugin config
+- fallback: `sha256(normalized OS username)`
 
 Operational implications:
 
-- For Docker/production, `identity.externalId` should always be set; otherwise scope may drift when container OS user changes.
-- The plugin always logs a startup warning if `identity.externalId` is not configured.
+- set `identity.externalId` for Docker and production;
+- fallback identity can cause shared memory when multiple people use the same OS
+  account;
+- AnchorClaw logs a startup warning when fallback identity is active;
+- the live agent workspace should match `plugins.entries.anchorclaw.config.workspaceDir`.
 
-## Where PostClaw-Style Features Fit
+## SQL-First Search
 
-### Semantic layer (optional)
+AnchorClaw's MVP uses PostgreSQL full-text search for durable memory, daily
+memory, and sessions indexing.
 
-- separate embeddings (vector) table + hybrid retrieval
-- reliability contract: if embeddings are disabled or fail, fall back to lexical (FTS) without degrading tool APIs
+This gives a deterministic baseline:
 
-### Persona context (optional)
+- no embedding provider required;
+- no vector database required;
+- predictable lexical matches;
+- stable fallback path for future hybrid retrieval.
 
-- separate types/tables for persona/profile
-- separate injection budgets (do not mix with durable facts)
+## Semantic Enrichment Layer
 
-### Knowledge graph (optional)
+Future semantic recall should sit above the SQL source of truth.
 
-- `entity_edges`-style relationships
-- multi-hop expansion of related nodes during retrieval
+Planned shape:
 
-## Known MVP Limits
+- embeddings/vector table attached to durable and daily records;
+- hybrid retrieval that combines FTS and vector scores;
+- failure mode that falls back to lexical search without breaking tool APIs;
+- no semantic layer is allowed to become the only place where durable memory is
+  represented.
 
-- sessions corpus remains lexical-only (FTS). Semantic/vector layer is still future work.
-- `corpus="wiki"`: not implemented
-- types beyond `fact/note` are deferred until explicit injection/write policy is defined
+This keeps the product position clear: AnchorClaw uses semantics for enrichment,
+not as the reliability foundation.
+
+## PostClaw-Style Future Layers
+
+AnchorClaw can grow toward richer PostClaw-style capabilities without breaking
+the core runtime contract:
+
+- persona/profile context in separate tables and injection budgets;
+- episode extraction from daily memory;
+- knowledge graph relationships and multi-hop expansion;
+- DB-native wiki memory or integration with OpenClaw supplements.
+
+## Current Delivery State
+
+Implemented and runtime-oriented:
+
+- durable memory in Postgres;
+- DB-owned daily memory;
+- virtual `MEMORY.md`;
+- DB-first daily memory paths;
+- explicit legacy import CLI;
+- sessions search as opt-in lexical corpus;
+- setup path that does not patch workspace `AGENTS.md`;
+- DB-backed `/new` and `/reset` session capture;
+- controlled pre-compaction flush inbox and DB drain;
+- maintenance foundation over DB daily windows.
+
+Experimental:
+
+- extractor-driven promotion from daily memory into durable memory;
+- tuning of maintenance windows and live promotion smoke validation;
+- semantic/vector recall layer.
+
+Known MVP limits:
+
+- sessions corpus is lexical-only;
+- `corpus="wiki"` is not implemented by AnchorClaw itself;
+- item types beyond `fact` and `note` are deferred until explicit injection and
+  write policy are defined.
