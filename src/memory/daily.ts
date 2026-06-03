@@ -52,6 +52,12 @@ type DailySearchRow = {
   score: number;
 };
 
+export const INTERNAL_ONLY_DAILY_SOURCE_KINDS = ["session_memory"] as const;
+
+export function isInternalOnlyDailySourceKind(sourceKind: string | null | undefined): boolean {
+  return INTERNAL_ONLY_DAILY_SOURCE_KINDS.includes(sourceKind as (typeof INTERNAL_ONLY_DAILY_SOURCE_KINDS)[number]);
+}
+
 function mapDailyEntryRow(row: DailyEntryRow): MemoryDailyEntry {
   return {
     id: row.id,
@@ -255,11 +261,18 @@ export async function searchDailyEntriesDb(params: {
     FROM memory_daily_entries
     WHERE user_id = $1
       AND workspace_id = $2
+      AND source_kind <> ALL($5::text[])
       AND to_tsvector('simple', content) @@ plainto_tsquery('simple', $3)
     ORDER BY score DESC, logical_date DESC, updated_at DESC, id ASC
     LIMIT $4
   `,
-    [params.userId, params.workspaceId, params.query, params.limit],
+    [
+      params.userId,
+      params.workspaceId,
+      params.query,
+      params.limit,
+      [...INTERNAL_ONLY_DAILY_SOURCE_KINDS],
+    ],
   );
 
   return rows.map((row) => {

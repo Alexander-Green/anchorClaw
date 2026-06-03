@@ -238,6 +238,39 @@ describe("memoryGetFromDb daily memory compatibility", () => {
     expect(vi.mocked(fs.readFile)).not.toHaveBeenCalled();
   });
 
+  it("hides internal-only session-capture rows from memory/* lookups", async () => {
+    const pool = createPool([
+      [
+        {
+          id: "22222222-2222-2222-2222-222222222222",
+          path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
+          logical_date: "2026-06-03",
+          content: "user: remember the reset capture canary",
+          content_sha256: "sha",
+          source_kind: "session_memory",
+          source_path: null,
+          metadata: {},
+          created_at: "2026-06-03T09:15:00.000Z",
+          updated_at: "2026-06-03T09:15:00.000Z",
+        },
+      ],
+    ]);
+    const got = await memoryGetFromDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      workspaceDir: "/workspace",
+      limits,
+      lookup: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
+    });
+    expect(got.ok).toBe(false);
+    if (got.ok) {
+      throw new Error("expected failed result");
+    }
+    expect(got.error).toBe("not found");
+    expect(vi.mocked(fs.readFile)).not.toHaveBeenCalled();
+  });
+
   it("reads db-memory/daily/<uuid>.md directly from canonical daily table", async () => {
     const pool = createPool([
       [
@@ -271,6 +304,38 @@ describe("memoryGetFromDb daily memory compatibility", () => {
     expect(got.title).toBe("memory/2026-05-20.md");
     expect(got.kind).toBe("daily-note");
     expect(got.content).toContain("DB daily content");
+  });
+
+  it("hides internal-only session-capture rows from db-memory/daily lookups", async () => {
+    const pool = createPool([
+      [
+        {
+          id: "33333333-3333-3333-3333-333333333333",
+          path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
+          logical_date: "2026-06-03",
+          content: "user: remember the reset capture canary",
+          content_sha256: "sha",
+          source_kind: "session_memory",
+          source_path: null,
+          metadata: {},
+          created_at: "2026-06-03T09:15:00.000Z",
+          updated_at: "2026-06-03T09:15:00.000Z",
+        },
+      ],
+    ]);
+    const got = await memoryGetFromDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      workspaceDir: "/workspace",
+      limits,
+      lookup: "db-memory/daily/33333333-3333-3333-3333-333333333333.md",
+    });
+    expect(got.ok).toBe(false);
+    if (got.ok) {
+      throw new Error("expected failed result");
+    }
+    expect(got.error).toBe("not found");
   });
 
   it("falls back to workspace file when imported DB daily row is absent", async () => {

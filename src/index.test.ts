@@ -421,32 +421,6 @@ describe("tool registration", () => {
     expect(hasDailyHook).toBe(true);
   });
 
-  it("registers before_prompt_build system override for DB-backed memory semantics", async () => {
-    const { api } = buildApi();
-
-    (plugin as any).register(api);
-
-    const call = (api.on as any).mock.calls.find(
-      (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-memory-system-override",
-    );
-    const hook = call?.[1];
-    expect(hook).toBeTypeOf("function");
-
-    const result = await hook({ prompt: "какой мой любимый цвет?", messages: [] });
-    expect(result?.prependSystemContext).toContain("AnchorClaw memory contract:");
-    expect(result?.prependSystemContext).toContain(
-      "If a durable fact/preference/person/recurring schedule is already clear in injected AnchorClaw memory",
-    );
-    expect(result?.prependSystemContext).toContain(
-      "Use memory_search or memory_get when the answer is not clearly visible in injected memory",
-    );
-    expect(result?.prependSystemContext).toContain("If memory_search returns a direct durable fact hit, answer with it plainly");
-    expect(result?.prependSystemContext).toContain("check AnchorClaw daily memory first");
-    expect(result?.prependSystemContext).toContain("Daily memory answers date-specific questions; only durable memory implies recurring facts.");
-    expect(result?.prependSystemContext).toContain("Save requests require one successful write tool before final text");
-    expect(result?.prependSystemContext).toContain("MEMORY.md and memory/YYYY-MM-DD.md are DB-backed concepts");
-  });
-
   it("registers after_compaction hook for flush inbox drain", () => {
     const { api } = buildApi();
 

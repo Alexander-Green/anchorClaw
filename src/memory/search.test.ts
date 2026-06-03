@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { memorySearchDb } from "./search.js";
+import { memorySearchDailyDb, memorySearchDb } from "./search.js";
 
 describe("memorySearchDb ranking contract", () => {
   it("uses exact boosts on title/content/canonical key in the strict FTS path", async () => {
     const capturedSql: string[] = [];
-    let capturedParams: unknown[] = [];
+    const capturedParams: unknown[][] = [];
     const pool = {
       query: async (sql: string, params: unknown[]) => {
         capturedSql.push(sql);
-        capturedParams = params;
+        capturedParams.push(params);
         return { rows: [] as any[] };
       },
     } as any;
@@ -28,7 +28,13 @@ describe("memorySearchDb ranking contract", () => {
     expect(capturedSql[0]).toContain("to_tsvector('simple', search_text) @@ q.ts_query");
     expect(capturedSql[0]).toContain("ORDER BY score DESC, importance DESC, updated_at DESC, id ASC");
     expect(capturedSql[1]).toContain("FROM memory_daily_entries");
-    expect(capturedParams).toEqual(["u1", "w1", "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515", 5]);
+    expect(capturedParams[1]).toEqual([
+      "u1",
+      "w1",
+      "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
+      5,
+      ["session_memory"],
+    ]);
   });
 
   it("keeps lexical FTS ranking path for broad queries", async () => {
@@ -239,6 +245,44 @@ describe("memorySearchDb ranking contract", () => {
     });
   });
 
+  it("excludes session-capture daily rows from memory corpus results", async () => {
+    const capturedSql: string[] = [];
+    const capturedParams: unknown[][] = [];
+    const pool = {
+      query: async (sql: string, params: unknown[]) => {
+        capturedSql.push(sql);
+        capturedParams.push(params);
+        if (String(sql).includes("FROM memory_items")) {
+          return { rows: [] as any[] };
+        }
+        if (String(sql).includes("FROM memory_daily_entries")) {
+          return { rows: [] as any[] };
+        }
+        return { rows: [] as any[] };
+      },
+    } as any;
+
+    const hits = await memorySearchDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: { maxResults: 10 } as any,
+      query: "reset capture canary",
+      maxResults: 5,
+    });
+
+    expect(hits).toHaveLength(0);
+    const dailySql = capturedSql.find((sql) => sql.includes("FROM memory_daily_entries"));
+    expect(dailySql).toContain("source_kind <> ALL($5::text[])");
+    expect(capturedParams.find((params) => Array.isArray(params[4])))?.toEqual([
+      "u1",
+      "w1",
+      "reset capture canary",
+      5,
+      ["session_memory"],
+    ]);
+  });
+
   it("keeps durable hits ahead of daily hits on equal score", async () => {
     const pool = {
       query: async (sql: string) => {
@@ -286,5 +330,36 @@ describe("memorySearchDb ranking contract", () => {
     expect(hits).toHaveLength(2);
     expect(hits[0]?.path).toBe("db-memory/items/item-1.md");
     expect(hits[1]?.path).toBe("memory/2026-05-20.md");
+  });
+
+  it("excludes session-capture daily rows from daily corpus results", async () => {
+    const capturedSql: string[] = [];
+    const capturedParams: unknown[][] = [];
+    const pool = {
+      query: async (sql: string, params: unknown[]) => {
+        capturedSql.push(sql);
+        capturedParams.push(params);
+        return { rows: [] as any[] };
+      },
+    } as any;
+
+    const hits = await memorySearchDailyDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: { maxResults: 10 } as any,
+      query: "reset capture canary",
+      maxResults: 5,
+    });
+
+    expect(hits).toHaveLength(0);
+    expect(capturedSql[0]).toContain("source_kind <> ALL($5::text[])");
+    expect(capturedParams[0]).toEqual([
+      "u1",
+      "w1",
+      "reset capture canary",
+      5,
+      ["session_memory"],
+    ]);
   });
 });

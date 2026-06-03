@@ -2,7 +2,7 @@ import type { PostgresPool } from "../postgres.js";
 import { parseDbMemoryPath } from "./paths.js";
 import type { MemoryLimits } from "./limits.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
-import { getDailyEntryById, getDailyEntryByPath } from "./daily.js";
+import { getDailyEntryById, getDailyEntryByPath, isInternalOnlyDailySourceKind } from "./daily.js";
 import { memoryGetSessionFile } from "./sessions.js";
 import { memoryGetSessionFromIndexDb, normalizeSessionLookupPath } from "./sessions-index.js";
 import { syncSessionsIndexDb } from "./sessions-index-sync.js";
@@ -84,6 +84,9 @@ export async function memoryGetFromDb(params: {
       path: normalized,
     });
     if (importedRow) {
+      if (isInternalOnlyDailySourceKind(importedRow.sourceKind)) {
+        return { ok: false, error: "not found" };
+      }
       const fromLine = params.fromLine ?? 1;
       const lineCount = params.lineCount ?? params.limits.getDefaultLines;
       const read = buildMemoryReadResult({
@@ -295,6 +298,9 @@ export async function memoryGetFromDb(params: {
       id: parsed.id,
     });
     if (!row) {
+      return { ok: false, error: "not found" };
+    }
+    if (isInternalOnlyDailySourceKind(row.sourceKind)) {
       return { ok: false, error: "not found" };
     }
     const read = buildMemoryReadResult({

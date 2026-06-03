@@ -107,7 +107,8 @@ describe("buildPromptMemorySection", () => {
     expect(text).toContain("memory/2026-06-03.md");
     expect(text).toContain("## Recent Session Captures");
     expect(text).toContain("prior-session context only");
-    expect(text).toContain("memory/2026-06-03-0915-a1b2c3d4-session-capture.md");
+    expect(text).not.toContain("memory/2026-06-03-0915-a1b2c3d4-session-capture.md");
+    expect(text).toContain("- assistant: long recap");
     expect(text).not.toContain("assistant: long recap ".repeat(20));
   });
 });

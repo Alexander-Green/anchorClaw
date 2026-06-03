@@ -17,7 +17,6 @@ import { registerSessionDeltaLifecycle } from "./plugin/lifecycle.js";
 import { createMaintenanceRuntime, registerMaintenanceLifecycle } from "./plugin/maintenance.js";
 import { createSessionDeltaRuntime } from "./plugin/session-delta.js";
 import { registerAnchorClawSessionCaptureHook } from "./plugin/session-capture.js";
-import { registerAnchorClawSystemOverrideHook } from "./plugin/system-override.js";
 import { registerAnchorClawTools } from "./plugin/tools/index.js";
 import { runAnchorClawSetup } from "./scripts/setup-db.js";
 import { runAnchorClawImport } from "./scripts/import-legacy.js";
@@ -293,7 +292,6 @@ export default definePluginEntry({
       refreshPromptCache,
       ensureSessionsIndexBootstrapped,
     });
-    registerAnchorClawSystemOverrideHook({ api, ctx });
     registerDailyPromptHook({ api, ctx });
     registerAnchorClawFlushInboxHook({ api, ctx });
     registerAnchorClawSessionCaptureHook({ api, ctx });

@@ -284,6 +284,7 @@ export function buildPromptDailySection(params: {
     entries: PromptDailyEntry[];
     maxEntries: number;
     maxCharsPerEntry: number;
+    includePath: boolean;
   }) => {
     if (section.entries.length === 0 || section.maxEntries <= 0) {
       return;
@@ -303,14 +304,20 @@ export function buildPromptDailySection(params: {
       if (rendered >= section.maxEntries) {
         break;
       }
-      const pathLabel = truncate(entry.path.trim(), params.maxPathChars);
       const body = truncate(entry.content.trim(), section.maxCharsPerEntry);
-      const block = [`- ${pathLabel}`, `  ${body.replaceAll("\n", "\n  ")}`, ""].join("\n");
+      const pathLabel = truncate(entry.path.trim(), params.maxPathChars);
+      const block = section.includePath
+        ? [`- ${pathLabel}`, `  ${body.replaceAll("\n", "\n  ")}`, ""].join("\n")
+        : [`- ${body.replaceAll("\n", "\n  ")}`, ""].join("\n");
       if (used + block.length > params.maxTotalChars) {
         break;
       }
-      lines.push(`- ${pathLabel}`);
-      lines.push(`  ${body.replaceAll("\n", "\n  ")}`);
+      if (section.includePath) {
+        lines.push(`- ${pathLabel}`);
+        lines.push(`  ${body.replaceAll("\n", "\n  ")}`);
+      } else {
+        lines.push(`- ${body.replaceAll("\n", "\n  ")}`);
+      }
       lines.push("");
       used += block.length;
       rendered += 1;
@@ -323,6 +330,7 @@ export function buildPromptDailySection(params: {
     entries: ordinaryEntries,
     maxEntries: maxDailyEntries,
     maxCharsPerEntry: params.maxEntryChars,
+    includePath: true,
   });
   appendSection({
     title: "## Recent Session Captures",
@@ -330,6 +338,7 @@ export function buildPromptDailySection(params: {
     entries: sessionCaptureEntries,
     maxEntries: maxSessionCaptures,
     maxCharsPerEntry: maxSessionCaptureEntryChars,
+    includePath: false,
   });
 
   if (lines.at(-1) === "") {
