@@ -72,6 +72,27 @@ describe("createMaintenanceRuntime", () => {
     );
   });
 
+  it("retries maintenance once startup marks durable memory ready", async () => {
+    const api = buildApi();
+    const ctx = buildCtx("pending");
+
+    const runtime = createMaintenanceRuntime({ api, ctx });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    ctx.durableState = {
+      ...ctx.durableState,
+      overall: "ready",
+      import: "ready",
+    };
+    runtime.triggerMaintenanceNow();
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.cleanupMaintenance();
+
+    expect(runMaintenanceCycle).toHaveBeenCalledTimes(1);
+  });
+
   it("allows maintenance to run once durable memory is ready", async () => {
     const api = buildApi();
     const ctx = buildCtx("ready");

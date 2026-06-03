@@ -83,7 +83,10 @@ const {
   memoryGetFromDb: vi.fn(),
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
-  createMaintenanceRuntimeMock: vi.fn(() => ({ cleanupMaintenance: vi.fn() })),
+  createMaintenanceRuntimeMock: vi.fn(() => ({
+    cleanupMaintenance: vi.fn(),
+    triggerMaintenanceNow: vi.fn(),
+  })),
   registerMaintenanceLifecycleMock: vi.fn(),
   statFs: vi.fn(async () => ({ size: 0 })),
   accessFs: vi.fn(async () => undefined),

@@ -127,7 +127,7 @@ export default definePluginEntry({
     const { refreshPromptCache } = createPromptCacheRuntime({ api, ctx });
     const { ensureSessionsIndexBootstrapped, ensureSessionDeltaListener, cleanupSessionDelta } =
       createSessionDeltaRuntime({ api, ctx });
-    const { cleanupMaintenance } = createMaintenanceRuntime({ api, ctx });
+    const { cleanupMaintenance, triggerMaintenanceNow } = createMaintenanceRuntime({ api, ctx });
 
     api.logger.info(
       ctx.cfg
@@ -262,6 +262,7 @@ export default definePluginEntry({
             lastSourceSha256: null,
           });
           ctx.setStartupCriticalFailure(undefined);
+          triggerMaintenanceNow();
           if (!workspaceDir) {
             return;
           }
@@ -273,6 +274,7 @@ export default definePluginEntry({
             cleanup: "not_needed",
             reason: `legacy_import_scan_failed: ${message}`,
           });
+          triggerMaintenanceNow();
           api.logger.warn(
             `anchorclaw: legacy import scan failed (${message})`,
           );
