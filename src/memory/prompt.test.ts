@@ -112,4 +112,40 @@ describe("buildPromptMemorySection", () => {
     expect(text).toContain("assistant: long recap");
     expect(text).not.toContain("assistant: long recap ".repeat(20));
   });
+
+  it("keeps the tail of session captures in startup prompt excerpts", () => {
+    const lines = buildPromptDailySection({
+      entries: [
+        {
+          id: "s1",
+          path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
+          content: [
+            "old context 1",
+            "old context 2",
+            "old context 3",
+            "SESSION_MARKER_20260603_GAMMA",
+            "ORDER_MARKER_20260603_DELTA",
+            "assistant: acknowledged both markers",
+          ].join("\n"),
+          sourceKind: "session_memory",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      maxTotalChars: 1_400,
+      maxPathChars: 80,
+      maxEntryChars: 300,
+      maxSessionCaptureEntryChars: 110,
+      maxDailyEntries: 4,
+      maxSessionCaptures: 2,
+    });
+    const text = lines.join("\n");
+
+    expect(text).toContain("[Untrusted daily memory: recent-session-capture-1]");
+    expect(text).toContain("...[earlier session capture truncated]...");
+    expect(text).toContain("SESSION_MARKER_20260603_GAMMA");
+    expect(text).toContain("ORDER_MARKER_20260603_DELTA");
+    expect(text).toContain("assistant: acknowledged both markers");
+    expect(text).not.toContain("old context 1");
+  });
 });

@@ -103,6 +103,15 @@ function trimStartupPromptContent(value: string, maxChars: number): string {
   return `${trimmed.slice(0, Math.max(0, maxChars))}\n...[truncated]...`;
 }
 
+function trimStartupPromptContentFromTail(value: string, maxChars: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  const tail = trimmed.slice(Math.max(0, trimmed.length - maxChars));
+  return `...[earlier session capture truncated]...\n${tail}`;
+}
+
 function sanitizePromptLabel(value: string): string {
   return value
     .replaceAll(/[\r\n\t]+/g, " ")
@@ -302,10 +311,9 @@ export function buildPromptDailySection(params: {
       continue;
     }
 
-    const body = trimStartupPromptContent(
-      entry.content,
-      isSessionCapture ? maxSessionCaptureEntryChars : params.maxEntryChars,
-    );
+    const body = isSessionCapture
+      ? trimStartupPromptContentFromTail(entry.content, maxSessionCaptureEntryChars)
+      : trimStartupPromptContent(entry.content, params.maxEntryChars);
     const label = isSessionCapture
       ? `recent-session-capture-${renderedSessionCaptures + 1}`
       : truncate(entry.path.trim(), params.maxPathChars);
