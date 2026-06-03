@@ -53,6 +53,8 @@ type DailySearchRow = {
 };
 
 export const INTERNAL_ONLY_DAILY_SOURCE_KINDS = ["session_memory"] as const;
+export const STARTUP_DAILY_MEMORY_DAYS = 2;
+export const STARTUP_MAX_SLUGGED_FILES_PER_DAY = 4;
 
 export function isInternalOnlyDailySourceKind(sourceKind: string | null | undefined): boolean {
   return INTERNAL_ONLY_DAILY_SOURCE_KINDS.includes(sourceKind as (typeof INTERNAL_ONLY_DAILY_SOURCE_KINDS)[number]);
@@ -96,6 +98,39 @@ function formatDateInTimezone(nowMs: number, timezone?: string): string {
   const mm = String(local.getMonth() + 1).padStart(2, "0");
   const dd = String(local.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string {
+  const [yearRaw, monthRaw, dayRaw] = stamp.split("-").map((part) => Number.parseInt(part, 10));
+  if (!yearRaw || !monthRaw || !dayRaw) {
+    return stamp;
+  }
+  const shifted = new Date(Date.UTC(yearRaw, monthRaw - 1, dayRaw - offsetDays));
+  return shifted.toISOString().slice(0, 10);
+}
+
+export function buildStartupMemoryDateStamps(params: {
+  nowMs?: number;
+  timezone?: string;
+  dailyMemoryDays?: number;
+}): string[] {
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const dailyMemoryDays = Math.max(1, Math.trunc(params.dailyMemoryDays ?? STARTUP_DAILY_MEMORY_DAYS));
+  const localTodayStamp = formatDateInTimezone(nowMs, params.timezone);
+  const utcTodayStamp = formatDateInTimezone(nowMs, "UTC");
+  const localWindow: string[] = [];
+
+  for (let offset = 0; offset < dailyMemoryDays; offset += 1) {
+    localWindow.push(shiftDateStampByCalendarDays(localTodayStamp, offset));
+  }
+
+  if (utcTodayStamp === localTodayStamp || localWindow.includes(utcTodayStamp)) {
+    return localWindow;
+  }
+
+  return utcTodayStamp > localTodayStamp
+    ? [utcTodayStamp, ...localWindow]
+    : [...localWindow, utcTodayStamp];
 }
 
 export function resolveDailyLogicalDate(params: {
@@ -185,7 +220,8 @@ export async function queryPromptDailyEntries(params: {
   pool: PostgresPool;
   userId: string;
   workspaceId: string;
-  limit: number;
+  logicalDates: string[];
+  maxSluggedPerDay?: number;
 }): Promise<
   Array<{
     id: string;
@@ -197,6 +233,13 @@ export async function queryPromptDailyEntries(params: {
     updatedAt: string;
   }>
 > {
+  const logicalDates = Array.from(
+    new Set(params.logicalDates.filter((value) => /^\d{4}-\d{2}-\d{2}$/u.test(value))),
+  );
+  if (logicalDates.length === 0) {
+    return [];
+  }
+
   const result = await params.pool.query<{
     id: string;
     path: string;
@@ -205,23 +248,67 @@ export async function queryPromptDailyEntries(params: {
     source_kind: string;
     created_at: string;
     updated_at: string;
+    day_ordinal: number;
+    path_kind: number;
   }>(
     `
+    WITH requested_days AS (
+      SELECT logical_date, ordinality AS day_ordinal
+      FROM unnest($3::text[]) WITH ORDINALITY AS requested(logical_date, ordinality)
+    ),
+    ranked AS (
+      SELECT
+        entry.id,
+        entry.path,
+        entry.logical_date::text AS logical_date,
+        entry.content,
+        entry.source_kind,
+        entry.created_at,
+        entry.updated_at,
+        requested.day_ordinal,
+        CASE
+          WHEN entry.path = ('memory/' || requested.logical_date || '.md') THEN 0
+          ELSE 1
+        END AS path_kind,
+        ROW_NUMBER() OVER (
+          PARTITION BY requested.logical_date,
+          CASE
+            WHEN entry.path = ('memory/' || requested.logical_date || '.md') THEN 0
+            ELSE 1
+          END
+          ORDER BY entry.updated_at DESC, entry.path DESC, entry.id DESC
+        ) AS ordinal_in_kind
+      FROM requested_days requested
+      JOIN memory_daily_entries entry
+        ON entry.user_id = $1
+       AND entry.workspace_id = $2
+       AND entry.logical_date::text = requested.logical_date
+       AND (
+         entry.path = ('memory/' || requested.logical_date || '.md')
+         OR entry.path LIKE ('memory/' || requested.logical_date || '-%.md')
+       )
+    )
     SELECT
       id,
       path,
-      logical_date::text AS logical_date,
+      logical_date,
       content,
       source_kind,
       created_at,
-      updated_at
-    FROM memory_daily_entries
-    WHERE user_id = $1
-      AND workspace_id = $2
-    ORDER BY logical_date DESC, updated_at DESC, path ASC, id ASC
-    LIMIT $3
+      updated_at,
+      day_ordinal,
+      path_kind
+    FROM ranked
+    WHERE path_kind = 0
+       OR (path_kind = 1 AND ordinal_in_kind <= $4)
+    ORDER BY day_ordinal ASC, path_kind ASC, updated_at DESC, path DESC, id DESC
   `,
-    [params.userId, params.workspaceId, params.limit],
+    [
+      params.userId,
+      params.workspaceId,
+      logicalDates,
+      Math.max(0, Math.trunc(params.maxSluggedPerDay ?? STARTUP_MAX_SLUGGED_FILES_PER_DAY)),
+    ],
   );
 
   return result.rows.map((row) => ({

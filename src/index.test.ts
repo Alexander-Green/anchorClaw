@@ -532,10 +532,10 @@ describe("phase2 session delta listener", () => {
       },
     ] as any);
     buildPromptDailySection.mockReturnValueOnce([
-      "## Daily Memory (AnchorClaw/Postgres)",
+      "[Startup context loaded by AnchorClaw]",
       "daily context",
       "",
-      "## Recent Session Captures",
+      "[Untrusted daily memory: recent-session-capture-1]",
       "session capture context",
     ]);
     const { api } = buildApi();
@@ -554,10 +554,10 @@ describe("phase2 session delta listener", () => {
 
     expect(result).toEqual({
       prependContext: [
-        "## Daily Memory (AnchorClaw/Postgres)",
+        "[Startup context loaded by AnchorClaw]",
         "daily context",
         "",
-        "## Recent Session Captures",
+        "[Untrusted daily memory: recent-session-capture-1]",
         "session capture context",
       ].join("\n"),
     });
@@ -569,7 +569,7 @@ describe("phase2 session delta listener", () => {
             sourceKind: "session_memory",
           }),
         ]),
-        maxSessionCaptures: 2,
+        maxSessionCaptures: 4,
         maxDailyEntries: 4,
       }),
     );
@@ -586,7 +586,7 @@ describe("phase2 session delta listener", () => {
       expect.stringContaining("memory_log:memory/2026-06-02.md"),
     );
     expect(api.logger.info).toHaveBeenCalledWith(
-      expect.stringContaining("## Recent Session Captures"),
+      expect.stringContaining("[Untrusted daily memory: recent-session-capture-1]"),
     );
   });
 

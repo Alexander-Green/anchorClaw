@@ -1,42 +1,29 @@
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
-import { parseLogicalDateFromDailyPath } from "../memory/daily.js";
+import {
+  buildStartupMemoryDateStamps,
+  STARTUP_DAILY_MEMORY_DAYS,
+  STARTUP_MAX_SLUGGED_FILES_PER_DAY,
+} from "../memory/daily.js";
 import { buildPromptDailySection, queryPromptDailyEntries } from "../memory/prompt.js";
 import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 
-const DAILY_STARTUP_ENTRY_SCAN_LIMIT = 12;
-const DAILY_STARTUP_MAX_DAYS = 2;
 const DAILY_STARTUP_MAX_TOTAL_CHARS = 2_800;
 const DAILY_STARTUP_MAX_PATH_CHARS = 80;
 const DAILY_STARTUP_MAX_ENTRY_CHARS = 1_200;
-const DAILY_STARTUP_MAX_SESSION_CAPTURE_ENTRY_CHARS = 700;
+const DAILY_STARTUP_MAX_SESSION_CAPTURE_ENTRY_CHARS = 1_200;
 const DAILY_STARTUP_MAX_DAILY_ENTRIES = 4;
-const DAILY_STARTUP_MAX_SESSION_CAPTURES = 2;
+const DAILY_STARTUP_MAX_SESSION_CAPTURES = 4;
 const PROMPT_DEBUG_PREVIEW_MAX_CHARS = 1_500;
 
-function selectRecentDailyStartupEntries(entries: Awaited<ReturnType<typeof queryPromptDailyEntries>>): typeof entries {
-  const selected: typeof entries = [];
-  const seenPaths = new Set<string>();
-  const seenDays = new Set<string>();
-
-  for (const entry of entries) {
-    const day = entry.logicalDate ?? parseLogicalDateFromDailyPath(entry.path);
-    if (!day) {
-      continue;
-    }
-    if (seenPaths.has(entry.path)) {
-      continue;
-    }
-    if (!seenDays.has(day) && seenDays.size >= DAILY_STARTUP_MAX_DAYS) {
-      continue;
-    }
-    seenPaths.add(entry.path);
-    seenDays.add(day);
-    selected.push(entry);
-  }
-
-  return selected;
+function resolveRuntimeTimezone(api: OpenClawPluginApi): string | undefined {
+  const currentConfig =
+    typeof (api as any)?.runtime?.config?.current === "function"
+      ? (api as any).runtime.config.current()
+      : undefined;
+  const raw = (currentConfig as any)?.agents?.defaults?.userTimezone;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 export function registerDailyPromptHook(params: {
@@ -78,10 +65,13 @@ export function registerDailyPromptHook(params: {
         pool: ctx.getPool(),
         userId: scope.userId,
         workspaceId: scope.workspaceId,
-        limit: DAILY_STARTUP_ENTRY_SCAN_LIMIT,
+        logicalDates: buildStartupMemoryDateStamps({
+          timezone: resolveRuntimeTimezone(api),
+          dailyMemoryDays: STARTUP_DAILY_MEMORY_DAYS,
+        }),
+        maxSluggedPerDay: STARTUP_MAX_SLUGGED_FILES_PER_DAY,
       });
-      const selectedEntries = selectRecentDailyStartupEntries(entries);
-      if (selectedEntries.length === 0) {
+      if (entries.length === 0) {
         if (debugPromptLogEnabled) {
           api.logger.info("anchorclaw: daily startup prompt injection found no eligible entries");
         }
@@ -89,7 +79,7 @@ export function registerDailyPromptHook(params: {
       }
 
       const lines = buildPromptDailySection({
-        entries: selectedEntries,
+        entries,
         maxTotalChars: DAILY_STARTUP_MAX_TOTAL_CHARS,
         maxPathChars: DAILY_STARTUP_MAX_PATH_CHARS,
         maxEntryChars: DAILY_STARTUP_MAX_ENTRY_CHARS,
@@ -107,11 +97,11 @@ export function registerDailyPromptHook(params: {
       if (debugPromptLogEnabled) {
         const preview = lines.join("\n").slice(0, PROMPT_DEBUG_PREVIEW_MAX_CHARS);
         const previewSuffix = preview.length < lines.join("\n").length ? "…" : "";
-        const selectedSummary = selectedEntries
+        const selectedSummary = entries
           .map((entry) => `${entry.sourceKind}:${entry.path}`)
           .join(", ");
         api.logger.info(
-          `anchorclaw: daily startup prompt injection applied (messages=0, selected=${selectedEntries.length}, entries=[${selectedSummary}], preview=${JSON.stringify(`${preview}${previewSuffix}`)})`,
+          `anchorclaw: daily startup prompt injection applied (messages=0, selected=${entries.length}, entries=[${selectedSummary}], preview=${JSON.stringify(`${preview}${previewSuffix}`)})`,
         );
       }
 
