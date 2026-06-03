@@ -13,6 +13,7 @@ const DAILY_STARTUP_MAX_ENTRY_CHARS = 1_200;
 const DAILY_STARTUP_MAX_SESSION_CAPTURE_ENTRY_CHARS = 700;
 const DAILY_STARTUP_MAX_DAILY_ENTRIES = 4;
 const DAILY_STARTUP_MAX_SESSION_CAPTURES = 2;
+const PROMPT_DEBUG_PREVIEW_MAX_CHARS = 1_500;
 
 function selectRecentDailyStartupEntries(entries: Awaited<ReturnType<typeof queryPromptDailyEntries>>): typeof entries {
   const selected: typeof entries = [];
@@ -43,11 +44,18 @@ export function registerDailyPromptHook(params: {
   ctx: PluginRuntimeContext;
 }) {
   const { api, ctx } = params;
+  const debugPromptLogEnabled = ctx.cfg?.debug?.promptLogEnabled === true;
   const handler = async (event: any) => {
     if (ctx.disabledReason || !ctx.cfg) {
       return undefined;
     }
+    const messageCount = Array.isArray(event?.messages) ? event.messages.length : null;
     if (!Array.isArray(event?.messages) || event.messages.length > 0) {
+      if (debugPromptLogEnabled) {
+        api.logger.info(
+          `anchorclaw: daily startup prompt injection skipped (messages=${messageCount === null ? "non_array" : messageCount})`,
+        );
+      }
       return undefined;
     }
 
@@ -69,6 +77,9 @@ export function registerDailyPromptHook(params: {
       });
       const selectedEntries = selectRecentDailyStartupEntries(entries);
       if (selectedEntries.length === 0) {
+        if (debugPromptLogEnabled) {
+          api.logger.info("anchorclaw: daily startup prompt injection found no eligible entries");
+        }
         return undefined;
       }
 
@@ -82,7 +93,21 @@ export function registerDailyPromptHook(params: {
         maxSessionCaptures: DAILY_STARTUP_MAX_SESSION_CAPTURES,
       });
       if (lines.length === 0) {
+        if (debugPromptLogEnabled) {
+          api.logger.info("anchorclaw: daily startup prompt injection built an empty context block");
+        }
         return undefined;
+      }
+
+      if (debugPromptLogEnabled) {
+        const preview = lines.join("\n").slice(0, PROMPT_DEBUG_PREVIEW_MAX_CHARS);
+        const previewSuffix = preview.length < lines.join("\n").length ? "…" : "";
+        const selectedSummary = selectedEntries
+          .map((entry) => `${entry.sourceKind}:${entry.path}`)
+          .join(", ");
+        api.logger.info(
+          `anchorclaw: daily startup prompt injection applied (messages=0, selected=${selectedEntries.length}, entries=[${selectedSummary}], preview=${JSON.stringify(`${preview}${previewSuffix}`)})`,
+        );
       }
 
       return {

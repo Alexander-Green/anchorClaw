@@ -499,6 +499,7 @@ describe("phase2 session delta listener", () => {
 
   it("does not inject daily prompt context on continuation turns", async () => {
     parseCfg.mockReturnValue({
+      debug: { promptLogEnabled: true },
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
       identity: { externalId: "test" },
@@ -517,10 +518,14 @@ describe("phase2 session delta listener", () => {
     expect(result).toBeUndefined();
     expect(queryPromptDailyEntries).not.toHaveBeenCalled();
     expect(buildPromptDailySection).not.toHaveBeenCalled();
+    expect(api.logger.info).toHaveBeenCalledWith(
+      "anchorclaw: daily startup prompt injection skipped (messages=1)",
+    );
   });
 
   it("passes session-capture entries into a dedicated startup prompt section", async () => {
     parseCfg.mockReturnValue({
+      debug: { promptLogEnabled: true },
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
       identity: { externalId: "test" },
@@ -584,6 +589,18 @@ describe("phase2 session delta listener", () => {
         maxSessionCaptures: 2,
         maxDailyEntries: 4,
       }),
+    );
+    expect(api.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("anchorclaw: daily startup prompt injection applied"),
+    );
+    expect(api.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("session_memory:memory/2026-06-02-1819-a1b2c3d4-session-capture.md"),
+    );
+    expect(api.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("memory_log:memory/2026-06-02.md"),
+    );
+    expect(api.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("## Recent Session Captures"),
     );
   });
 

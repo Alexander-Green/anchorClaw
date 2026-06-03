@@ -1,5 +1,8 @@
 export type AnchorClawConfig = {
   workspaceDir: string;
+  debug?: {
+    promptLogEnabled?: boolean;
+  };
   sessions?: {
     search?: {
       enabled?: boolean;
@@ -181,8 +184,19 @@ export const anchorClawConfigSchema = {
     if (!obj) {
       throw new Error("anchorclaw config required");
     }
-    assertAllowedKeys(obj, ["workspaceDir", "sessions", "identity", "postgres", "maintenance", "limits"], "anchorclaw config");
+    assertAllowedKeys(obj, ["workspaceDir", "debug", "sessions", "identity", "postgres", "maintenance", "limits"], "anchorclaw config");
     const workspaceDir = readRequiredString(obj.workspaceDir, "workspaceDir");
+
+    const debugObj = asRecord(obj.debug);
+    if (obj.debug !== undefined && !debugObj) {
+      throw new Error("debug must be an object");
+    }
+    if (debugObj) {
+      assertAllowedKeys(debugObj, ["promptLogEnabled"], "debug");
+    }
+    const debugPromptLogEnabled = debugObj
+      ? readOptionalBoolean(debugObj.promptLogEnabled, "debug.promptLogEnabled")
+      : undefined;
 
     const sessionsObj = asRecord(obj.sessions);
     if (obj.sessions !== undefined && !sessionsObj) {
@@ -416,6 +430,13 @@ export const anchorClawConfigSchema = {
 
     return {
       workspaceDir,
+      ...(typeof debugPromptLogEnabled === "boolean"
+        ? {
+            debug: {
+              promptLogEnabled: debugPromptLogEnabled,
+            },
+          }
+        : {}),
       sessions: {
         search: {
           enabled: sessionsSearchEnabled ?? false,

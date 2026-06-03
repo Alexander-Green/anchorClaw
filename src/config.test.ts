@@ -77,6 +77,29 @@ describe("anchorClawConfigSchema workspaceDir", () => {
   });
 });
 
+describe("anchorClawConfigSchema debug", () => {
+  it("accepts debug.promptLogEnabled", () => {
+    const parsed = anchorClawConfigSchema.parse({
+      ...baseConfig(),
+      debug: {
+        promptLogEnabled: true,
+      },
+    });
+    expect(parsed.debug?.promptLogEnabled).toBe(true);
+  });
+
+  it("rejects non-boolean debug.promptLogEnabled", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        debug: {
+          promptLogEnabled: "yes" as any,
+        },
+      }),
+    ).toThrow("debug.promptLogEnabled must be a boolean");
+  });
+});
+
 describe("anchorClawConfigSchema sessions.visibility", () => {
   it("defaults to sessions.search.enabled=false and sessions.visibility=current when sessions block is omitted", () => {
     const parsed = anchorClawConfigSchema.parse(baseConfig());
