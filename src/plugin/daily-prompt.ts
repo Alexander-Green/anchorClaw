@@ -125,28 +125,15 @@ export function registerDailyPromptHook(params: {
     }
   };
 
-  const registerHookAny = (api as any).registerHook;
-  if (typeof registerHookAny !== "function") {
+  const onAny = (api as any).on;
+  if (typeof onAny !== "function") {
     return;
   }
 
-  // Host SDK compatibility: some builds require opts.name, while older builds
-  // accept registerHook(name, handler) without opts.
-  try {
-    registerHookAny("before_prompt_build", handler, {
-      name: "anchorclaw-daily-startup-injection",
-    });
-    if (debugPromptLogEnabled) {
-      api.logger.info("anchorclaw: daily startup prompt hook registered (named before_prompt_build)");
-    }
-    return;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    api.logger.debug?.(`anchorclaw: named hook registration failed, trying legacy signature (${message})`);
-  }
-
-  registerHookAny("before_prompt_build", handler);
+  onAny("before_prompt_build", handler, {
+    name: "anchorclaw-daily-startup-injection",
+  });
   if (debugPromptLogEnabled) {
-    api.logger.info("anchorclaw: daily startup prompt hook registered (legacy before_prompt_build)");
+    api.logger.info("anchorclaw: daily startup prompt hook registered (named before_prompt_build)");
   }
 }

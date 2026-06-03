@@ -27,21 +27,6 @@ export function registerAnchorClawSystemOverrideHook(params: {
     };
   };
 
-  const registerHookAny = (api as any).registerHook;
-  if (typeof registerHookAny === "function") {
-    try {
-      registerHookAny("before_prompt_build", handler, {
-        name: "anchorclaw-memory-system-override",
-      });
-      return;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      api.logger.debug?.(`anchorclaw: named system override hook registration failed, trying legacy signature (${message})`);
-    }
-    registerHookAny("before_prompt_build", handler);
-    return;
-  }
-
   const onAny = (api as any).on;
   if (typeof onAny === "function") {
     onAny("before_prompt_build", handler, {

@@ -410,13 +410,13 @@ describe("tool registration", () => {
 
     (plugin as any).register(api);
 
-    const calls = (api.registerHook as any).mock.calls;
+    const calls = (api.on as any).mock.calls;
     expect(calls.length).toBeGreaterThan(0);
     const hasDailyHook = calls.some(
       (call: any[]) =>
         call[0] === "before_prompt_build" &&
         typeof call[1] === "function" &&
-        (call[2] === undefined || call[2]?.name === "anchorclaw-daily-startup-injection"),
+        call[2]?.name === "anchorclaw-daily-startup-injection",
     );
     expect(hasDailyHook).toBe(true);
   });
@@ -426,7 +426,7 @@ describe("tool registration", () => {
 
     (plugin as any).register(api);
 
-    const call = (api.registerHook as any).mock.calls.find(
+    const call = (api.on as any).mock.calls.find(
       (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-memory-system-override",
     );
     const hook = call?.[1];
@@ -511,7 +511,7 @@ describe("phase2 session delta listener", () => {
       "anchorclaw: daily startup prompt hook registered (named before_prompt_build)",
     );
 
-    const call = (api.registerHook as any).mock.calls.find(
+    const call = (api.on as any).mock.calls.find(
       (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-daily-startup-injection",
     );
     const hook = call?.[1];
@@ -570,7 +570,7 @@ describe("phase2 session delta listener", () => {
       "anchorclaw: daily startup prompt hook registered (named before_prompt_build)",
     );
 
-    const call = (api.registerHook as any).mock.calls.find(
+    const call = (api.on as any).mock.calls.find(
       (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-daily-startup-injection",
     );
     const hook = call?.[1];
