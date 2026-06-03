@@ -52,6 +52,16 @@
       "help": "Stable identity key (max 20 chars). Recommended for Docker/production to avoid memory scope drift.",
       "advanced": true
     },
+    "debug": {
+      "label": "Debug",
+      "help": "Temporary diagnostic toggles for AnchorClaw runtime behavior.",
+      "advanced": true
+    },
+    "debug.promptLogEnabled": {
+      "label": "Prompt Log Enabled",
+      "help": "Log daily/session startup prompt injection decisions and a bounded preview of the injected AnchorClaw context.",
+      "advanced": true
+    },
     "postgres": {
       "label": "Postgres",
       "help": "Postgres connection settings for AnchorClaw memory storage"
@@ -165,6 +175,16 @@
       "workspaceDir": {
         "type": "string",
         "minLength": 1
+      },
+      "debug": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "promptLogEnabled": {
+            "type": "boolean",
+            "default": false
+          }
+        }
       },
       "sessions": {
         "type": "object",
