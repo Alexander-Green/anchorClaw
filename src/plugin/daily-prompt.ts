@@ -50,6 +50,11 @@ export function registerDailyPromptHook(params: {
       return undefined;
     }
     const messageCount = Array.isArray(event?.messages) ? event.messages.length : null;
+    if (debugPromptLogEnabled) {
+      api.logger.info(
+        `anchorclaw: daily startup prompt hook invoked (messages=${messageCount === null ? "non_array" : messageCount})`,
+      );
+    }
     if (!Array.isArray(event?.messages) || event.messages.length > 0) {
       if (debugPromptLogEnabled) {
         api.logger.info(
@@ -131,6 +136,9 @@ export function registerDailyPromptHook(params: {
     registerHookAny("before_prompt_build", handler, {
       name: "anchorclaw-daily-startup-injection",
     });
+    if (debugPromptLogEnabled) {
+      api.logger.info("anchorclaw: daily startup prompt hook registered (named before_prompt_build)");
+    }
     return;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -138,4 +146,7 @@ export function registerDailyPromptHook(params: {
   }
 
   registerHookAny("before_prompt_build", handler);
+  if (debugPromptLogEnabled) {
+    api.logger.info("anchorclaw: daily startup prompt hook registered (legacy before_prompt_build)");
+  }
 }

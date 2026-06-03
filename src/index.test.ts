@@ -507,6 +507,9 @@ describe("phase2 session delta listener", () => {
     });
     const { api } = buildApi();
     await registerAndWaitStartup(api);
+    expect(api.logger.info).toHaveBeenCalledWith(
+      "anchorclaw: daily startup prompt hook registered (named before_prompt_build)",
+    );
 
     const call = (api.registerHook as any).mock.calls.find(
       (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-daily-startup-injection",
@@ -518,6 +521,9 @@ describe("phase2 session delta listener", () => {
     expect(result).toBeUndefined();
     expect(queryPromptDailyEntries).not.toHaveBeenCalled();
     expect(buildPromptDailySection).not.toHaveBeenCalled();
+    expect(api.logger.info).toHaveBeenCalledWith(
+      "anchorclaw: daily startup prompt hook invoked (messages=1)",
+    );
     expect(api.logger.info).toHaveBeenCalledWith(
       "anchorclaw: daily startup prompt injection skipped (messages=1)",
     );
@@ -560,6 +566,9 @@ describe("phase2 session delta listener", () => {
     ]);
     const { api } = buildApi();
     await registerAndWaitStartup(api);
+    expect(api.logger.info).toHaveBeenCalledWith(
+      "anchorclaw: daily startup prompt hook registered (named before_prompt_build)",
+    );
 
     const call = (api.registerHook as any).mock.calls.find(
       (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-daily-startup-injection",
@@ -589,6 +598,9 @@ describe("phase2 session delta listener", () => {
         maxSessionCaptures: 2,
         maxDailyEntries: 4,
       }),
+    );
+    expect(api.logger.info).toHaveBeenCalledWith(
+      "anchorclaw: daily startup prompt hook invoked (messages=0)",
     );
     expect(api.logger.info).toHaveBeenCalledWith(
       expect.stringContaining("anchorclaw: daily startup prompt injection applied"),
