@@ -8,9 +8,16 @@
 
 **No more "the agent forgot everything again."**
 
+**This is not just another memory plugin. AnchorClaw is a full Postgres-backed
+memory backend for OpenClaw's durable and daily memory runtime.**
+
 AnchorClaw replaces fragile file-first OpenClaw memory with PostgreSQL as the
 source of truth, while keeping OpenClaw's existing tools, CLI flows, and
 `MEMORY.md` / `memory/YYYY-MM-DD.md` expectations compatible.
+
+It owns the real memory backend: storage, retrieval, import state, daily
+context, diagnostics, and compatibility views all point back to one durable
+database instead of a growing pile of Markdown files.
 
 The core bet is simple: durable memory should be durable first.
 
@@ -47,6 +54,8 @@ AnchorClaw starts lower in the stack:
 
 ## What AnchorClaw Gives You
 
+- **A full memory backend, not a wrapper around `MEMORY.md`**: storage,
+  retrieval, daily context, migration state, and diagnostics are DB-backed.
 - **Postgres-backed durable memory** for long-lived facts, preferences,
   decisions, project rules, and curated notes.
 - **OpenClaw compatibility** for `memory_store`, `memory_log`, `memory_search`,
@@ -71,6 +80,8 @@ AnchorClaw is especially useful if:
 - your OpenClaw agent remembers something for a while, then mysteriously loses
   it after reset, compaction, or workspace changes;
 - your `MEMORY.md` and daily files keep collecting duplicates and stale notes;
+- your `MEMORY.md` has become a maintenance burden: too large to search quickly,
+  too noisy to trust, and too painful to clean by hand;
 - you run OpenClaw in a production-like or always-on environment;
 - you have multiple users, workspaces, agents, or machines;
 - you want memory that can be backed up, migrated, queried, audited, and repaired
