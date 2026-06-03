@@ -120,9 +120,9 @@ describe("buildPromptMemorySection", () => {
           id: "s1",
           path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
           content: [
-            "old context 1",
-            "old context 2",
-            "old context 3",
+            "old context 1 ".repeat(8).trim(),
+            "old context 2 ".repeat(8).trim(),
+            "old context 3 ".repeat(8).trim(),
             "SESSION_MARKER_20260603_GAMMA",
             "ORDER_MARKER_20260603_DELTA",
             "assistant: acknowledged both markers",
@@ -135,7 +135,7 @@ describe("buildPromptMemorySection", () => {
       maxTotalChars: 1_400,
       maxPathChars: 80,
       maxEntryChars: 300,
-      maxSessionCaptureEntryChars: 110,
+      maxSessionCaptureEntryChars: 140,
       maxDailyEntries: 4,
       maxSessionCaptures: 2,
     });
@@ -147,5 +147,49 @@ describe("buildPromptMemorySection", () => {
     expect(text).toContain("ORDER_MARKER_20260603_DELTA");
     expect(text).toContain("assistant: acknowledged both markers");
     expect(text).not.toContain("old context 1");
+  });
+
+  it("fits a fresh session capture into the remaining startup budget after a large daily entry", () => {
+    const lines = buildPromptDailySection({
+      entries: [
+        {
+          id: "d1",
+          path: "memory/2026-06-03.md",
+          content: "daily context ".repeat(300),
+          sourceKind: "memory_log",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: "s1",
+          path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
+          content: [
+            "older recap 1",
+            "older recap 2",
+            "older recap 3",
+            "SESSION_MARKER_20260603_GAMMA",
+            "ORDER_MARKER_20260603_DELTA",
+            "assistant: acknowledged both markers",
+          ].join("\n"),
+          sourceKind: "session_memory",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      maxTotalChars: 2_050,
+      maxPathChars: 80,
+      maxEntryChars: 1_200,
+      maxSessionCaptureEntryChars: 1_200,
+      maxDailyEntries: 4,
+      maxSessionCaptures: 2,
+    });
+    const text = lines.join("\n");
+
+    expect(text.length).toBeLessThanOrEqual(2_050);
+    expect(text).toContain("[Untrusted daily memory: memory/2026-06-03.md]");
+    expect(text).toContain("[Untrusted daily memory: recent-session-capture-1]");
+    expect(text).toContain("SESSION_MARKER_20260603_GAMMA");
+    expect(text).toContain("ORDER_MARKER_20260603_DELTA");
+    expect(text).toContain("assistant: acknowledged both markers");
   });
 });

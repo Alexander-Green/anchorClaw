@@ -100,7 +100,15 @@ function trimStartupPromptContent(value: string, maxChars: number): string {
   if (trimmed.length <= maxChars) {
     return trimmed;
   }
-  return `${trimmed.slice(0, Math.max(0, maxChars))}\n...[truncated]...`;
+  if (maxChars <= 0) {
+    return "";
+  }
+  const marker = "\n...[truncated]...";
+  if (marker.length >= maxChars) {
+    return marker.slice(0, maxChars);
+  }
+  const headBudget = Math.max(0, maxChars - marker.length);
+  return `${trimmed.slice(0, headBudget)}${marker}`;
 }
 
 function trimStartupPromptContentFromTail(value: string, maxChars: number): string {
@@ -108,8 +116,18 @@ function trimStartupPromptContentFromTail(value: string, maxChars: number): stri
   if (trimmed.length <= maxChars) {
     return trimmed;
   }
-  const tail = trimmed.slice(Math.max(0, trimmed.length - maxChars));
-  return `...[earlier session capture truncated]...\n${tail}`;
+  if (maxChars <= 0) {
+    return "";
+  }
+  const marker = "...[earlier session capture truncated]...\n";
+  if (marker.length >= maxChars) {
+    return marker.slice(0, maxChars);
+  }
+  const tailBudget = Math.max(0, maxChars - marker.length);
+  const rawTail = trimmed.slice(Math.max(0, trimmed.length - tailBudget));
+  const newlineIndex = rawTail.indexOf("\n");
+  const tail = newlineIndex >= 0 ? rawTail.slice(newlineIndex + 1) : rawTail;
+  return `${marker}${tail}`;
 }
 
 function sanitizePromptLabel(value: string): string {
@@ -311,34 +329,56 @@ export function buildPromptDailySection(params: {
       continue;
     }
 
-    const body = isSessionCapture
-      ? trimStartupPromptContentFromTail(entry.content, maxSessionCaptureEntryChars)
-      : trimStartupPromptContent(entry.content, params.maxEntryChars);
     const label = isSessionCapture
       ? `recent-session-capture-${renderedSessionCaptures + 1}`
       : truncate(entry.path.trim(), params.maxPathChars);
     const safeLabel = sanitizePromptLabel(label);
-    const block = [
-      `[Untrusted daily memory: ${safeLabel}]`,
-      "BEGIN_QUOTED_NOTES",
-      "```text",
-      body,
-      "```",
-      "END_QUOTED_NOTES",
-      "",
-    ].join("\n");
-    if (used + block.length > params.maxTotalChars) {
-      break;
+
+    const renderBlock = (bodyChars: number) => {
+      const nextBody = isSessionCapture
+        ? trimStartupPromptContentFromTail(entry.content, bodyChars)
+        : trimStartupPromptContent(entry.content, bodyChars);
+      const blockLines = [
+        `[Untrusted daily memory: ${safeLabel}]`,
+        "BEGIN_QUOTED_NOTES",
+        "```text",
+        nextBody,
+        "```",
+        "END_QUOTED_NOTES",
+        "",
+      ];
+      return {
+        blockLines,
+        block: blockLines.join("\n"),
+      };
+    };
+
+    let rendered = renderBlock(isSessionCapture ? maxSessionCaptureEntryChars : params.maxEntryChars);
+    if (used + rendered.block.length > params.maxTotalChars) {
+      const remainingBudget = params.maxTotalChars - used;
+      let low = 1;
+      let high = isSessionCapture ? maxSessionCaptureEntryChars : params.maxEntryChars;
+      let bestFit: ReturnType<typeof renderBlock> | null = null;
+
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        const candidate = renderBlock(mid);
+        if (candidate.block.length <= remainingBudget) {
+          bestFit = candidate;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+
+      if (!bestFit) {
+        break;
+      }
+      rendered = bestFit;
     }
 
-    lines.push(`[Untrusted daily memory: ${safeLabel}]`);
-    lines.push("BEGIN_QUOTED_NOTES");
-    lines.push("```text");
-    lines.push(body);
-    lines.push("```");
-    lines.push("END_QUOTED_NOTES");
-    lines.push("");
-    used += block.length;
+    lines.push(...rendered.blockLines);
+    used += rendered.block.length;
 
     if (isSessionCapture) {
       renderedSessionCaptures += 1;
