@@ -9,6 +9,7 @@ import { extractMaintenanceCandidates } from "./extractor.js";
 
 const SOURCE_KIND = "daily_entries";
 const DAILY_WINDOW_HEADER_RESERVE = 128;
+const EXTRACTOR_ALLOWED_DAILY_SOURCE_KINDS = ["memory_log", "legacy_import"] as const;
 
 type ExistingContentRow = { content: string };
 
@@ -18,6 +19,7 @@ type DailyEntryRow = {
   logical_date: string;
   content: string;
   content_sha256: string;
+  source_kind: string;
   updated_at: string;
 };
 
@@ -359,14 +361,20 @@ export async function runMaintenanceCycle(params: {
 
     const dailyRows = await params.pool.query<DailyEntryRow>(
       `
-      SELECT id, path, logical_date::text AS logical_date, content, content_sha256, updated_at
+      SELECT id, path, logical_date::text AS logical_date, content, content_sha256, source_kind, updated_at
       FROM memory_daily_entries
       WHERE user_id = $1
         AND workspace_id = $2
+        AND source_kind = ANY($3::text[])
       ORDER BY logical_date ASC, updated_at ASC, id ASC
-      LIMIT $3
+      LIMIT $4
       `,
-      [scope.userId, scope.workspaceId, Math.max(1, params.batchSize)],
+      [
+        scope.userId,
+        scope.workspaceId,
+        EXTRACTOR_ALLOWED_DAILY_SOURCE_KINDS,
+        Math.max(1, params.batchSize),
+      ],
     );
 
     const maxChars = params.cfg.maintenance?.extractor?.maxCharsPerRun ?? 12_000;

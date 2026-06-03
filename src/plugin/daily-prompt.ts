@@ -10,6 +10,9 @@ const DAILY_STARTUP_MAX_DAYS = 2;
 const DAILY_STARTUP_MAX_TOTAL_CHARS = 2_800;
 const DAILY_STARTUP_MAX_PATH_CHARS = 80;
 const DAILY_STARTUP_MAX_ENTRY_CHARS = 1_200;
+const DAILY_STARTUP_MAX_SESSION_CAPTURE_ENTRY_CHARS = 700;
+const DAILY_STARTUP_MAX_DAILY_ENTRIES = 4;
+const DAILY_STARTUP_MAX_SESSION_CAPTURES = 2;
 
 function selectRecentDailyStartupEntries(entries: Awaited<ReturnType<typeof queryPromptDailyEntries>>): typeof entries {
   const selected: typeof entries = [];
@@ -74,6 +77,9 @@ export function registerDailyPromptHook(params: {
         maxTotalChars: DAILY_STARTUP_MAX_TOTAL_CHARS,
         maxPathChars: DAILY_STARTUP_MAX_PATH_CHARS,
         maxEntryChars: DAILY_STARTUP_MAX_ENTRY_CHARS,
+        maxSessionCaptureEntryChars: DAILY_STARTUP_MAX_SESSION_CAPTURE_ENTRY_CHARS,
+        maxDailyEntries: DAILY_STARTUP_MAX_DAILY_ENTRIES,
+        maxSessionCaptures: DAILY_STARTUP_MAX_SESSION_CAPTURES,
       });
       if (lines.length === 0) {
         return undefined;

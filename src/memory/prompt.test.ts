@@ -73,4 +73,41 @@ describe("buildPromptMemorySection", () => {
     expect(text).toContain("memory/2026-05-20.md");
     expect(text.length).toBeLessThanOrEqual(900);
   });
+
+  it("separates session captures from ordinary daily notes", () => {
+    const lines = buildPromptDailySection({
+      entries: [
+        {
+          id: "d1",
+          path: "memory/2026-06-03.md",
+          content: "today note",
+          sourceKind: "memory_log",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: "s1",
+          path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
+          content: "assistant: long recap ".repeat(80),
+          sourceKind: "session_memory",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      maxTotalChars: 1_400,
+      maxPathChars: 80,
+      maxEntryChars: 300,
+      maxSessionCaptureEntryChars: 120,
+      maxDailyEntries: 4,
+      maxSessionCaptures: 2,
+    });
+    const text = lines.join("\n");
+
+    expect(text).toContain("## Daily Memory (AnchorClaw/Postgres)");
+    expect(text).toContain("memory/2026-06-03.md");
+    expect(text).toContain("## Recent Session Captures");
+    expect(text).toContain("prior-session context only");
+    expect(text).toContain("memory/2026-06-03-0915-a1b2c3d4-session-capture.md");
+    expect(text).not.toContain("assistant: long recap ".repeat(20));
+  });
 });

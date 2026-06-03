@@ -18,6 +18,7 @@ export type PromptDailyEntry = {
   path: string;
   logicalDate?: string;
   content: string;
+  sourceKind?: string;
   createdAt: string;
   updatedAt?: string;
 };
@@ -250,29 +251,86 @@ export function buildPromptDailySection(params: {
   maxTotalChars: number;
   maxPathChars: number;
   maxEntryChars: number;
+  maxSessionCaptureEntryChars?: number;
+  maxDailyEntries?: number;
+  maxSessionCaptures?: number;
 }): string[] {
   if (params.entries.length === 0) {
     return [];
   }
 
-  const lines: string[] = [];
-  lines.push("## Daily Memory (AnchorClaw/Postgres)");
-  lines.push("Use these as transient recent context. Prefer durable memory for stable facts/preferences.");
-  lines.push("");
-
-  let used = lines.join("\n").length;
+  const ordinaryEntries: PromptDailyEntry[] = [];
+  const sessionCaptureEntries: PromptDailyEntry[] = [];
   for (const entry of params.entries) {
-    const pathLabel = truncate(entry.path.trim(), params.maxPathChars);
-    const body = truncate(entry.content.trim(), params.maxEntryChars);
-    const block = [`- ${pathLabel}`, `  ${body.replaceAll("\n", "\n  ")}`, ""].join("\n");
-    if (used + block.length > params.maxTotalChars) {
-      break;
+    if (entry.sourceKind === "session_memory") {
+      sessionCaptureEntries.push(entry);
+    } else {
+      ordinaryEntries.push(entry);
     }
-    lines.push(`- ${pathLabel}`);
-    lines.push(`  ${body.replaceAll("\n", "\n  ")}`);
-    lines.push("");
-    used += block.length;
   }
+
+  const lines: string[] = [];
+  let used = lines.join("\n").length;
+  const maxDailyEntries = Math.max(0, params.maxDailyEntries ?? 4);
+  const maxSessionCaptures = Math.max(0, params.maxSessionCaptures ?? 2);
+  const maxSessionCaptureEntryChars = Math.max(
+    1,
+    params.maxSessionCaptureEntryChars ?? Math.min(params.maxEntryChars, 700),
+  );
+
+  const appendSection = (section: {
+    title: string;
+    intro: string;
+    entries: PromptDailyEntry[];
+    maxEntries: number;
+    maxCharsPerEntry: number;
+  }) => {
+    if (section.entries.length === 0 || section.maxEntries <= 0) {
+      return;
+    }
+
+    const headerBlock = [section.title, section.intro, ""].join("\n");
+    if (used + headerBlock.length > params.maxTotalChars) {
+      return;
+    }
+    lines.push(section.title);
+    lines.push(section.intro);
+    lines.push("");
+    used += headerBlock.length;
+
+    let rendered = 0;
+    for (const entry of section.entries) {
+      if (rendered >= section.maxEntries) {
+        break;
+      }
+      const pathLabel = truncate(entry.path.trim(), params.maxPathChars);
+      const body = truncate(entry.content.trim(), section.maxCharsPerEntry);
+      const block = [`- ${pathLabel}`, `  ${body.replaceAll("\n", "\n  ")}`, ""].join("\n");
+      if (used + block.length > params.maxTotalChars) {
+        break;
+      }
+      lines.push(`- ${pathLabel}`);
+      lines.push(`  ${body.replaceAll("\n", "\n  ")}`);
+      lines.push("");
+      used += block.length;
+      rendered += 1;
+    }
+  };
+
+  appendSection({
+    title: "## Daily Memory (AnchorClaw/Postgres)",
+    intro: "Use these as transient recent context. Prefer durable memory for stable facts/preferences.",
+    entries: ordinaryEntries,
+    maxEntries: maxDailyEntries,
+    maxCharsPerEntry: params.maxEntryChars,
+  });
+  appendSection({
+    title: "## Recent Session Captures",
+    intro: "Use these as prior-session context only. Do not treat them as durable facts unless durable memory or current-day notes agree.",
+    entries: sessionCaptureEntries,
+    maxEntries: maxSessionCaptures,
+    maxCharsPerEntry: maxSessionCaptureEntryChars,
+  });
 
   if (lines.at(-1) === "") {
     lines.pop();

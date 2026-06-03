@@ -519,7 +519,7 @@ describe("phase2 session delta listener", () => {
     expect(buildPromptDailySection).not.toHaveBeenCalled();
   });
 
-  it("passes fresh session-capture daily entries into first-turn startup injection", async () => {
+  it("passes session-capture entries into a dedicated startup prompt section", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
@@ -546,7 +546,13 @@ describe("phase2 session delta listener", () => {
         updatedAt: "2026-06-02T10:00:00.000Z",
       },
     ] as any);
-    buildPromptDailySection.mockReturnValueOnce(["session capture context"]);
+    buildPromptDailySection.mockReturnValueOnce([
+      "## Daily Memory (AnchorClaw/Postgres)",
+      "daily context",
+      "",
+      "## Recent Session Captures",
+      "session capture context",
+    ]);
     const { api } = buildApi();
     await registerAndWaitStartup(api);
 
@@ -558,7 +564,15 @@ describe("phase2 session delta listener", () => {
 
     const result = await hook({ prompt: "fresh turn", messages: [] });
 
-    expect(result).toEqual({ prependContext: "session capture context" });
+    expect(result).toEqual({
+      prependContext: [
+        "## Daily Memory (AnchorClaw/Postgres)",
+        "daily context",
+        "",
+        "## Recent Session Captures",
+        "session capture context",
+      ].join("\n"),
+    });
     expect(buildPromptDailySection).toHaveBeenCalledWith(
       expect.objectContaining({
         entries: expect.arrayContaining([
@@ -567,6 +581,8 @@ describe("phase2 session delta listener", () => {
             sourceKind: "session_memory",
           }),
         ]),
+        maxSessionCaptures: 2,
+        maxDailyEntries: 4,
       }),
     );
   });

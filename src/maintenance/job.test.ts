@@ -42,6 +42,7 @@ function buildDailyRow(params: {
   logicalDate?: string;
   contentSha?: string;
   updatedAt?: string;
+  sourceKind?: string;
   content: string;
 }) {
   return {
@@ -50,6 +51,7 @@ function buildDailyRow(params: {
     logical_date: params.logicalDate ?? "2026-05-20",
     content: params.content,
     content_sha256: params.contentSha ?? "sha-1",
+    source_kind: params.sourceKind ?? "memory_log",
     updated_at: params.updatedAt ?? "2026-05-20T00:00:00.000Z",
   };
 }
@@ -220,6 +222,68 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(
       queries.some((sql) => sql.includes("regexp_replace(content, '\\s+', ' ', 'g')")),
     ).toBe(true);
+  });
+
+  it("filters extractor source rows to memory_log and legacy_import only", async () => {
+    extractMaintenanceCandidates.mockResolvedValue({
+      summary: "summary",
+      candidates: [],
+    });
+
+    const queryCalls: Array<{ sql: string; values?: unknown[] }> = [];
+    const pool = {
+      query: vi.fn(async (sql: string, values?: unknown[]) => {
+        queryCalls.push({ sql, values });
+        if (sql.includes("INSERT INTO memory_maintenance_runs")) {
+          return { rows: [{ id: "run-policy" }], rowCount: 1 };
+        }
+        if (sql.includes("FROM memory_daily_entries")) {
+          return {
+            rows: [
+              buildDailyRow({
+                id: "11111111-1111-1111-1111-111111111111",
+                path: "memory/2026-06-01.md",
+                sourceKind: "legacy_import",
+                content: "remember this imported project rule for future work",
+              }),
+              buildDailyRow({
+                id: "22222222-2222-2222-2222-222222222222",
+                path: "memory/2026-06-02.md",
+                sourceKind: "memory_log",
+                content: "remember this current daily preference for future turns",
+              }),
+            ],
+            rowCount: 2,
+          };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 2 };
+        }
+        if (sql.includes("UPDATE memory_maintenance_runs")) {
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    } as any;
+
+    const result = await runMaintenanceCycle({
+      api: buildApi(),
+      cfg: buildCfg(),
+      pool,
+      workspaceDir: "/workspace",
+      dryRun: false,
+      batchSize: 100,
+    });
+
+    expect(result.status).toBe("completed");
+    const dailyQuery = queryCalls.find((call) => call.sql.includes("FROM memory_daily_entries"));
+    expect(dailyQuery?.values?.[2]).toEqual(["memory_log", "legacy_import"]);
+    expect(extractMaintenanceCandidates).toHaveBeenCalledTimes(1);
+    expect(extractMaintenanceCandidates.mock.calls[0]?.[0]?.transcript).toContain("imported project rule");
+    expect(extractMaintenanceCandidates.mock.calls[0]?.[0]?.transcript).toContain("current daily preference");
   });
 
   it("fails without marking processed windows when a candidate store fails", async () => {
