@@ -57,11 +57,30 @@ describe("createMaintenanceRuntime", () => {
     });
   });
 
-  it("skips non-dry-run maintenance until durable memory is ready", async () => {
+  it("defers the first non-dry-run maintenance cycle until startup triggers it", async () => {
     const api = buildApi();
     const ctx = buildCtx("pending");
 
     const runtime = createMaintenanceRuntime({ api, ctx });
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.cleanupMaintenance();
+
+    expect(runMaintenanceCycle).not.toHaveBeenCalled();
+    expect(api.logger.warn).not.toHaveBeenCalledWith(
+      "anchorclaw: maintenance skipped until durable memory is ready (overall=pending)",
+    );
+  });
+
+  it("keeps the pending guard as a fallback when startup triggers too early", async () => {
+    const api = buildApi();
+    const ctx = buildCtx("pending");
+
+    const runtime = createMaintenanceRuntime({ api, ctx });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    runtime.triggerMaintenanceNow();
     await Promise.resolve();
     await Promise.resolve();
     runtime.cleanupMaintenance();
@@ -98,6 +117,9 @@ describe("createMaintenanceRuntime", () => {
     const ctx = buildCtx("ready");
 
     const runtime = createMaintenanceRuntime({ api, ctx });
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.triggerMaintenanceNow();
     await Promise.resolve();
     await Promise.resolve();
     runtime.cleanupMaintenance();

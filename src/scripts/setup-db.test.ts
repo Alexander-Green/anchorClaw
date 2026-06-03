@@ -13,6 +13,7 @@ const pgState = vi.hoisted(() => ({
     queries: Array<{ text: string; values?: unknown[] }>;
   }>,
   tableRows: [] as Array<{ table_name: string }>,
+  tableOwnerRows: [] as Array<{ table_name: string; table_owner: string }>,
   dbExists: false,
   userExists: false,
 }));
@@ -44,6 +45,9 @@ vi.mock("pg", () => {
       if (text.includes("FROM information_schema.tables")) {
         return { rowCount: pgState.tableRows.length, rows: pgState.tableRows };
       }
+      if (text.includes("FROM pg_tables")) {
+        return { rowCount: pgState.tableOwnerRows.length, rows: pgState.tableOwnerRows };
+      }
       return { rowCount: 0, rows: [] };
     }
 
@@ -71,6 +75,7 @@ describe("runAnchorClawSetup", () => {
     readlineState.answers = [];
     pgState.clients = [];
     pgState.tableRows = [];
+    pgState.tableOwnerRows = [];
     pgState.dbExists = false;
     pgState.userExists = false;
     consoleLogSpy.mockClear();
@@ -125,6 +130,28 @@ describe("runAnchorClawSetup", () => {
         schema: "memory",
       }),
     ).rejects.toThrow(/Refusing to proceed/);
+  });
+
+  it("fails fast when managed schema tables are owned by another role", async () => {
+    pgState.dbExists = true;
+    pgState.userExists = true;
+    pgState.tableRows = [{ table_name: "schema_migrations" }];
+    pgState.tableOwnerRows = [
+      { table_name: "memory_items", table_owner: "anchorclaw_phase4_smoke" },
+      { table_name: "memory_audit_log", table_owner: "anchorclaw_phase4_smoke" },
+    ];
+
+    await expect(
+      runAnchorClawSetup({
+        nonInteractive: true,
+        skipConfig: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "openclaw",
+        dbPassword: "secret",
+        schema: "memory",
+      }),
+    ).rejects.toThrow(/contains existing tables owned by another role/);
   });
 
   it("applies database/schema ownership and create grants for runtime user", async () => {

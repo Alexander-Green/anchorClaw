@@ -366,7 +366,7 @@ function buildTargetConnectionUrl(adminUrl: string, dbName: string): string {
 async function detectUnsafeSchemaConflict(params: {
   client: Client;
   schema: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const rows = await params.client.query<{
     table_name: string;
   }>(
@@ -380,13 +380,49 @@ AND table_name IN ('memory_items', 'session_index_files', 'session_index_chunks'
   );
   const tableNames = new Set(rows.rows.map((row) => row.table_name));
   if (tableNames.size === 0) {
-    return;
+    return false;
   }
   if (tableNames.has("schema_migrations")) {
-    return;
+    return true;
   }
   throw new Error(
     `Refusing to proceed: schema "${params.schema}" has AnchorClaw-like table names but no schema_migrations. Use a different schema.`,
+  );
+}
+
+async function detectManagedSchemaOwnerMismatch(params: {
+  client: Client;
+  schema: string;
+  dbUser: string;
+}): Promise<void> {
+  const rows = await params.client.query<{
+    table_name: string;
+    table_owner: string;
+  }>(
+    `
+SELECT tablename AS table_name, tableowner AS table_owner
+FROM pg_tables
+WHERE schemaname = $1
+  AND tableowner <> $2
+ORDER BY tablename
+`,
+    [params.schema, params.dbUser],
+  );
+  if (rows.rowCount === 0) {
+    return;
+  }
+
+  const byOwner = new Map<string, string[]>();
+  for (const row of rows.rows) {
+    const names = byOwner.get(row.table_owner) ?? [];
+    names.push(row.table_name);
+    byOwner.set(row.table_owner, names);
+  }
+  const summary = Array.from(byOwner.entries())
+    .map(([owner, tableNames]) => `${owner}: ${tableNames.join(", ")}`)
+    .join("; ");
+  throw new Error(
+    `Refusing to proceed: managed schema "${params.schema}" contains existing tables owned by another role (${summary}). Re-run setup with the original dbUser or migrate ownership manually.`,
   );
 }
 
@@ -403,7 +439,10 @@ async function ensureSchemaAndGrants(params: {
     if (!params.schema) {
       return;
     }
-    await detectUnsafeSchemaConflict({ client, schema: params.schema });
+    const hasManagedSchema = await detectUnsafeSchemaConflict({ client, schema: params.schema });
+    if (hasManagedSchema) {
+      await detectManagedSchemaOwnerMismatch({ client, schema: params.schema, dbUser: params.dbUser });
+    }
     await client.query(
       `CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(params.schema)} AUTHORIZATION ${quoteIdentifier(params.dbUser)}`,
     );

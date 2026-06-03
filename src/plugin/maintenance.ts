@@ -17,6 +17,7 @@ export function createMaintenanceRuntime(params: {
   let stopped = false;
   let inFlight: Promise<void> | null = null;
   let waitingForDurableReady = false;
+  let initialRunDeferred = false;
 
   function cleanupMaintenance() {
     stopped = true;
@@ -86,7 +87,11 @@ export function createMaintenanceRuntime(params: {
     }
     const intervalMinutes = jobCfg.intervalMinutes ?? 12 * 60;
     const intervalMs = intervalMinutes * 60_000;
-    void runOnce(jobCfg);
+    const dryRun = jobCfg.dryRun ?? true;
+    initialRunDeferred = !dryRun;
+    if (dryRun) {
+      void runOnce(jobCfg);
+    }
     timer = setInterval(() => {
       void runOnce(jobCfg);
     }, intervalMs);
@@ -102,9 +107,13 @@ export function createMaintenanceRuntime(params: {
   return {
     cleanupMaintenance,
     triggerMaintenanceNow: () => {
-      if (!ctx.cfg?.maintenance?.enabled || !waitingForDurableReady) {
+      if (!ctx.cfg?.maintenance?.enabled) {
         return;
       }
+      if (!initialRunDeferred && !waitingForDurableReady) {
+        return;
+      }
+      initialRunDeferred = false;
       void runOnce(ctx.cfg.maintenance);
     },
   };
