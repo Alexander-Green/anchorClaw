@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolveScopeMock, readdirMock, readFileMock, unlinkMock } = vi.hoisted(() => ({
@@ -136,7 +137,13 @@ describe("flush inbox", () => {
       ]),
     );
     expect(unlinkMock).toHaveBeenCalledWith(
-      "/tmp/work/.anchorclaw/flush-inbox/2026-06-02/flush-2026-06-02T10-11-12-345Z.md",
+      path.join(
+        "/tmp/work",
+        ".anchorclaw",
+        "flush-inbox",
+        "2026-06-02",
+        "flush-2026-06-02T10-11-12-345Z.md",
+      ),
     );
   });
 });

@@ -24,6 +24,10 @@ vi.mock("./identity.js", () => ({
 
 import { runLegacyWorkspaceImport, runOneTimeWorkspaceImport, scanLegacyWorkspace } from "./importer.js";
 
+function toPosixPath(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
 function createApi() {
   return {
     logger: {
@@ -344,10 +348,11 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
 
   it("archives a same-sha daily file that reappears without reinserting DB rows", async () => {
     readFile.mockImplementation(async (targetPath: string) => {
-      if (targetPath.endsWith("/MEMORY.md")) {
+      const normalizedPath = toPosixPath(targetPath);
+      if (normalizedPath.endsWith("/MEMORY.md")) {
         throw new Error("missing");
       }
-      if (targetPath.endsWith("/memory/2026-06-01.md")) {
+      if (normalizedPath.endsWith("/memory/2026-06-01.md")) {
         return "same daily content";
       }
       throw new Error(`unexpected path: ${targetPath}`);
@@ -390,10 +395,11 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
 
   it("reimports and archives a changed daily file when it reappears with a new sha", async () => {
     readFile.mockImplementation(async (targetPath: string) => {
-      if (targetPath.endsWith("/MEMORY.md")) {
+      const normalizedPath = toPosixPath(targetPath);
+      if (normalizedPath.endsWith("/MEMORY.md")) {
         throw new Error("missing");
       }
-      if (targetPath.endsWith("/memory/2026-06-01.md")) {
+      if (normalizedPath.endsWith("/memory/2026-06-01.md")) {
         return "updated daily content";
       }
       throw new Error(`unexpected path: ${targetPath}`);
@@ -443,13 +449,14 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
 
   it("keeps legacy scan alive when one daily file is unreadable", async () => {
     readFile.mockImplementation(async (targetPath: string) => {
-      if (targetPath.endsWith("/MEMORY.md")) {
+      const normalizedPath = toPosixPath(targetPath);
+      if (normalizedPath.endsWith("/MEMORY.md")) {
         throw new Error("missing");
       }
-      if (targetPath.endsWith("/memory/2026-06-01.md")) {
+      if (normalizedPath.endsWith("/memory/2026-06-01.md")) {
         return "daily content";
       }
-      if (targetPath.endsWith("/memory/2026-06-02.md")) {
+      if (normalizedPath.endsWith("/memory/2026-06-02.md")) {
         throw new Error("EACCES");
       }
       throw new Error(`unexpected path: ${targetPath}`);

@@ -95,6 +95,7 @@ export function createMaintenanceRuntime(params: {
     timer = setInterval(() => {
       void runOnce(jobCfg);
     }, intervalMs);
+    timer.unref?.();
     api.logger.info(
       `anchorclaw: maintenance scheduler started (intervalMinutes=${intervalMinutes}, dryRun=${jobCfg.dryRun ?? true})`,
     );

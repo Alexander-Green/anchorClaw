@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -355,7 +356,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     expect(memoryGetFromDb).toHaveBeenCalledWith(
       expect.objectContaining({
         lookup: "memory/2026-05-20.md",
-        workspaceDir: "/workspace",
+        workspaceDir: path.resolve("/workspace"),
       }),
     );
   });

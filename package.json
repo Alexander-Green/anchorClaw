@@ -1,6 +1,6 @@
 {
   "name": "@alexandrgreen/anchorclaw",
-  "version": "0.0.6",
+  "version": "0.0.8-hotfix-cli.0",
   "description": "OpenClaw Postgres-backed long-term memory plugin",
   "author": "Alexander Green",
   "license": "MIT",
@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Alexander-Green/anchorClaw"
+    "url": "git+https://github.com/Alexander-Green/anchorClaw.git"
   },
   "type": "module",
   "files": [
@@ -20,6 +20,9 @@
     "openclaw.plugin.json",
     "NOTICE",
     "README.md",
+    "INSTALL.md",
+    "ARCHITECTURE.md",
+    "docs/integrations/",
     "package.json"
   ],
   "scripts": {

@@ -72,6 +72,29 @@ describe("createMaintenanceRuntime", () => {
     );
   });
 
+  it("does not keep short-lived CLI commands alive with the scheduler interval", () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    const unref = vi.fn();
+    const interval = { unref };
+    (globalThis as any).setInterval = vi.fn(() => interval);
+    (globalThis as any).clearInterval = vi.fn();
+
+    try {
+      const api = buildApi();
+      const ctx = buildCtx("pending");
+
+      const runtime = createMaintenanceRuntime({ api, ctx });
+      runtime.cleanupMaintenance();
+
+      expect(unref).toHaveBeenCalledTimes(1);
+      expect(globalThis.clearInterval).toHaveBeenCalledWith(interval);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
   it("keeps the pending guard as a fallback when startup triggers too early", async () => {
     const api = buildApi();
     const ctx = buildCtx("pending");

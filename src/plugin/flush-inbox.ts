@@ -9,7 +9,7 @@ import { resolveDailyLogicalDate } from "../memory/daily.js";
 import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 
-const FLUSH_INBOX_ROOT = path.join(".anchorclaw", "flush-inbox");
+const FLUSH_INBOX_ROOT = ".anchorclaw/flush-inbox";
 const FLUSH_INBOX_SOURCE_TYPE = "flush-inbox";
 
 type FlushInboxDrainStats = {
@@ -261,7 +261,7 @@ export async function drainFlushInbox(params: {
     return { scannedFiles: 0, importedFiles: 0, skippedImportedFiles: 0 };
   }
   const workspaceDir = params.workspaceDir ?? requireConfiguredWorkspaceDir(params.ctx.cfg);
-  const inboxRootAbs = path.join(workspaceDir, FLUSH_INBOX_ROOT);
+  const inboxRootAbs = path.join(workspaceDir, ...FLUSH_INBOX_ROOT.split("/"));
   let files: Array<{ absPath: string; relPath: string }> = [];
   try {
     files = await walkFlushInboxFiles(inboxRootAbs, FLUSH_INBOX_ROOT);
