@@ -1,9 +1,9 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { memoryStoreDb } from "../../memory/store.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
+import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
 
-export function registerMemoryStoreTool({ ctx, refreshPromptCache }: ToolRegistrationParams) {
+export function registerMemoryStoreTool({ ctx, refreshPromptCache, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
   api.registerTool({
     name: "memory_store",
@@ -33,7 +33,7 @@ export function registerMemoryStoreTool({ ctx, refreshPromptCache }: ToolRegistr
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      const unavailable = getToolUnavailableResponse(ctx);
+      const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
       const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);

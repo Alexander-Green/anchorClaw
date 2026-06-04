@@ -1,7 +1,7 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { appendDailyEntryDb, resolveDailyLogicalDate } from "../../memory/daily.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
+import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
 
 function resolveRuntimeTimezone(api: any): string | undefined {
   const currentConfig =
@@ -10,7 +10,7 @@ function resolveRuntimeTimezone(api: any): string | undefined {
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
-export function registerMemoryLogTool({ ctx }: ToolRegistrationParams) {
+export function registerMemoryLogTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
   api.registerTool({
     name: "memory_log",
@@ -37,7 +37,7 @@ export function registerMemoryLogTool({ ctx }: ToolRegistrationParams) {
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      const unavailable = getToolUnavailableResponse(ctx);
+      const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
       const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);

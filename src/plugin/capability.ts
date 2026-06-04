@@ -11,8 +11,9 @@ export function registerAnchorClawMemoryCapability(params: {
   ctx: PluginRuntimeContext;
   refreshPromptCache: (options?: { force?: boolean }) => Promise<void>;
   ensureSessionsIndexBootstrapped: () => Promise<void>;
+  ensureStartupBootstrap?: () => Promise<void>;
 }) {
-  const { ctx, refreshPromptCache, ensureSessionsIndexBootstrapped } = params;
+  const { ctx, refreshPromptCache, ensureSessionsIndexBootstrapped, ensureStartupBootstrap } = params;
   const api = ctx.api;
   const timezone =
     typeof api?.runtime?.config?.current === "function"
@@ -34,7 +35,9 @@ export function registerAnchorClawMemoryCapability(params: {
         reason: null,
       };
 
-      if (!ctx.promptCache.lines && !ctx.promptCache.error) {
+      if (durableState.overall === "pending" && typeof ensureStartupBootstrap === "function") {
+        void ensureStartupBootstrap();
+      } else if (!ctx.promptCache.lines && !ctx.promptCache.error) {
         void refreshPromptCache();
       }
       const cached = ctx.promptCache.lines ?? [];

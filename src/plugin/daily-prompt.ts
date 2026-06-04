@@ -29,8 +29,9 @@ function resolveRuntimeTimezone(api: OpenClawPluginApi): string | undefined {
 export function registerDailyPromptHook(params: {
   api: OpenClawPluginApi;
   ctx: PluginRuntimeContext;
+  ensureStartupBootstrap?: () => Promise<void>;
 }) {
-  const { api, ctx } = params;
+  const { api, ctx, ensureStartupBootstrap } = params;
   const debugPromptLogEnabled = ctx.cfg?.debug?.promptLogEnabled === true;
   const handler = async (event: any) => {
     if (ctx.disabledReason || !ctx.cfg) {
@@ -52,7 +53,11 @@ export function registerDailyPromptHook(params: {
     }
 
     try {
-      await ctx.ensureReady();
+      if (ctx.durableState?.overall === "pending" && typeof ensureStartupBootstrap === "function") {
+        await ensureStartupBootstrap();
+      } else {
+        await ctx.ensureReady();
+      }
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: ctx.getPool(),

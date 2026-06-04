@@ -76,4 +76,33 @@ describe("memory_store visible output", () => {
     });
     expect(refreshPromptCache).toHaveBeenCalledWith({ force: true });
   });
+
+  it("waits for lazy startup bootstrap when durable state is still pending", async () => {
+    (memoryStoreDbMock as any).mockResolvedValueOnce({
+      ok: true,
+      id: "22222222-2222-2222-2222-222222222222",
+      path: "db-memory/items/22222222-2222-2222-2222-222222222222.md",
+      canonicalKey: null,
+      type: "note",
+    });
+    const { ctx, registerTool } = buildCtx();
+    ctx.durableState = { overall: "pending", reason: null };
+    const ensureStartupBootstrap = vi.fn(async () => {
+      ctx.durableState = { overall: "ready", reason: null };
+    });
+    registerMemoryStoreTool({
+      ctx,
+      refreshPromptCache: vi.fn(async () => undefined),
+      ensureStartupBootstrap,
+    } as any);
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-pending-1", {
+      content: "Pending startup should bootstrap lazily.",
+    });
+
+    expect(ensureStartupBootstrap).toHaveBeenCalledTimes(1);
+    expect(result.details.ok).toBe(true);
+    expect(memoryStoreDbMock).toHaveBeenCalledTimes(1);
+  });
 });

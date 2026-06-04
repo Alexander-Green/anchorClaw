@@ -2,7 +2,7 @@ import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
 import { resolveSessionsSearchState } from "../../config.js";
 import { scanLegacyWorkspace } from "../../importer.js";
 import type { MemoryStatusCheckResult } from "../types.js";
-import type { ToolRegistrationParams } from "./common.js";
+import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,7 +14,7 @@ function isPromptInjectionAllowed(api: any): boolean {
   return hooks?.allowPromptInjection !== false;
 }
 
-export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
+export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
   api.registerTool({
     name: "memory_status",
@@ -35,6 +35,10 @@ export function registerMemoryStatusTool({ ctx }: ToolRegistrationParams) {
     async execute(_toolCallId: string, params: unknown) {
       const record = (params ?? {}) as { check?: unknown };
       const activeCheck = record.check === true;
+      const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
+      if (unavailable && (!activeCheck || Boolean(ctx.disabledReason))) {
+        return unavailable;
+      }
       const promptInjectionAllowed = isPromptInjectionAllowed(api);
       const base: MemoryStatusCheckResult = {
         ok: ctx.durableState?.overall === "ready",

@@ -4,6 +4,7 @@ export type ToolRegistrationParams = {
   ctx: PluginRuntimeContext;
   refreshPromptCache: (options?: { force?: boolean }) => Promise<void>;
   ensureSessionsIndexBootstrapped: () => Promise<void>;
+  ensureStartupBootstrap?: () => Promise<void>;
 };
 
 export function getToolUnavailableResponse(ctx: PluginRuntimeContext):
@@ -30,4 +31,17 @@ export function getToolUnavailableResponse(ctx: PluginRuntimeContext):
     };
   }
   return null;
+}
+
+export async function ensureToolRuntimeReady(
+  ctx: PluginRuntimeContext,
+  ensureStartupBootstrap?: () => Promise<void>,
+): Promise<
+  | { content: { type: "text"; text: string }[]; details: { disabled: true; error: string } }
+  | null
+> {
+  if (!ctx.disabledReason && ctx.durableState?.overall === "pending" && typeof ensureStartupBootstrap === "function") {
+    await ensureStartupBootstrap();
+  }
+  return getToolUnavailableResponse(ctx);
 }

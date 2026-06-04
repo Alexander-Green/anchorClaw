@@ -1,9 +1,9 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { memoryForgetDb } from "../../memory/forget.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
+import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
 
-export function registerMemoryForgetTool({ ctx, refreshPromptCache }: ToolRegistrationParams) {
+export function registerMemoryForgetTool({ ctx, refreshPromptCache, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
   api.registerTool({
     name: "memory_forget",
@@ -27,7 +27,7 @@ export function registerMemoryForgetTool({ ctx, refreshPromptCache }: ToolRegist
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      const unavailable = getToolUnavailableResponse(ctx);
+      const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
       const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);

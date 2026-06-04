@@ -149,4 +149,48 @@ describe("createMaintenanceRuntime", () => {
 
     expect(runMaintenanceCycle).toHaveBeenCalledTimes(1);
   });
+
+  it("does not arm the scheduler until startMaintenance when autostart is disabled", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    const unref = vi.fn();
+    const interval = { unref };
+    (globalThis as any).setInterval = vi.fn(() => interval);
+    (globalThis as any).clearInterval = vi.fn();
+
+    try {
+      const api = buildApi();
+      const ctx = buildCtx("ready");
+
+      const runtime = createMaintenanceRuntime({ api, ctx, autostart: false });
+      expect(globalThis.setInterval).not.toHaveBeenCalled();
+
+      runtime.startMaintenance();
+      expect(globalThis.setInterval).toHaveBeenCalledTimes(1);
+      runtime.cleanupMaintenance();
+      expect(unref).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  it("replays a deferred trigger after startMaintenance arms the scheduler", async () => {
+    const api = buildApi();
+    const ctx = buildCtx("ready");
+
+    const runtime = createMaintenanceRuntime({ api, ctx, autostart: false });
+    runtime.triggerMaintenanceNow();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runMaintenanceCycle).not.toHaveBeenCalled();
+
+    runtime.startMaintenance();
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.cleanupMaintenance();
+
+    expect(runMaintenanceCycle).toHaveBeenCalledTimes(1);
+  });
 });
