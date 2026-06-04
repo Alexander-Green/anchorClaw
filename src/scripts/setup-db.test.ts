@@ -241,6 +241,17 @@ describe("runAnchorClawSetup", () => {
       expect(cfg.plugins.entries.anchorclaw.enabled).toBe(true);
       expect(cfg.plugins.entries.anchorclaw.config.workspaceDir).toBe(workspaceDir);
       expect(cfg.plugins.entries.anchorclaw.config.postgres.password).toBe("secret");
+      expect(cfg.plugins.entries.anchorclaw.config.maintenance).toEqual({
+        enabled: true,
+        dryRun: false,
+        intervalMinutes: 720,
+        batchSize: 200,
+        extractor: {
+          enabled: true,
+          maxCandidates: 10,
+          maxCharsPerRun: 12000,
+        },
+      });
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;
@@ -457,6 +468,90 @@ describe("runAnchorClawSetup", () => {
       expect(consoleLogSpy).toHaveBeenCalledWith(
         "- hooks.allowPromptInjection: enabled for DB-backed daily startup injection",
       );
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("enables maintenance/extractor defaults and removes stale extractor agentId from written config", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    const workspaceDir = resolve(home, "workspace");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugins: {
+            entries: {
+              anchorclaw: {
+                config: {
+                  maintenance: {
+                    intervalMinutes: 360,
+                    batchSize: 50,
+                    extractor: {
+                      agentId: "worker-a",
+                      maxCandidates: 8,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }, null, 2) + "\n",
+      );
+
+      await runAnchorClawSetup({
+        nonInteractive: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+        workspaceDir,
+      });
+
+      const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(cfg.plugins.entries.anchorclaw.config.maintenance).toEqual({
+        enabled: true,
+        dryRun: false,
+        intervalMinutes: 360,
+        batchSize: 50,
+        extractor: {
+          enabled: true,
+          maxCandidates: 8,
+          maxCharsPerRun: 12000,
+        },
+      });
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;

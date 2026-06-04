@@ -5,19 +5,23 @@ import type { PluginRuntimeContext } from "./runtime-context.js";
 
 export type MaintenanceRuntime = {
   cleanupMaintenance: () => void;
+  startMaintenance: () => void;
   triggerMaintenanceNow: () => void;
 };
 
 export function createMaintenanceRuntime(params: {
   api: OpenClawPluginApi;
   ctx: PluginRuntimeContext;
+  autostart?: boolean;
 }): MaintenanceRuntime {
   const { api, ctx } = params;
   let timer: ReturnType<typeof setInterval> | null = null;
   let stopped = false;
+  let started = false;
   let inFlight: Promise<void> | null = null;
   let waitingForDurableReady = false;
   let initialRunDeferred = false;
+  let pendingImmediateTrigger = false;
 
   function cleanupMaintenance() {
     stopped = true;
@@ -101,14 +105,36 @@ export function createMaintenanceRuntime(params: {
     );
   }
 
-  if (ctx.cfg) {
+  const startMaintenance = () => {
+    if (stopped || started || !ctx.cfg) {
+      return;
+    }
+    started = true;
     scheduleIfEnabled(ctx.cfg);
+    if (pendingImmediateTrigger) {
+      pendingImmediateTrigger = false;
+      if (ctx.cfg.maintenance?.enabled) {
+        if (initialRunDeferred || waitingForDurableReady) {
+          initialRunDeferred = false;
+          void runOnce(ctx.cfg.maintenance);
+        }
+      }
+    }
+  };
+
+  if (params.autostart !== false) {
+    startMaintenance();
   }
 
   return {
     cleanupMaintenance,
+    startMaintenance,
     triggerMaintenanceNow: () => {
       if (!ctx.cfg?.maintenance?.enabled) {
+        return;
+      }
+      if (!started) {
+        pendingImmediateTrigger = true;
         return;
       }
       if (!initialRunDeferred && !waitingForDurableReady) {

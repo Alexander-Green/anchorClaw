@@ -113,7 +113,7 @@ function deriveRelaxedQueries(query: string): string[] {
   candidates.push(...tokens);
 
   const normalizedOriginal = query.trim().toLowerCase();
-  return Array.from(new Set(candidates)).filter((candidate) => candidate !== normalizedOriginal).slice(0, 6);
+  return Array.from(new Set(candidates)).filter((candidate) => candidate !== normalizedOriginal).slice(0, 12);
 }
 
 async function queryMemoryItems(params: {
@@ -259,22 +259,7 @@ export async function memorySearchDb(params: {
     return [...strictHits, ...strictDailyHits].sort(sortMergedHits).slice(0, limit);
   }
 
-  const fuzzyHits = await queryMemoryItemsFuzzy({
-    pool: params.pool,
-    userId: params.userId,
-    workspaceId: params.workspaceId,
-    query: q,
-    limit,
-  });
-  if (fuzzyHits.length > 0) {
-    return fuzzyHits.slice(0, limit);
-  }
-
   const relaxedQueries = deriveRelaxedQueries(q);
-  if (relaxedQueries.length === 0) {
-    return [];
-  }
-
   const merged = new Map<string, MemorySearchHit>();
   for (const relaxedQuery of relaxedQueries) {
     const relaxedHits = await queryMemoryItems({
@@ -308,10 +293,24 @@ export async function memorySearchDb(params: {
       }
     }
   }
+  if (merged.size > 0) {
+    return Array.from(merged.values())
+      .sort(sortMergedHits)
+      .slice(0, limit);
+  }
 
-  return Array.from(merged.values())
-    .sort(sortMergedHits)
-    .slice(0, limit);
+  const fuzzyHits = await queryMemoryItemsFuzzy({
+    pool: params.pool,
+    userId: params.userId,
+    workspaceId: params.workspaceId,
+    query: q,
+    limit,
+  });
+  if (fuzzyHits.length > 0) {
+    return fuzzyHits.slice(0, limit);
+  }
+
+  return [];
 }
 
 export async function memorySearchDailyDb(params: {

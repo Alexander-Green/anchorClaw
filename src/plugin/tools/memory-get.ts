@@ -4,9 +4,9 @@ import { memoryGetFromDb } from "../../memory/get.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { canAccessSessionPathByVisibility } from "../../memory/sessions-visibility.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
+import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
 
-export function registerMemoryGetTool({ ctx }: ToolRegistrationParams) {
+export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
   api.registerTool({
     name: "memory_get",
@@ -27,7 +27,7 @@ export function registerMemoryGetTool({ ctx }: ToolRegistrationParams) {
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      const unavailable = getToolUnavailableResponse(ctx);
+      const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
       const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);

@@ -193,6 +193,38 @@ Import behavior:
 Runtime/search warning behavior is scoped to actual risk: for example, zero
 search hits plus active legacy import state.
 
+## Why Legacy Daily Files Are Not an Extractor Source
+
+AnchorClaw intentionally does not treat imported legacy
+`memory/YYYY-MM-DD.md` files as a normal maintenance/extractor promotion lane.
+
+The architectural reason is simple:
+
+- in the normal OpenClaw flow, durable information should already have been
+  distilled into `MEMORY.md`
+- AnchorClaw imports `MEMORY.md` directly into durable `memory_items`
+- legacy daily files are therefore archive/provenance material, not the primary
+  durable migration source
+
+Imported legacy daily rows (`source_kind='legacy_import'`) are kept for
+compatibility behaviors:
+
+- read/search of historical daily notes
+- archive/backfill visibility
+- import verification and operator inspection
+
+They are not used for default durable promotion, because that would re-mine old
+operational text, recreate near-duplicates that should already exist via
+`MEMORY.md`, and promote smoke/debug/import/process artifacts into durable
+memory.
+
+So the intended migration model is:
+
+1. `MEMORY.md` -> durable `memory_items`
+2. legacy daily files -> DB-backed daily archive/read/search surface
+3. only fresh runtime daily writes (`memory_log`) may feed maintenance/extractor
+   promotion
+
 ## Maintenance and Extractor
 
 Maintenance is optional and currently experimental.
@@ -203,10 +235,13 @@ into `memory_items`.
 
 Current policy:
 
-- extractor reads only `memory_log` and `legacy_import` daily entries;
+- extractor reads only `memory_log` daily entries;
+- imported `legacy_import` daily rows are excluded from promotion and remain
+  archive/search/read compatibility data;
 - standalone `session_memory` captures and `compaction_flush` entries are
   excluded from extractor source selection;
 - backend extractor transport uses host-owned `api.runtime.llm.complete`;
+- accepted candidates must pass the high-confidence durable gate before write;
 - processed state is stored in `memory_daily_extraction_windows` only after a
   successful extractor cycle;
 - non-dry-run maintenance waits for durable startup state to become `ready`;
@@ -260,6 +295,9 @@ Planned shape:
 - embeddings/vector table attached to durable and daily records;
 - hybrid retrieval that combines FTS and vector scores;
 - failure mode that falls back to lexical search without breaking tool APIs;
+- semantic near-duplicate assistance can be added here for extractor and direct
+  writes, but it should remain optional and never replace deterministic baseline
+  writes;
 - no semantic layer is allowed to become the only place where durable memory is
   represented.
 

@@ -2,7 +2,7 @@ import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { memoryRecallDb } from "../../memory/recall.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { getToolUnavailableResponse, type ToolRegistrationParams } from "./common.js";
+import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
 import { buildSearchLikeDetailsEnvelope, formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
 
 function normalizeExact(value: unknown): string {
@@ -71,7 +71,7 @@ function markerBoostForHit(hit: any): number {
   return isMarkerLike(title) || isMarkerLike(snippet) ? 2 : 0;
 }
 
-export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
+export function registerMemoryRecallTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
   api.registerTool({
     name: "memory_recall",
@@ -91,7 +91,7 @@ export function registerMemoryRecallTool({ ctx }: ToolRegistrationParams) {
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      const unavailable = getToolUnavailableResponse(ctx);
+      const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
       const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);

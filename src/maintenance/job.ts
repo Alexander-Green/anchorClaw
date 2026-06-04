@@ -9,7 +9,8 @@ import { extractMaintenanceCandidates } from "./extractor.js";
 
 const SOURCE_KIND = "daily_entries";
 const DAILY_WINDOW_HEADER_RESERVE = 128;
-const EXTRACTOR_ALLOWED_DAILY_SOURCE_KINDS = ["memory_log", "legacy_import"] as const;
+const EXTRACTOR_ALLOWED_DAILY_SOURCE_KINDS = ["memory_log"] as const;
+const EXTRACTOR_MIN_CONFIDENCE = 80;
 
 type ExistingContentRow = { content: string };
 
@@ -310,6 +311,28 @@ function buildProcessedWindowKey(window: DailyWindow): string {
   return `${window.dailyEntryId}:${window.contentSha256}:${window.windowIndex}`;
 }
 
+function selectPendingWindowsForRun(params: {
+  allWindows: DailyWindow[];
+  processedKeys: Set<string>;
+  batchSize: number;
+}): DailyWindow[] {
+  const pendingWindows = params.allWindows.filter(
+    (window) => !params.processedKeys.has(buildProcessedWindowKey(window)),
+  );
+  if (pendingWindows.length === 0) {
+    return [];
+  }
+
+  const firstDailyEntryId = pendingWindows[0]?.dailyEntryId;
+  if (!firstDailyEntryId) {
+    return [];
+  }
+
+  return pendingWindows
+    .filter((window) => window.dailyEntryId === firstDailyEntryId)
+    .slice(0, Math.max(1, params.batchSize));
+}
+
 export type MaintenanceCycleResult = {
   status: "completed" | "failed";
   runId: string | null;
@@ -398,9 +421,11 @@ export async function runMaintenanceCycle(params: {
       processedRows.rows.map((row) => `${row.daily_entry_id}:${row.content_sha256}:${row.window_index}`),
     );
 
-    const pendingWindows = allWindows
-      .filter((window) => !processedKeys.has(buildProcessedWindowKey(window)))
-      .slice(0, Math.max(1, params.batchSize));
+    const pendingWindows = selectPendingWindowsForRun({
+      allWindows,
+      processedKeys,
+      batchSize: params.batchSize,
+    });
     const preparedTranscript = prepareTranscript(pendingWindows, maxChars);
     const transcript = preparedTranscript.transcript;
     const processedWindows = preparedTranscript.includedWindows;
@@ -421,12 +446,18 @@ export async function runMaintenanceCycle(params: {
           sourcePath: preparedTranscript.sourcePath,
           fileHash: preparedTranscript.fileHash,
           transcript,
-          maxCandidates: extractorCfg.maxCandidates ?? 20,
+          maxCandidates: extractorCfg.maxCandidates ?? 10,
         });
 
         let accepted = 0;
         let persistenceFailure: string | null = null;
         for (const candidate of extracted.candidates) {
+          const confidence =
+            typeof candidate.confidence === "number" ? candidate.confidence : null;
+          if (confidence === null || confidence < EXTRACTOR_MIN_CONFIDENCE) {
+            skippedCount += 1;
+            continue;
+          }
           const alreadyExists = await candidateAlreadyExists({
             pool: params.pool,
             userId: scope.userId,
@@ -450,6 +481,7 @@ export async function runMaintenanceCycle(params: {
               type: candidate.type,
               canonicalKey: candidate.canonicalKey,
               source: "system",
+              confidence,
               metadata: {
                 extractor: "anchorclaw-maintenance",
                 sourceKind: SOURCE_KIND,

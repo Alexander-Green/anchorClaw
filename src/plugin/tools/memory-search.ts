@@ -8,7 +8,7 @@ import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
 import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
 import {
-  getToolUnavailableResponse,
+  ensureToolRuntimeReady,
   type ToolRegistrationParams,
 } from "./common.js";
 import { buildSearchLikeDetailsEnvelope, formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
@@ -112,6 +112,7 @@ async function buildLegacyImportWarning(params: {
 export function registerMemorySearchTool({
   ctx,
   ensureSessionsIndexBootstrapped,
+  ensureStartupBootstrap,
 }: ToolRegistrationParams) {
   const api = ctx.api;
   api.registerTool({
@@ -134,6 +135,9 @@ export function registerMemorySearchTool({
       },
     },
     async execute(_toolCallId: string, params: unknown) {
+      if (ctx.durableState?.overall === "pending" && typeof ensureStartupBootstrap === "function") {
+        await ensureStartupBootstrap();
+      }
       const blockedReason = ctx.durableState?.reason ?? ctx.startupCriticalFailure ?? null;
       if (
         ctx.durableState?.overall === "blocked" &&
@@ -151,7 +155,7 @@ export function registerMemorySearchTool({
           },
         };
       }
-      const unavailable = getToolUnavailableResponse(ctx);
+      const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       const record = (params ?? {}) as any;
       const query = typeof record.query === "string" ? String(record.query) : "";

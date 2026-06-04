@@ -164,8 +164,11 @@ AnchorClaw currently targets a Track A core runtime release:
 - `MEMORY.md` and daily memory paths are DB-backed compatibility views;
 - legacy import/backfill is an explicit operator CLI;
 - sessions search is available as an explicit opt-in;
-- maintenance/extractor promotion runs from DB daily windows when enabled, but
-  remains experimental while live promotion smoke tests and tuning continue.
+- maintenance/extractor promotion runs from DB daily windows when enabled; the
+  release lane is now validated for `memory_log`-only promotion, while further
+  tuning focuses on precision rather than basic viability;
+  release/default promotion is based on fresh `memory_log` daily windows, while
+  imported legacy daily files remain archive/search/read compatibility data.
 
 The important release boundary: the durable and daily runtime path is the core
 supported value. The maintenance/extractor path is a foundation for automatic
@@ -184,6 +187,8 @@ memory correctness depend on model-dependent similarity scores.
 Future layers include:
 
 - semantic search and hybrid ranking;
+- optional semantic duplicate assistance for automated promotion and direct
+  writes when the semantic layer is enabled;
 - persona/profile context with separate injection budgets;
 - episode extraction and maintenance promotion;
 - knowledge graph relationships and multi-hop retrieval;

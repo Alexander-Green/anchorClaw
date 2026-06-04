@@ -85,6 +85,7 @@ const {
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
   createMaintenanceRuntimeMock: vi.fn(() => ({
     cleanupMaintenance: vi.fn(),
+    startMaintenance: vi.fn(),
     triggerMaintenanceNow: vi.fn(),
   })),
   registerMaintenanceLifecycleMock: vi.fn(),
@@ -238,6 +239,8 @@ import plugin from "./index.js";
 function buildApi() {
   let transcriptListener: ((update: { sessionFile?: unknown }) => void) | null = null;
   const lifecycleCleanups: Array<() => Promise<void> | void> = [];
+  const serviceStarts: Array<() => Promise<void> | void> = [];
+  const serviceStops: Array<() => Promise<void> | void> = [];
   const unsub = vi.fn();
   const api = {
     pluginConfig: {},
@@ -268,6 +271,14 @@ function buildApi() {
     },
     registerTool: vi.fn(),
     registerCli: vi.fn(),
+    registerService: vi.fn((registration: { start?: () => Promise<void> | void; stop?: () => Promise<void> | void }) => {
+      if (registration.start) {
+        serviceStarts.push(registration.start);
+      }
+      if (registration.stop) {
+        serviceStops.push(registration.stop);
+      }
+    }),
     on: vi.fn(),
     registerHook: vi.fn(),
     registerHttpRoute: vi.fn(),
@@ -279,7 +290,15 @@ function buildApi() {
   return {
     api,
     getTranscriptListener: () => transcriptListener,
+    runServiceStart: async () => {
+      for (const start of serviceStarts) {
+        await start();
+      }
+    },
     runCleanup: async () => {
+      for (const stop of serviceStops) {
+        await stop();
+      }
       for (const cleanup of lifecycleCleanups) {
         await cleanup();
       }
@@ -291,6 +310,8 @@ function buildApi() {
 function buildApiLegacyLifecycle() {
   let transcriptListener: ((update: { sessionFile?: unknown }) => void) | null = null;
   const lifecycleCleanups: Array<() => Promise<void> | void> = [];
+  const serviceStarts: Array<() => Promise<void> | void> = [];
+  const serviceStops: Array<() => Promise<void> | void> = [];
   const unsub = vi.fn();
   const api = {
     pluginConfig: {},
@@ -319,6 +340,14 @@ function buildApiLegacyLifecycle() {
     }),
     registerTool: vi.fn(),
     registerCli: vi.fn(),
+    registerService: vi.fn((registration: { start?: () => Promise<void> | void; stop?: () => Promise<void> | void }) => {
+      if (registration.start) {
+        serviceStarts.push(registration.start);
+      }
+      if (registration.stop) {
+        serviceStops.push(registration.stop);
+      }
+    }),
     registerHook: vi.fn(),
     registerHttpRoute: vi.fn(),
     registerHostedMediaResolver: vi.fn(),
@@ -329,7 +358,15 @@ function buildApiLegacyLifecycle() {
   return {
     api,
     getTranscriptListener: () => transcriptListener,
+    runServiceStart: async () => {
+      for (const start of serviceStarts) {
+        await start();
+      }
+    },
     runCleanup: async () => {
+      for (const stop of serviceStops) {
+        await stop();
+      }
       for (const cleanup of lifecycleCleanups) {
         await cleanup();
       }
@@ -424,6 +461,21 @@ describe("tool registration", () => {
     expect(hasDailyHook).toBe(true);
   });
 
+  it("registers a gateway-owned maintenance service on hosts that expose registerService", () => {
+    const { api } = buildApi();
+
+    (plugin as any).register(api);
+
+    expect(api.registerService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "anchorclaw-maintenance",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      }),
+    );
+    expect(registerMaintenanceLifecycleMock).not.toHaveBeenCalled();
+  });
+
   it("registers after_compaction hook for flush inbox drain", () => {
     const { api } = buildApi();
 
@@ -456,8 +508,11 @@ describe("tool registration", () => {
 });
 
 describe("phase2 session delta listener", () => {
-  async function registerAndWaitStartup(api: any) {
-    (plugin as any).register(api);
+  async function registerAndWaitStartup(runtime: { api: any; runServiceStart?: () => Promise<void> }) {
+    (plugin as any).register(runtime.api);
+    if (runtime.runServiceStart) {
+      await runtime.runServiceStart();
+    }
     await vi.runAllTimersAsync();
   }
 
@@ -468,8 +523,8 @@ describe("phase2 session delta listener", () => {
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     expect(api.runtime.events.onSessionTranscriptUpdate).not.toHaveBeenCalled();
   });
@@ -482,8 +537,8 @@ describe("phase2 session delta listener", () => {
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
     expect(api.logger.info).toHaveBeenCalledWith(
       "anchorclaw: daily startup prompt hook registered (named before_prompt_build)",
     );
@@ -541,8 +596,8 @@ describe("phase2 session delta listener", () => {
       "[Untrusted daily memory: recent-session-capture-1]",
       "session capture context",
     ]);
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
     expect(api.logger.info).toHaveBeenCalledWith(
       "anchorclaw: daily startup prompt hook registered (named before_prompt_build)",
     );
@@ -595,8 +650,8 @@ describe("phase2 session delta listener", () => {
 
   it("filters out non-current-agent transcript updates in current visibility", async () => {
     isSessionFileForAgent.mockResolvedValue(false);
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     expect(listener).toBeTypeOf("function");
@@ -613,8 +668,8 @@ describe("phase2 session delta listener", () => {
   it("batches transcript updates into one debounce sync", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockRejectedValue(new Error("ENOENT"));
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -635,8 +690,8 @@ describe("phase2 session delta listener", () => {
 
   it("unsubscribes and cancels pending debounce on lifecycle cleanup", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
-    const { api, getTranscriptListener, runCleanup, unsub } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runCleanup, runServiceStart, unsub } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -658,8 +713,8 @@ describe("phase2 session delta listener", () => {
     isSessionFileForAgent.mockResolvedValue(false);
     isSessionFileForAnyKnownAgent.mockResolvedValue(true);
     statFs.mockRejectedValue(new Error("ENOENT"));
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/other/sessions/a.jsonl" });
@@ -677,8 +732,8 @@ describe("phase2 session delta listener", () => {
   it("does not sync when transcript deltas stay below thresholds", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockResolvedValue({ size: 100 });
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -701,8 +756,8 @@ describe("phase2 session delta listener", () => {
       }),
       close: vi.fn(async () => undefined),
     });
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -734,8 +789,8 @@ describe("phase2 session delta listener", () => {
       }),
       close: vi.fn(async () => undefined),
     });
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/no-trailing-newline.jsonl" });
@@ -756,8 +811,8 @@ describe("phase2 session delta listener", () => {
         .mockResolvedValueOnce({ bytesRead: 0 }),
       close: vi.fn(async () => undefined),
     });
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl" });
@@ -772,8 +827,8 @@ describe("phase2 session delta listener", () => {
   it("bypasses thresholds for reset/deleted archive artifacts", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockRejectedValueOnce(new Error("ENOENT"));
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/a.jsonl.reset.2026-05-14T10-00-00Z" });
@@ -805,8 +860,8 @@ describe("phase2 session delta listener", () => {
       }),
       close: vi.fn(async () => undefined),
     });
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/mixed.jsonl" });
@@ -846,8 +901,8 @@ describe("phase2 session delta listener", () => {
       }),
       close: vi.fn(async () => undefined),
     });
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/one-message.jsonl" });
@@ -874,8 +929,8 @@ describe("phase2 session delta listener", () => {
     });
     isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockResolvedValue({ size: 1 });
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/agents/main/sessions/changed.jsonl" });
     await vi.advanceTimersByTimeAsync(5_000);
@@ -896,8 +951,8 @@ describe("phase2 session delta listener", () => {
       workspaceDir: "/tmp/work",
     });
     isSessionFileForAnyKnownAgent.mockResolvedValue(false);
-    const { api, getTranscriptListener } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     listener?.({ sessionFile: "/tmp/not-a-session-file.jsonl" });
@@ -920,8 +975,8 @@ describe("phase2 session delta listener", () => {
       allowed: false,
       reason: "blocked by visibility policy",
     } as any);
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const getRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -946,8 +1001,8 @@ describe("phase2 session delta listener", () => {
       allowed: false,
       reason: "blocked by visibility policy",
     } as any);
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const getRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -963,10 +1018,14 @@ describe("phase2 session delta listener", () => {
 
   it("registers lifecycle cleanup through legacy api.registerRuntimeLifecycle when grouped lifecycle API is unavailable", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
-    const { api, getTranscriptListener, runCleanup, unsub } = buildApiLegacyLifecycle();
-    await registerAndWaitStartup(api);
+    const { api, getTranscriptListener, runCleanup, runServiceStart, unsub } = buildApiLegacyLifecycle();
+    delete (api as any).registerService;
+    await registerAndWaitStartup({ api, runServiceStart });
 
     expect(api.registerRuntimeLifecycle).toHaveBeenCalledTimes(1);
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      "anchorclaw: plugin service API unavailable; starting startup bootstrap and maintenance eagerly for compatibility",
+    );
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("using legacy runtime lifecycle API"),
     );
@@ -981,10 +1040,10 @@ describe("phase2 session delta listener", () => {
   });
 
   it("warns and continues when runtime transcript update events API is unavailable", async () => {
-    const { api } = buildApi();
+    const { api, runServiceStart } = buildApi();
     delete (api as any).runtime.events.onSessionTranscriptUpdate;
 
-    await registerAndWaitStartup(api);
+    await registerAndWaitStartup({ api, runServiceStart });
     expect(api.logger.warn).toHaveBeenCalledWith(
       "anchorclaw: runtime.events.onSessionTranscriptUpdate unavailable; sessions delta sync disabled",
     );
@@ -1010,8 +1069,8 @@ describe("phase2 session delta listener", () => {
       workspaceDir: "/tmp/work",
     });
     filterSessionHitsByVisibility.mockRejectedValueOnce(new Error("visibility helper failed"));
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const searchRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -1050,8 +1109,8 @@ describe("phase2 session delta listener", () => {
       fromLine: 1,
       lineCount: 1,
     });
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const searchRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -1103,8 +1162,8 @@ describe("phase2 session delta listener", () => {
       fromLine: 1,
       lineCount: 1,
     });
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
 
     const searchRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
@@ -1172,8 +1231,8 @@ describe("phase2 session delta listener", () => {
     createPool.mockReturnValue(pool);
     statFs.mockResolvedValueOnce({ size: 1 });
 
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
     const statusRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
       .find((tool: any) => tool?.name === "memory_status");
@@ -1239,8 +1298,8 @@ describe("phase2 session delta listener", () => {
     statFs.mockResolvedValueOnce({ size: 1 });
     accessFs.mockRejectedValueOnce(new Error("EACCES"));
 
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
     const statusRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
       .find((tool: any) => tool?.name === "memory_status");
@@ -1258,8 +1317,8 @@ describe("phase2 session delta listener", () => {
   it("reports migrations failure via memory_status active check when ensureReady fails", async () => {
     applyMigrations.mockRejectedValueOnce(new Error("generation expression is not immutable"));
 
-    const { api } = buildApi();
-    await registerAndWaitStartup(api);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
     const statusRegistration = (api.registerTool as any).mock.calls
       .map((call: any[]) => call[0])
       .find((tool: any) => tool?.name === "memory_status");
@@ -1298,9 +1357,9 @@ describe("phase2 session delta listener", () => {
       unsupportedCount: 0,
       hasActiveLegacy: true,
     } as any);
-    const { api } = buildApi();
+    const { api, runServiceStart } = buildApi();
 
-    await registerAndWaitStartup(api);
+    await registerAndWaitStartup({ api, runServiceStart });
 
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("anchorclaw: active legacy memory files detected (2); run openclaw anchorclaw import"),
@@ -1310,9 +1369,9 @@ describe("phase2 session delta listener", () => {
 
   it("logs legacy import scan failure without blocking startup", async () => {
     scanLegacyWorkspaceMock.mockRejectedValueOnce(new Error("EACCES"));
-    const { api } = buildApi();
+    const { api, runServiceStart } = buildApi();
 
-    await registerAndWaitStartup(api);
+    await registerAndWaitStartup({ api, runServiceStart });
 
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("anchorclaw: legacy import scan failed (EACCES)"),
@@ -1329,10 +1388,10 @@ describe("phase2 session delta listener", () => {
       identity: { externalId: "test" },
       workspaceDir: "/cfg/workspace",
     });
-    const { api } = buildApi();
+    const { api, runServiceStart } = buildApi();
     (api.runtime as any).workspaceDir = "/runtime/workspace";
 
-    await registerAndWaitStartup(api);
+    await registerAndWaitStartup({ api, runServiceStart });
 
     expect(scanLegacyWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1347,10 +1406,10 @@ describe("phase2 session delta listener", () => {
       sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
       identity: { externalId: "test" },
     });
-    const { api } = buildApi();
+    const { api, runServiceStart } = buildApi();
     (api.runtime as any).workspaceDir = "/runtime/workspace";
 
-    await registerAndWaitStartup(api);
+    await registerAndWaitStartup({ api, runServiceStart });
 
     expect(scanLegacyWorkspaceMock).not.toHaveBeenCalled();
     expect(api.logger.warn).toHaveBeenCalledWith(
