@@ -495,6 +495,78 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(recordedLedgerInserts[0]?.[7]).toBe(0);
   });
 
+  it("does not mix different daily files into one extractor transcript", async () => {
+    const extractorArgs: Array<{ transcript: string; sourcePath: string }> = [];
+    extractMaintenanceCandidates.mockImplementation(
+      async (params: { transcript: string; sourcePath: string }) => {
+        extractorArgs.push(params);
+        return { summary: "summary", candidates: [] };
+      },
+    );
+
+    const recordedLedgerInserts: unknown[][] = [];
+    const firstFileRule =
+      "remember this first-file project rule for future work and keep it durable across sessions";
+    const secondFileRule =
+      "remember this second-file project rule even though it would also fit into the same char budget";
+    const pool = {
+      query: vi.fn(async (sql: string, values?: unknown[]) => {
+        if (sql.includes("INSERT INTO memory_maintenance_runs")) {
+          return { rows: [{ id: "run-7" }], rowCount: 1 };
+        }
+        if (sql.includes("FROM memory_daily_entries")) {
+          return {
+            rows: [
+              buildDailyRow({
+                id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                path: "memory/2026-05-20.md",
+                content: firstFileRule,
+              }),
+              buildDailyRow({
+                id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                path: "memory/2026-05-21.md",
+                logicalDate: "2026-05-21",
+                contentSha: "sha-2",
+                updatedAt: "2026-05-21T00:00:00.000Z",
+                content: secondFileRule,
+              }),
+            ],
+            rowCount: 2,
+          };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+          recordedLedgerInserts.push(values ?? []);
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("UPDATE memory_maintenance_runs")) {
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    } as any;
+
+    const result = await runMaintenanceCycle({
+      api: buildApi(),
+      cfg: buildCfg(),
+      pool,
+      workspaceDir: "/workspace",
+      dryRun: false,
+      batchSize: 100,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.scannedCount).toBe(1);
+    expect(extractorArgs).toHaveLength(1);
+    expect(extractorArgs[0]?.transcript).toContain(firstFileRule);
+    expect(extractorArgs[0]?.transcript).not.toContain(secondFileRule);
+    expect(extractorArgs[0]?.sourcePath).toBe("memory/2026-05-20.md#window=1");
+    expect(recordedLedgerInserts).toHaveLength(1);
+    expect(recordedLedgerInserts[0]?.[4]).toBe("memory/2026-05-20.md");
+  });
+
   it("fails when extractor output is malformed", async () => {
     extractMaintenanceCandidates.mockRejectedValue(new Error("extractor output.candidates must be an array"));
 

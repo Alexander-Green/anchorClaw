@@ -311,6 +311,28 @@ function buildProcessedWindowKey(window: DailyWindow): string {
   return `${window.dailyEntryId}:${window.contentSha256}:${window.windowIndex}`;
 }
 
+function selectPendingWindowsForRun(params: {
+  allWindows: DailyWindow[];
+  processedKeys: Set<string>;
+  batchSize: number;
+}): DailyWindow[] {
+  const pendingWindows = params.allWindows.filter(
+    (window) => !params.processedKeys.has(buildProcessedWindowKey(window)),
+  );
+  if (pendingWindows.length === 0) {
+    return [];
+  }
+
+  const firstDailyEntryId = pendingWindows[0]?.dailyEntryId;
+  if (!firstDailyEntryId) {
+    return [];
+  }
+
+  return pendingWindows
+    .filter((window) => window.dailyEntryId === firstDailyEntryId)
+    .slice(0, Math.max(1, params.batchSize));
+}
+
 export type MaintenanceCycleResult = {
   status: "completed" | "failed";
   runId: string | null;
@@ -399,9 +421,11 @@ export async function runMaintenanceCycle(params: {
       processedRows.rows.map((row) => `${row.daily_entry_id}:${row.content_sha256}:${row.window_index}`),
     );
 
-    const pendingWindows = allWindows
-      .filter((window) => !processedKeys.has(buildProcessedWindowKey(window)))
-      .slice(0, Math.max(1, params.batchSize));
+    const pendingWindows = selectPendingWindowsForRun({
+      allWindows,
+      processedKeys,
+      batchSize: params.batchSize,
+    });
     const preparedTranscript = prepareTranscript(pendingWindows, maxChars);
     const transcript = preparedTranscript.transcript;
     const processedWindows = preparedTranscript.includedWindows;
