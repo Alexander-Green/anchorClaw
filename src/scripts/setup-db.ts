@@ -487,6 +487,34 @@ function updateOpenClawConfig(params: {
   if (params.workspaceDir) {
     cfg.plugins.entries.anchorclaw.config.workspaceDir = params.workspaceDir;
   }
+  const existingMaintenanceConfig = asRecord(cfg.plugins.entries.anchorclaw.config.maintenance);
+  const existingExtractorConfig = asRecord(existingMaintenanceConfig.extractor);
+  delete existingExtractorConfig.agentId;
+  cfg.plugins.entries.anchorclaw.config.maintenance = {
+    ...existingMaintenanceConfig,
+    enabled: true,
+    dryRun: false,
+    intervalMinutes:
+      typeof existingMaintenanceConfig.intervalMinutes === "number"
+        ? existingMaintenanceConfig.intervalMinutes
+        : 12 * 60,
+    batchSize:
+      typeof existingMaintenanceConfig.batchSize === "number"
+        ? existingMaintenanceConfig.batchSize
+        : 200,
+    extractor: {
+      ...existingExtractorConfig,
+      enabled: true,
+      maxCandidates:
+        typeof existingExtractorConfig.maxCandidates === "number"
+          ? existingExtractorConfig.maxCandidates
+          : 10,
+      maxCharsPerRun:
+        typeof existingExtractorConfig.maxCharsPerRun === "number"
+          ? existingExtractorConfig.maxCharsPerRun
+          : 12_000,
+    },
+  };
   cfg.plugins.entries.anchorclaw.hooks ??= {};
   cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection = true;
 

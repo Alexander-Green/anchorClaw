@@ -194,14 +194,13 @@ into `plugins.entries.anchorclaw.config`.
     }
   },
   "maintenance": {
-    "enabled": false,
-    "dryRun": true,
+    "enabled": true,
+    "dryRun": false,
     "intervalMinutes": 720,
     "batchSize": 200,
     "extractor": {
-      "enabled": false,
-      "agentId": "main",
-      "maxCandidates": 20,
+      "enabled": true,
+      "maxCandidates": 10,
       "maxCharsPerRun": 12000
     }
   },
@@ -226,11 +225,12 @@ transcript deltas trigger a targeted sessions reindex.
 
 `maintenance.enabled` starts the background maintenance scheduler. The
 maintenance extractor reads bounded DB daily windows and can promote durable
-candidates into `memory_items`, but this path is still experimental while
-windowing and live validation are tuned.
+candidates into `memory_items`; current setup writes the release-aligned
+`memory_log`-only lane by default.
 
-`maintenance.dryRun` currently reports heuristic candidate counts only. It is
-for cheap backlog visibility, not extractor-faithful validation.
+`maintenance.dryRun=false` enables real durable promotion. `dryRun=true`
+reports heuristic candidate counts only and is useful as a conservative
+fallback for partial/manual configs.
 
 `limits` can reduce search/read caps below the built-in maximums.
 

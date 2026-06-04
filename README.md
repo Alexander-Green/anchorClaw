@@ -164,8 +164,9 @@ AnchorClaw currently targets a Track A core runtime release:
 - `MEMORY.md` and daily memory paths are DB-backed compatibility views;
 - legacy import/backfill is an explicit operator CLI;
 - sessions search is available as an explicit opt-in;
-- maintenance/extractor promotion runs from DB daily windows when enabled, but
-  remains experimental while live promotion smoke tests and tuning continue;
+- maintenance/extractor promotion runs from DB daily windows when enabled; the
+  release lane is now validated for `memory_log`-only promotion, while further
+  tuning focuses on precision rather than basic viability;
   release/default promotion is based on fresh `memory_log` daily windows, while
   imported legacy daily files remain archive/search/read compatibility data.
 
