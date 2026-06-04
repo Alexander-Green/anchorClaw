@@ -184,15 +184,13 @@ retrieval: lexical search plus vector recall, with a reliable fallback when
 embeddings are disabled or fail. That gives us better discovery without making
 memory correctness depend on model-dependent similarity scores.
 
-Future layers include:
+Nearer-term future work includes:
 
-- semantic search and hybrid ranking;
+- semantic search and hybrid ranking on top of the Postgres source of truth;
 - optional semantic duplicate assistance for automated promotion and direct
   writes when the semantic layer is enabled;
-- persona/profile context with separate injection budgets;
-- episode extraction and maintenance promotion;
-- knowledge graph relationships and multi-hop retrieval;
-- DB-native or integrated wiki memory.
+- persona/profile context with separate injection budgets, if a clear product
+  need emerges.
 
 ## Documentation
 

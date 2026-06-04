@@ -1,6 +1,6 @@
 {
   "name": "@alexandrgreen/anchorclaw",
-  "version": "0.0.8-hotfix-cli.0",
+  "version": "0.0.8",
   "description": "OpenClaw Postgres-backed long-term memory plugin",
   "author": "Alexander Green",
   "license": "MIT",
