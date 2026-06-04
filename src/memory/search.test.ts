@@ -164,7 +164,7 @@ describe("memorySearchDb ranking contract", () => {
     const pool = {
       query: async (sql: string, params: unknown[]) => {
         capturedSql.push(sql);
-        if (capturedSql.length === 3) {
+        if (String(sql).includes("GREATEST(")) {
           expect(String(params[2])).toBe("Сабира");
           return {
             rows: [
@@ -199,6 +199,126 @@ describe("memorySearchDb ranking contract", () => {
       title: "Любимый цвет Сабиры — жёлтый.",
       path: "db-memory/items/sabira-color.md",
       canonicalKey: "sabira_favorite_color",
+    });
+  });
+
+  it("does not let fuzzy identity hits short-circuit relaxed durable matches", async () => {
+    const queried: string[] = [];
+    const fuzzyQueries: string[] = [];
+    const pool = {
+      query: async (sql: string, params: unknown[]) => {
+        const query = String(params[2]);
+        queried.push(query);
+        if (String(sql).includes("FROM memory_items") && !String(sql).includes("GREATEST(") && query === "жена") {
+          return {
+            rows: [
+              {
+                id: "sabira",
+                title: "Жена Алекса — Сабира.",
+                type: "note",
+                content: "Жена Алекса — Сабира.",
+                canonical_key: "sabira_info",
+                updated_at: "2026-06-04T11:40:46.836Z",
+                score: 0.7,
+              },
+            ],
+          };
+        }
+        if (String(sql).includes("GREATEST(")) {
+          fuzzyQueries.push(query);
+          return {
+            rows: [
+              {
+                id: "identity",
+                title: "Пользователь: Alex Green (just_green).",
+                type: "fact",
+                content: "Пользователь: Alex Green (just_green).",
+                canonical_key: "user_alex_green",
+                updated_at: "2026-06-04T11:40:06.608Z",
+                score: 0.95,
+              },
+            ],
+          };
+        }
+        return { rows: [] as any[] };
+      },
+    } as any;
+
+    const hits = await memorySearchDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: { maxResults: 10 } as any,
+      query: "Alex Green жена wife spouse",
+      maxResults: 5,
+    });
+
+    expect(queried).toContain("жена");
+    expect(fuzzyQueries).toHaveLength(0);
+    expect(hits[0]).toMatchObject({
+      title: "Жена Алекса — Сабира.",
+      canonicalKey: "sabira_info",
+      relaxedQuery: "жена",
+    });
+  });
+
+  it("does not let fuzzy durable hits short-circuit relaxed daily matches", async () => {
+    const queried: string[] = [];
+    const fuzzyQueries: string[] = [];
+    const pool = {
+      query: async (sql: string, params: unknown[]) => {
+        const query = String(params[2]);
+        queried.push(query);
+        if (String(sql).includes("FROM memory_daily_entries") && query === "релиз") {
+          return {
+            rows: [
+              {
+                id: "daily-release",
+                path: "memory/2026-06-04.md",
+                content: "Алекс планирует выкатить релиз сегодня (четверг, 4 июня 2026).",
+                source_kind: "memory_log",
+                updated_at: "2026-06-04T11:40:30.000Z",
+                score: 0.8,
+              },
+            ],
+          };
+        }
+        if (String(sql).includes("GREATEST(")) {
+          fuzzyQueries.push(query);
+          return {
+            rows: [
+              {
+                id: "identity",
+                title: "Пользователь: Alex Green (just_green).",
+                type: "fact",
+                content: "Пользователь: Alex Green (just_green).",
+                canonical_key: "user_alex_green",
+                updated_at: "2026-06-04T11:40:06.608Z",
+                score: 0.9,
+              },
+            ],
+          };
+        }
+        return { rows: [] as any[] };
+      },
+    } as any;
+
+    const hits = await memorySearchDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: { maxResults: 10 } as any,
+      query: "Alex Green планы релиз Thursday четверг",
+      maxResults: 5,
+    });
+
+    expect(queried).toContain("релиз");
+    expect(fuzzyQueries).toHaveLength(0);
+    expect(hits[0]).toMatchObject({
+      corpus: "daily",
+      path: "memory/2026-06-04.md",
+      sourceKind: "memory_log",
+      relaxedQuery: "релиз",
     });
   });
 
