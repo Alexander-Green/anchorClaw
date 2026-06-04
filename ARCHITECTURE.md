@@ -227,7 +227,8 @@ So the intended migration model is:
 
 ## Maintenance and Extractor
 
-Maintenance is optional and currently experimental.
+Maintenance is optional. The current release lane is validated for
+`memory_log`-only promotion.
 
 When enabled, the scheduler reads bounded windows from `memory_daily_entries`,
 runs extractor logic, deduplicates candidates, and promotes durable candidates
@@ -248,9 +249,10 @@ Current policy:
 - dry-run reports heuristic candidate counts only and does not run the
   extractor.
 
-The release-safe reliability claim is still the DB-backed durable/daily runtime.
-Automatic daily-to-durable promotion is a foundation path that needs ongoing
-live smoke validation and tuning.
+The primary reliability claim remains the DB-backed durable/daily runtime.
+Automatic daily-to-durable promotion is now validated for the current
+`memory_log`-only release path; ongoing work is about tuning and operational
+hardening rather than first-pass feasibility.
 
 ## Identity and Scope Resolution
 
