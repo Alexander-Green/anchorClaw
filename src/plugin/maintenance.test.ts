@@ -24,7 +24,7 @@ function buildCtx(overall: "pending" | "ready" | "blocked" | "degraded") {
         dryRun: false,
         intervalMinutes: 720,
         batchSize: 200,
-        extractor: { enabled: true, agentId: "main", maxCandidates: 20, maxCharsPerRun: 12000 },
+        extractor: { enabled: true, agentId: "main", maxCandidates: 10, maxCharsPerRun: 12000 },
       },
     },
     durableState: {

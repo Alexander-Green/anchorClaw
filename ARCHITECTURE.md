@@ -65,6 +65,43 @@ In AnchorClaw:
   - OpenClaw bootstrap does not duplicate memory in prompts
   - users can see where backups are and that Postgres is the source of truth
 
+## Why Legacy Daily Files Are Not an Extractor Source
+
+AnchorClaw intentionally does **not** treat imported legacy `memory/YYYY-MM-DD.md`
+files as a normal maintenance/extractor input lane.
+
+The architectural reason is simple:
+
+- in the normal OpenClaw flow, durable information should already have been
+  distilled into `MEMORY.md`
+- AnchorClaw imports `MEMORY.md` directly into durable `memory_items`
+- legacy daily files are therefore archive/provenance material, not the primary
+  durable migration source
+
+Because of that, imported legacy daily rows (`source_kind='legacy_import'`) are
+kept for compatibility behaviors:
+
+- read/search of historical daily notes
+- archive/backfill visibility
+- import verification and operator inspection
+
+But they are **not** used for default durable promotion, because that would:
+
+- re-mine noisy operational text that was already upstream of `MEMORY.md`
+- duplicate or near-duplicate facts that were already imported through the
+  normal durable path
+- promote smoke/debug/import/process artifacts from old daily logs into durable
+  memory
+
+So the intended migration model is:
+
+1. `MEMORY.md` -> durable `memory_items`
+2. legacy daily files -> DB-backed daily archive/read/search surface
+3. only fresh runtime daily writes (`memory_log`) may feed maintenance/extractor
+   promotion
+
+This is a deliberate design choice, not a temporary omission.
+
 ## Data Model (Simplified)
 
 Durable layer:
@@ -100,6 +137,8 @@ Operational implications:
 
 - separate embeddings (vector) table + hybrid retrieval
 - reliability contract: if embeddings are disabled or fail, fall back to lexical (FTS) without degrading tool APIs
+- semantic near-duplicate assistance belongs to this optional layer, not to the
+  baseline extractor/write path; see `ANCHORCLAW_SEMANTIC_LAYER_PLAN.md`
 
 ### Persona context (optional)
 

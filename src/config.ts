@@ -478,7 +478,7 @@ export const anchorClawConfigSchema = {
         extractor: {
           enabled: maintenanceExtractorEnabled ?? false,
           agentId: maintenanceExtractorAgentId ?? "main",
-          maxCandidates: maintenanceExtractorMaxCandidates ?? 20,
+          maxCandidates: maintenanceExtractorMaxCandidates ?? 10,
           maxCharsPerRun: maintenanceExtractorMaxCharsPerRun ?? 12_000,
         },
       },

@@ -213,7 +213,7 @@ describe("anchorClawConfigSchema maintenance", () => {
     expect(parsed.maintenance?.batchSize).toBe(200);
     expect(parsed.maintenance?.extractor?.enabled).toBe(false);
     expect(parsed.maintenance?.extractor?.agentId).toBe("main");
-    expect(parsed.maintenance?.extractor?.maxCandidates).toBe(20);
+    expect(parsed.maintenance?.extractor?.maxCandidates).toBe(10);
     expect(parsed.maintenance?.extractor?.maxCharsPerRun).toBe(12_000);
   });
 

@@ -69,6 +69,10 @@ describe("extractMaintenanceCandidates", () => {
         ],
       }),
     );
+    const prompt = completeMock.mock.calls[0]?.[0]?.messages?.[0]?.content;
+    expect(prompt).toContain("ONLY high-confidence durable long-term memory candidates");
+    expect(prompt).toContain("Use confidence 80-100 only");
+    expect(prompt).toContain("Never return smoke, debug, maintenance, import");
   });
 
   it("fails fast on older hosts without runtime.llm.complete", async () => {

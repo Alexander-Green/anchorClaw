@@ -169,7 +169,7 @@ Common overrides:
     "extractor": {
       "enabled": false,
       "agentId": "main",
-      "maxCandidates": 20,
+      "maxCandidates": 10,
       "maxCharsPerRun": 12000
     }
   },
@@ -189,8 +189,9 @@ Common overrides:
 
 `sessions.sync.deltaBytes` and `sessions.sync.deltaMessages` control when transcript deltas trigger a
 targeted sessions reindex. Track A runtime daily memory is owned by `memory_daily_entries`; the maintenance
-extractor now reads bounded DB daily windows and promotes durable candidates into `memory_items`, but this path
-is still considered experimental while we tune windowing and operator validation.
+extractor now reads bounded `memory_log` DB daily windows and promotes only high-confidence durable candidates
+into `memory_items`, but this path is still considered experimental while we tune windowing and operator
+validation.
 `limits` can reduce search/read caps below the built-in maximums. `maintenance.dryRun` currently reports
 heuristic candidate counts only; it is meant for cheap backlog visibility, not extractor-faithful validation.
 
@@ -484,7 +485,7 @@ After that configure plugin `postgres` fields in `openclaw.json` and restart gat
 
 AnchorClaw intentionally starts with deterministic SQL-first durability. Next layers are planned to reach PostClaw parity and beyond:
 
-- **Semantic layer**: embeddings + semantic search (hybrid retrieval: lexical + vector; optional and non-breaking)
+- **Semantic layer**: embeddings + semantic search (hybrid retrieval: lexical + vector; optional and non-breaking), plus optional near-duplicate assistance for extractor/direct writes
 - **Persona context in DB**: dynamic persona/profile retrieval and injection into the system prompt (separate budgets/policy)
 - **Knowledge graph**: `entity_edges`-style relationships and multi-hop retrieval to pull secondary context automatically
 - **Wiki integration / AnchorClaw-native wiki**: either integrate OpenClaw supplements (`memory-wiki`) or build a DB-native wiki layer

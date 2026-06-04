@@ -31,7 +31,7 @@ function buildCfg() {
       dryRun: false,
       intervalMinutes: 720,
       batchSize: 200,
-      extractor: { enabled: true, agentId: "main", maxCandidates: 20, maxCharsPerRun: 12000 },
+      extractor: { enabled: true, agentId: "main", maxCandidates: 10, maxCharsPerRun: 12000 },
     },
   } as any;
 }
@@ -159,7 +159,14 @@ describe("runMaintenanceCycle daily maintenance", () => {
   it("extracts, stores, and marks processed daily windows", async () => {
     extractMaintenanceCandidates.mockResolvedValue({
       summary: "summary",
-      candidates: [{ content: "User prefers green color.", type: "fact", canonicalKey: "favorite_color" }],
+      candidates: [
+        {
+          content: "User prefers green color.",
+          type: "fact",
+          canonicalKey: "favorite_color",
+          confidence: 91,
+        },
+      ],
     });
     memoryStoreDb.mockResolvedValue({
       ok: true,
@@ -224,7 +231,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
     ).toBe(true);
   });
 
-  it("filters extractor source rows to memory_log and legacy_import only", async () => {
+  it("filters extractor source rows to memory_log only", async () => {
     extractMaintenanceCandidates.mockResolvedValue({
       summary: "summary",
       candidates: [],
@@ -240,12 +247,6 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("FROM memory_daily_entries")) {
           return {
             rows: [
-              buildDailyRow({
-                id: "11111111-1111-1111-1111-111111111111",
-                path: "memory/2026-06-01.md",
-                sourceKind: "legacy_import",
-                content: "remember this imported project rule for future work",
-              }),
               buildDailyRow({
                 id: "22222222-2222-2222-2222-222222222222",
                 path: "memory/2026-06-02.md",
@@ -280,18 +281,95 @@ describe("runMaintenanceCycle daily maintenance", () => {
 
     expect(result.status).toBe("completed");
     const dailyQuery = queryCalls.find((call) => call.sql.includes("FROM memory_daily_entries"));
-    expect(dailyQuery?.values?.[2]).toEqual(["memory_log", "legacy_import"]);
+    expect(dailyQuery?.values?.[2]).toEqual(["memory_log"]);
     expect(extractMaintenanceCandidates).toHaveBeenCalledTimes(1);
-    expect(extractMaintenanceCandidates.mock.calls[0]?.[0]?.transcript).toContain("imported project rule");
     expect(extractMaintenanceCandidates.mock.calls[0]?.[0]?.transcript).toContain("current daily preference");
+  });
+
+  it("skips candidates without high confidence", async () => {
+    extractMaintenanceCandidates.mockResolvedValue({
+      summary: "summary",
+      candidates: [
+        { content: "Stable but unscored item", type: "fact" },
+        { content: "Low confidence item", type: "note", confidence: 79 },
+        { content: "Accepted item", type: "fact", canonicalKey: "accepted", confidence: 88 },
+      ],
+    });
+    memoryStoreDb.mockResolvedValue({
+      ok: true,
+      corpus: "memory",
+      path: "db-memory/items/xyz.md",
+      id: "xyz",
+      updatedAt: "now",
+      created: true,
+      version: 1,
+    });
+
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes("INSERT INTO memory_maintenance_runs")) {
+          return { rows: [{ id: "run-confidence" }], rowCount: 1 };
+        }
+        if (sql.includes("FROM memory_daily_entries")) {
+          return {
+            rows: [
+              buildDailyRow({
+                content: "remember this durable project rule for future work and stable decisions",
+              }),
+            ],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("FROM memory_items")) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("UPDATE memory_maintenance_runs")) {
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    } as any;
+
+    const result = await runMaintenanceCycle({
+      api: buildApi(),
+      cfg: buildCfg(),
+      pool,
+      workspaceDir: "/workspace",
+      dryRun: false,
+      batchSize: 100,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.insertedCount).toBe(1);
+    expect(result.skippedCount).toBe(2);
+    expect(memoryStoreDb).toHaveBeenCalledTimes(1);
+    expect(memoryStoreDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          content: "Accepted item",
+          confidence: 88,
+        }),
+      }),
+    );
   });
 
   it("fails without marking processed windows when a candidate store fails", async () => {
     extractMaintenanceCandidates.mockResolvedValue({
       summary: "summary",
       candidates: [
-        { content: "User prefers green color.", type: "fact", canonicalKey: "favorite_color" },
-        { content: "User hates purple color.", type: "note" },
+        {
+          content: "User prefers green color.",
+          type: "fact",
+          canonicalKey: "favorite_color",
+          confidence: 93,
+        },
+        { content: "User hates purple color.", type: "note", confidence: 85 },
       ],
     });
     memoryStoreDb

@@ -9,7 +9,8 @@ import { extractMaintenanceCandidates } from "./extractor.js";
 
 const SOURCE_KIND = "daily_entries";
 const DAILY_WINDOW_HEADER_RESERVE = 128;
-const EXTRACTOR_ALLOWED_DAILY_SOURCE_KINDS = ["memory_log", "legacy_import"] as const;
+const EXTRACTOR_ALLOWED_DAILY_SOURCE_KINDS = ["memory_log"] as const;
+const EXTRACTOR_MIN_CONFIDENCE = 80;
 
 type ExistingContentRow = { content: string };
 
@@ -421,12 +422,18 @@ export async function runMaintenanceCycle(params: {
           sourcePath: preparedTranscript.sourcePath,
           fileHash: preparedTranscript.fileHash,
           transcript,
-          maxCandidates: extractorCfg.maxCandidates ?? 20,
+          maxCandidates: extractorCfg.maxCandidates ?? 10,
         });
 
         let accepted = 0;
         let persistenceFailure: string | null = null;
         for (const candidate of extracted.candidates) {
+          const confidence =
+            typeof candidate.confidence === "number" ? candidate.confidence : null;
+          if (confidence === null || confidence < EXTRACTOR_MIN_CONFIDENCE) {
+            skippedCount += 1;
+            continue;
+          }
           const alreadyExists = await candidateAlreadyExists({
             pool: params.pool,
             userId: scope.userId,
@@ -450,6 +457,7 @@ export async function runMaintenanceCycle(params: {
               type: candidate.type,
               canonicalKey: candidate.canonicalKey,
               source: "system",
+              confidence,
               metadata: {
                 extractor: "anchorclaw-maintenance",
                 sourceKind: SOURCE_KIND,
