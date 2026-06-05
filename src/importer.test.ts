@@ -501,4 +501,56 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     expect(result.unreadableCount).toBe(1);
     expect(result.pendingCount).toBe(1);
   });
+
+  it("reads legacy files from sourceDir while resolving DB scope from targetWorkspaceDir", async () => {
+    readFile.mockImplementation(async (targetPath: string) => {
+      const normalizedPath = toPosixPath(targetPath);
+      if (normalizedPath.endsWith("/legacy/MEMORY.md")) {
+        return "## Facts\nAlpha";
+      }
+      throw new Error(`unexpected path: ${targetPath}`);
+    });
+
+    const pool = {
+      query: vi.fn(async (sql?: string) => {
+        const text = String(sql ?? "");
+        if (text.includes("FROM memory_import_runs")) return { rows: [] };
+        if (text.includes("SELECT attempt_count")) return { rows: [] };
+        if (text.includes("INSERT INTO memory_import_runs")) return { rows: [{ id: "run-split" }] };
+        return { rows: [] };
+      }),
+      connect: vi.fn(async () => ({
+        query: vi.fn(async (sql?: string) => {
+          const text = String(sql ?? "");
+          if (text.includes("INSERT INTO memory_items")) {
+            return { rows: [{ id: "item-1" }] };
+          }
+          return { rows: [] };
+        }),
+        release: vi.fn(),
+      })),
+    } as any;
+
+    const result = await runOneTimeWorkspaceImport({
+      api: createApi(),
+      cfg: {
+        workspaceDir: "/tmp/cfg-workspace",
+        postgres: { host: "localhost", database: "db", user: "user" },
+      },
+      pool,
+      sourceDir: "/tmp/legacy",
+      targetWorkspaceDir: "/tmp/target",
+      agentId: "ops",
+      cleanupMemoryMdAfterImport: false,
+    });
+
+    expect(result.import).toBe("ready");
+    expect(readFile).toHaveBeenCalledWith(expect.stringMatching(/\/tmp\/legacy\/MEMORY\.md$/), "utf8");
+    expect(resolveScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/target",
+        agentId: "ops",
+      }),
+    );
+  });
 });

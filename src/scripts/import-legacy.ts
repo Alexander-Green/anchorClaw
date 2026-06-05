@@ -1,30 +1,21 @@
-import path from "node:path";
-
 import type { OpenClawPluginApi } from "../api.js";
 import { anchorClawConfigSchema, type AnchorClawConfig } from "../config.js";
 import { runLegacyWorkspaceImport, scanLegacyWorkspace } from "../importer.js";
 import { createPostgresPool } from "../postgres.js";
+import {
+  planAnchorClawImportTargets,
+  type AnchorClawImportOptions,
+  type PlannedAnchorClawImportTarget,
+} from "./import-legacy-plan.js";
 
-export type AnchorClawImportOptions = {
-  workspaceDir?: string;
-  apply?: boolean;
-  keepFiles?: boolean;
-};
-
-function resolveCliConfig(api: OpenClawPluginApi, opts: AnchorClawImportOptions): AnchorClawConfig {
-  const parsed = anchorClawConfigSchema.parse(api.pluginConfig);
-  if (!opts.workspaceDir) {
-    return parsed;
-  }
-  return {
-    ...parsed,
-    workspaceDir: path.resolve(opts.workspaceDir),
-  };
+function resolveCliConfig(api: OpenClawPluginApi): AnchorClawConfig {
+  return anchorClawConfigSchema.parse(api.pluginConfig);
 }
 
-function printLegacyScan(scan: Awaited<ReturnType<typeof scanLegacyWorkspace>>) {
-  console.log("\nAnchorClaw legacy import scan");
-  console.log(`- workspaceDir: ${scan.workspaceDir}`);
+function printLegacyScan(target: PlannedAnchorClawImportTarget, scan: Awaited<ReturnType<typeof scanLegacyWorkspace>>) {
+  console.log(`\nAnchorClaw legacy import scan (${target.label})`);
+  console.log(`- sourceDir: ${scan.sourceDir}`);
+  console.log(`- targetWorkspaceDir: ${scan.targetWorkspaceDir}`);
   console.log(`- MEMORY.md: ${scan.memoryMd.state}`);
   if (scan.memoryMd.sha256) {
     console.log(`- MEMORY.md sha256: ${scan.memoryMd.sha256}`);
@@ -41,26 +32,97 @@ function printLegacyScan(scan: Awaited<ReturnType<typeof scanLegacyWorkspace>>) 
   }
 }
 
+function buildApplyHint(opts: AnchorClawImportOptions): string {
+  const parts = ["openclaw anchorclaw import"];
+  if (opts.sourceDir) {
+    parts.push(`--source-dir ${opts.sourceDir}`);
+  }
+  if (opts.defaultAgent) {
+    parts.push("--default-agent");
+  } else if (opts.agent) {
+    parts.push(`--agent ${opts.agent}`);
+  } else if (opts.allAgentWorkspaces) {
+    parts.push("--all-agent-workspaces");
+  }
+  if (opts.keepFiles) {
+    parts.push("--keep-files");
+  }
+  parts.push("--apply");
+  return parts.join(" ");
+}
+
 export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorClawImportOptions = {}): Promise<void> {
-  const cfg = resolveCliConfig(api, opts);
+  const cfg = resolveCliConfig(api);
+  const runtimeConfig =
+    typeof (api as any)?.runtime?.config?.current === "function"
+      ? ((api as any).runtime.config.current() as any)
+      : undefined;
+  const targets = planAnchorClawImportTargets({
+    cfg,
+    opts,
+    runtimeConfig,
+    runtimeAgentId: (api as any)?.runtime?.agentId,
+    runtimeSessionKey: (api as any)?.runtime?.sessionKey,
+  });
   const pool = createPostgresPool({ cfg });
   try {
-    const scan = await scanLegacyWorkspace({
-      api,
-      cfg,
-      pool,
-      workspaceDir: cfg.workspaceDir,
-      agentId: (api as any)?.runtime?.agentId,
-      sessionKey: (api as any)?.runtime?.sessionKey,
-    });
-    printLegacyScan(scan);
-    if (!opts.apply) {
-      if (scan.hasActiveLegacy) {
-        console.log("\nNext step: run `openclaw anchorclaw import --apply` to migrate and archive active legacy files.");
-      } else {
-        console.log("\nNo active legacy files detected.");
+    let hasActiveLegacy = false;
+    let unreadableCount = 0;
+
+    for (const target of targets) {
+      if (target.deprecatedWorkspaceDirFallback) {
+        console.warn(
+          "Warning: OpenClaw runtime config was unavailable; falling back to anchorclaw.workspaceDir for target resolution.",
+        );
       }
-      if (scan.unreadableCount > 0) {
+
+      const scan = await scanLegacyWorkspace({
+        api,
+        cfg,
+        pool,
+        sourceDir: target.sourceDir,
+        targetWorkspaceDir: target.targetWorkspaceDir,
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+      });
+      printLegacyScan(target, scan);
+      hasActiveLegacy = hasActiveLegacy || scan.hasActiveLegacy;
+      unreadableCount += scan.unreadableCount;
+
+      if (opts.apply) {
+        const result = await runLegacyWorkspaceImport({
+          api,
+          cfg,
+          pool,
+          sourceDir: target.sourceDir,
+          targetWorkspaceDir: target.targetWorkspaceDir,
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          cleanupMemoryMdAfterImport: !opts.keepFiles,
+          archiveImportedFiles: !opts.keepFiles,
+        });
+
+        console.log(`\nAnchorClaw legacy import complete (${target.label})`);
+        console.log(`- MEMORY.md import overall: ${result.memoryMdResult.overall}`);
+        console.log(`- MEMORY.md import state: ${result.memoryMdResult.import}`);
+        console.log(`- MEMORY.md cleanup state: ${result.memoryMdResult.cleanup}`);
+        console.log(`- daily files imported: ${result.dailyImportedCount}`);
+        console.log(`- daily files already imported: ${result.dailySkippedImportedCount}`);
+        console.log(`- daily files archived: ${result.dailyArchivedCount}`);
+        console.log(`- unsupported daily files: ${result.dailyUnsupportedCount}`);
+        if (result.memoryMdResult.reason) {
+          console.warn(`Warning (${target.label}): ${result.memoryMdResult.reason}`);
+        }
+      }
+    }
+
+    if (!opts.apply) {
+      if (hasActiveLegacy) {
+        console.log(`\nNext step: run \`${buildApplyHint(opts)}\` to migrate and archive active legacy files.`);
+      } else {
+        console.log("\nNo active legacy files detected across the selected import targets.");
+      }
+      if (unreadableCount > 0) {
         console.warn(
           "Warning: unreadable legacy daily files were skipped; fix file permissions or contents, then rerun `openclaw anchorclaw import`.",
         );
@@ -68,30 +130,8 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
       return;
     }
 
-    const result = await runLegacyWorkspaceImport({
-      api,
-      cfg,
-      pool,
-      workspaceDir: cfg.workspaceDir,
-      agentId: (api as any)?.runtime?.agentId,
-      sessionKey: (api as any)?.runtime?.sessionKey,
-      cleanupMemoryMdAfterImport: !opts.keepFiles,
-      archiveImportedFiles: !opts.keepFiles,
-    });
-
-    console.log("\nAnchorClaw legacy import complete");
-    console.log(`- MEMORY.md import overall: ${result.memoryMdResult.overall}`);
-    console.log(`- MEMORY.md import state: ${result.memoryMdResult.import}`);
-    console.log(`- MEMORY.md cleanup state: ${result.memoryMdResult.cleanup}`);
-    console.log(`- daily files imported: ${result.dailyImportedCount}`);
-    console.log(`- daily files already imported: ${result.dailySkippedImportedCount}`);
-    console.log(`- daily files archived: ${result.dailyArchivedCount}`);
-    console.log(`- unsupported daily files: ${result.dailyUnsupportedCount}`);
     if (opts.keepFiles) {
       console.warn("Warning: --keep-files leaves legacy files active and can reintroduce duplicate prompt injection risk.");
-    }
-    if (result.memoryMdResult.reason) {
-      console.warn(`Warning: ${result.memoryMdResult.reason}`);
     }
   } finally {
     await pool.end();

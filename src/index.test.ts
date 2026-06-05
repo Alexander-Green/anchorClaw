@@ -68,12 +68,15 @@ const {
     lastSourceSha256: null,
   })),
   scanLegacyWorkspaceMock: vi.fn(async () => ({
+    sourceDir: "/tmp/work",
+    targetWorkspaceDir: "/tmp/work",
     workspaceDir: "/tmp/work",
     memoryMd: { path: "MEMORY.md", state: "absent", sha256: null, importedSameSha: false },
     dailyFiles: [],
     activeLegacyCount: 0,
     pendingCount: 0,
     unsupportedCount: 0,
+    unreadableCount: 0,
     hasActiveLegacy: false,
   })),
   getIdentityWarning: vi.fn(() => null),
@@ -1395,7 +1398,8 @@ describe("phase2 session delta listener", () => {
 
     expect(scanLegacyWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        workspaceDir: path.resolve("/cfg/workspace"),
+        sourceDir: path.resolve("/cfg/workspace"),
+        targetWorkspaceDir: path.resolve("/cfg/workspace"),
       }),
     );
   });

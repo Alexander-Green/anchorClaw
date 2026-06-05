@@ -73,18 +73,30 @@ export default definePluginEntry({
         anchorclaw
           .command("import")
           .description("Scan or migrate legacy MEMORY.md and memory/YYYY-MM-DD.md files into AnchorClaw DB storage")
-          .option("--workspace-dir <path>", "Override AnchorClaw workspace directory from plugin config")
+          .option("--default-agent", "Import into the OpenClaw default agent workspace")
+          .option("--agent <id>", "Import into a specific configured OpenClaw agent workspace")
+          .option("--all-agent-workspaces", "Import all unique agent workspaces from OpenClaw config")
+          .option("--source-dir <path>", "Import legacy files from an external source directory into the selected agent workspace")
           .option("--apply", "Import and archive active legacy files")
           .option("--keep-files", "Do not stub/archive legacy files after import")
+          .option("--non-interactive", "Disable prompts and require explicit flags only")
           .action(async (opts: {
-            workspaceDir?: string;
+            defaultAgent?: boolean;
+            agent?: string;
+            allAgentWorkspaces?: boolean;
+            sourceDir?: string;
             apply?: boolean;
             keepFiles?: boolean;
+            nonInteractive?: boolean;
           }) => {
             await runAnchorClawImport(api, {
-              workspaceDir: opts.workspaceDir,
+              defaultAgent: opts.defaultAgent,
+              agent: opts.agent,
+              allAgentWorkspaces: opts.allAgentWorkspaces,
+              sourceDir: opts.sourceDir,
               apply: opts.apply,
               keepFiles: opts.keepFiles,
+              nonInteractive: opts.nonInteractive,
             });
           });
       }, { commands: ["anchorclaw"] });

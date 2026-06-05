@@ -6,7 +6,11 @@ import { memorySearchDailyDb, memorySearchDb } from "../../memory/search.js";
 import { memorySearchSessions } from "../../memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/sessions-index.js";
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
-import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
+import {
+  resolveConfiguredLegacyImportScope,
+  resolveConfiguredWorkspaceDir,
+  WORKSPACE_DIR_UNAVAILABLE,
+} from "../../workspace.js";
 import {
   ensureToolRuntimeReady,
   type ToolRegistrationParams,
@@ -87,8 +91,8 @@ async function buildLegacyImportWarning(params: {
   if (params.corpus !== "memory" && params.corpus !== "all") {
     return null;
   }
-  const workspaceDir = resolveConfiguredWorkspaceDir(params.ctx.cfg);
-  if (!workspaceDir || !params.ctx.cfg) {
+  const legacyImportScope = resolveConfiguredLegacyImportScope(params.ctx.cfg);
+  if (!legacyImportScope || !params.ctx.cfg) {
     return null;
   }
   try {
@@ -96,7 +100,8 @@ async function buildLegacyImportWarning(params: {
       api: params.api,
       cfg: params.ctx.cfg,
       pool: params.ctx.getPool(),
-      workspaceDir,
+      sourceDir: legacyImportScope.sourceDir,
+      targetWorkspaceDir: legacyImportScope.targetWorkspaceDir,
       agentId: (params.api as any)?.runtime?.agentId,
       sessionKey: (params.api as any)?.runtime?.sessionKey,
     });

@@ -34,6 +34,11 @@ import { runAnchorClawImport } from "./import-legacy.js";
 describe("runAnchorClawImport", () => {
   const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
   const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const runtimeConfig = {
+    agents: {
+      list: [{ id: "main", default: true, workspace: "/runtime/default" }],
+    },
+  } as any;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -48,7 +53,9 @@ describe("runAnchorClawImport", () => {
     });
 
     scanLegacyWorkspaceMock.mockResolvedValue({
-      workspaceDir: "/cfg/workspace",
+      sourceDir: "/runtime/default",
+      targetWorkspaceDir: "/runtime/default",
+      workspaceDir: "/runtime/default",
       memoryMd: { path: "MEMORY.md", state: "pending", sha256: "sha-memory", importedSameSha: false },
       dailyFiles: [
         {
@@ -87,44 +94,56 @@ describe("runAnchorClawImport", () => {
   it("prints dry-run scan output and does not apply import", async () => {
     const api = {
       pluginConfig: {},
-      runtime: { agentId: "main", sessionKey: "agent:main:test" },
+      runtime: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+        config: { current: () => runtimeConfig },
+      },
     } as any;
 
-    await runAnchorClawImport(api);
+    await runAnchorClawImport(api, { defaultAgent: true });
 
     expect(scanLegacyWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         api,
         cfg: expect.objectContaining({ workspaceDir: "/cfg/workspace" }),
-        workspaceDir: "/cfg/workspace",
+        sourceDir: "/runtime/default",
+        targetWorkspaceDir: "/runtime/default",
         agentId: "main",
         sessionKey: "agent:main:test",
       }),
     );
     expect(runLegacyWorkspaceImportMock).not.toHaveBeenCalled();
-    expect(consoleLogSpy).toHaveBeenCalledWith("\nAnchorClaw legacy import scan");
-    expect(consoleLogSpy).toHaveBeenCalledWith("\nNext step: run `openclaw anchorclaw import --apply` to migrate and archive active legacy files.");
+    expect(consoleLogSpy).toHaveBeenCalledWith("\nAnchorClaw legacy import scan (default agent main)");
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      "\nNext step: run `openclaw anchorclaw import --default-agent --apply` to migrate and archive active legacy files.",
+    );
     expect(poolEnd).toHaveBeenCalledTimes(1);
   });
 
   it("applies import with cleanup/archive enabled by default", async () => {
     const api = {
       pluginConfig: {},
-      runtime: { agentId: "main", sessionKey: "agent:main:test" },
+      runtime: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+        config: { current: () => runtimeConfig },
+      },
     } as any;
 
-    await runAnchorClawImport(api, { apply: true });
+    await runAnchorClawImport(api, { defaultAgent: true, apply: true });
 
     expect(runLegacyWorkspaceImportMock).toHaveBeenCalledWith(
       expect.objectContaining({
         api,
         cfg: expect.objectContaining({ workspaceDir: "/cfg/workspace" }),
-        workspaceDir: "/cfg/workspace",
+        sourceDir: "/runtime/default",
+        targetWorkspaceDir: "/runtime/default",
         cleanupMemoryMdAfterImport: true,
         archiveImportedFiles: true,
       }),
     );
-    expect(consoleLogSpy).toHaveBeenCalledWith("\nAnchorClaw legacy import complete");
+    expect(consoleLogSpy).toHaveBeenCalledWith("\nAnchorClaw legacy import complete (default agent main)");
     expect(consoleLogSpy).toHaveBeenCalledWith("- daily files archived: 1");
     expect(consoleWarnSpy).not.toHaveBeenCalled();
     expect(poolEnd).toHaveBeenCalledTimes(1);
@@ -133,14 +152,24 @@ describe("runAnchorClawImport", () => {
   it("supports keep-files mode and warns about duplicate injection risk", async () => {
     const api = {
       pluginConfig: {},
-      runtime: { agentId: "main", sessionKey: "agent:main:test" },
+      runtime: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+        config: { current: () => runtimeConfig },
+      },
     } as any;
 
-    await runAnchorClawImport(api, { apply: true, keepFiles: true, workspaceDir: "./relative-workspace" });
+    await runAnchorClawImport(api, {
+      defaultAgent: true,
+      sourceDir: "./relative-workspace",
+      apply: true,
+      keepFiles: true,
+    });
 
     expect(runLegacyWorkspaceImportMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        workspaceDir: expect.stringMatching(/relative-workspace$/),
+        sourceDir: expect.stringMatching(/relative-workspace$/),
+        targetWorkspaceDir: "/runtime/default",
         cleanupMemoryMdAfterImport: false,
         archiveImportedFiles: false,
       }),
@@ -153,7 +182,9 @@ describe("runAnchorClawImport", () => {
 
   it("warns when dry-run skips unreadable legacy daily files", async () => {
     scanLegacyWorkspaceMock.mockResolvedValueOnce({
-      workspaceDir: "/cfg/workspace",
+      sourceDir: "/runtime/default",
+      targetWorkspaceDir: "/runtime/default",
+      workspaceDir: "/runtime/default",
       memoryMd: { path: "MEMORY.md", state: "absent", sha256: null, importedSameSha: false },
       dailyFiles: [
         {
@@ -174,10 +205,14 @@ describe("runAnchorClawImport", () => {
     } as any);
     const api = {
       pluginConfig: {},
-      runtime: { agentId: "main", sessionKey: "agent:main:test" },
+      runtime: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+        config: { current: () => runtimeConfig },
+      },
     } as any;
 
-    await runAnchorClawImport(api);
+    await runAnchorClawImport(api, { defaultAgent: true });
 
     expect(consoleLogSpy).toHaveBeenCalledWith("- unreadable daily files: 1");
     expect(consoleWarnSpy).toHaveBeenCalledWith(

@@ -2,7 +2,11 @@ import type { OpenClawPluginApi } from "../api.js";
 import { scanLegacyWorkspace } from "../importer.js";
 import { drainFlushInbox } from "./flush-inbox.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
-import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../workspace.js";
+import {
+  resolveConfiguredLegacyImportScope,
+  resolveConfiguredWorkspaceDir,
+  WORKSPACE_DIR_UNAVAILABLE,
+} from "../workspace.js";
 
 export type StartupBootstrapRuntime = {
   ensureStartupBootstrap: () => Promise<void>;
@@ -111,8 +115,8 @@ export function createStartupBootstrapRuntime(params: {
 
     api.logger.info("anchorclaw: startup step legacy-import-scan started");
     try {
-      const workspaceDir = resolveConfiguredWorkspaceDir(importCfg);
-      if (!workspaceDir) {
+      const legacyImportScope = resolveConfiguredLegacyImportScope(importCfg);
+      if (!legacyImportScope) {
         const reason = WORKSPACE_DIR_UNAVAILABLE;
         ctx.setDurableState({
           overall: "ready",
@@ -126,7 +130,8 @@ export function createStartupBootstrapRuntime(params: {
           api,
           cfg: importCfg,
           pool: ctx.getPool(),
-          workspaceDir,
+          sourceDir: legacyImportScope.sourceDir,
+          targetWorkspaceDir: legacyImportScope.targetWorkspaceDir,
           agentId: (api as any)?.runtime?.agentId,
           sessionKey: (api as any)?.runtime?.sessionKey,
         });

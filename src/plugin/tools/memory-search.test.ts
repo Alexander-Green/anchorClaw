@@ -21,12 +21,15 @@ const {
   memorySearchSessionsIndexDbMock: vi.fn(async () => []),
   filterSessionHitsByVisibilityMock: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
   scanLegacyWorkspaceMock: vi.fn(async () => ({
+    sourceDir: "/workspace",
+    targetWorkspaceDir: "/workspace",
     workspaceDir: "/workspace",
     memoryMd: { path: "MEMORY.md", state: "absent", sha256: null, importedSameSha: false },
     dailyFiles: [],
     activeLegacyCount: 0,
     pendingCount: 0,
     unsupportedCount: 0,
+    unreadableCount: 0,
     hasActiveLegacy: false,
   })),
 }));
@@ -190,12 +193,15 @@ describe("memory_search tool exactTop1 metadata", () => {
   it("adds a legacy import warning on empty memory results when active legacy files still exist", async () => {
     (memorySearchDbMock as any).mockResolvedValueOnce([]);
     scanLegacyWorkspaceMock.mockResolvedValueOnce({
+      sourceDir: "/workspace",
+      targetWorkspaceDir: "/workspace",
       workspaceDir: "/workspace",
       memoryMd: { path: "MEMORY.md", state: "pending", sha256: "sha-memory", importedSameSha: false },
       dailyFiles: [],
       activeLegacyCount: 1,
       pendingCount: 1,
       unsupportedCount: 0,
+      unreadableCount: 0,
       hasActiveLegacy: true,
     } as any);
     const { ctx, registerTool } = buildCtx();

@@ -101,6 +101,8 @@ export type LegacyDailyFileScan = {
 };
 
 export type LegacyWorkspaceScanResult = {
+  sourceDir: string;
+  targetWorkspaceDir: string;
   workspaceDir: string;
   memoryMd: LegacyMemoryMdScan;
   dailyFiles: LegacyDailyFileScan[];
@@ -119,6 +121,20 @@ export type LegacyWorkspaceImportSummary = {
   dailySkippedImportedCount: number;
   dailyUnsupportedCount: number;
 };
+
+type LegacyWorkspaceBinding = {
+  sourceDir?: string;
+  targetWorkspaceDir?: string;
+  workspaceDir?: string;
+};
+
+function resolveLegacySourceDir(params: LegacyWorkspaceBinding): string {
+  return path.resolve(params.sourceDir ?? params.workspaceDir ?? params.targetWorkspaceDir ?? ".");
+}
+
+function resolveLegacyTargetWorkspaceDir(params: LegacyWorkspaceBinding): string {
+  return path.resolve(params.targetWorkspaceDir ?? params.workspaceDir ?? params.sourceDir ?? ".");
+}
 
 function parseMemoryMdToItems(params: { content: string; relPath: string }): MemoryMdItem[] {
   const lines = params.content.split("\n");
@@ -442,7 +458,7 @@ async function insertMemoryItemBatch(params: {
 
 async function cleanupMemoryMd(params: {
   api: OpenClawPluginApi;
-  workspaceDir: string;
+  sourceDir: string;
   absPath: string;
   content: string;
   sourceSha256: string;
@@ -473,14 +489,14 @@ async function cleanupMemoryMd(params: {
         reason: "legacy MEMORY.md changed before cleanup; duplicate prompt injection risk remains",
       };
     }
-    const backupDir = path.join(params.workspaceDir, ".openclaw-repair", "anchorclaw");
+    const backupDir = path.join(params.sourceDir, ".openclaw-repair", "anchorclaw");
     await fs.mkdir(backupDir, { recursive: true });
     const stamp = new Date().toISOString().replaceAll(":", "").replaceAll(".", "");
     const backupPath = path.join(backupDir, `MEMORY.md.anchorclaw-backup.${stamp}.md`);
     await fs.writeFile(backupPath, params.content, "utf8");
     await fs.writeFile(params.absPath, stub, "utf8");
     params.api.logger.info(
-      `anchorclaw: cleaned up MEMORY.md after import (backup: ${path.relative(params.workspaceDir, backupPath)})`,
+      `anchorclaw: cleaned up MEMORY.md after import (backup: ${path.relative(params.sourceDir, backupPath)})`,
     );
     return { cleanup: "completed" };
   } catch (error) {
@@ -498,26 +514,26 @@ function buildArchiveStamp() {
 }
 
 async function archiveLegacyFile(params: {
-  workspaceDir: string;
+  sourceDir: string;
   absPath: string;
   archiveSubdir: string;
   fileName: string;
   sha256: string;
 }): Promise<string> {
-  const archiveDir = path.join(params.workspaceDir, ".openclaw-repair", "anchorclaw", params.archiveSubdir);
+  const archiveDir = path.join(params.sourceDir, ".openclaw-repair", "anchorclaw", params.archiveSubdir);
   await fs.mkdir(archiveDir, { recursive: true });
   const ext = path.extname(params.fileName);
   const baseName = path.basename(params.fileName, ext);
   const archiveName = `${baseName}.${buildArchiveStamp()}.sha-${params.sha256.slice(0, 12)}${ext || ".md"}`;
   const archivePath = path.join(archiveDir, archiveName);
   await fs.rename(params.absPath, archivePath);
-  return path.relative(params.workspaceDir, archivePath);
+  return path.relative(params.sourceDir, archivePath);
 }
 
 async function retryExistingCleanupIfNeeded(params: {
   api: OpenClawPluginApi;
   pool: PostgresPool;
-  workspaceDir: string;
+  sourceDir: string;
   absPath: string;
   content: string;
   sourceSha256: string;
@@ -537,7 +553,7 @@ async function retryExistingCleanupIfNeeded(params: {
 
   const cleanupResult = await cleanupMemoryMd({
     api: params.api,
-    workspaceDir: params.workspaceDir,
+    sourceDir: params.sourceDir,
     absPath: params.absPath,
     content: params.content,
     sourceSha256: params.sourceSha256,
@@ -563,13 +579,17 @@ async function importMemoryMd(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir: string;
+  workspaceDir?: string;
+  sourceDir?: string;
+  targetWorkspaceDir?: string;
   agentId?: string;
   sessionKey?: string;
   cleanupMemoryMdAfterImport: boolean;
 }): Promise<WorkspaceImportResult> {
+  const sourceDir = resolveLegacySourceDir(params);
+  const targetWorkspaceDir = resolveLegacyTargetWorkspaceDir(params);
   const relPath = "MEMORY.md";
-  const absPath = path.join(params.workspaceDir, relPath);
+  const absPath = path.join(sourceDir, relPath);
   let content: string;
   try {
     content = await fs.readFile(absPath, "utf8");
@@ -599,7 +619,7 @@ async function importMemoryMd(params: {
   const scope = await resolveUserAndWorkspaceScope({
     api: params.api,
     pool: params.pool,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: targetWorkspaceDir,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     configuredExternalId: params.cfg.identity?.externalId,
@@ -617,7 +637,7 @@ async function importMemoryMd(params: {
     return retryExistingCleanupIfNeeded({
       api: params.api,
       pool: params.pool,
-      workspaceDir: params.workspaceDir,
+      sourceDir,
       absPath,
       content,
       sourceSha256,
@@ -695,7 +715,7 @@ async function importMemoryMd(params: {
 
   const cleanupResult = await cleanupMemoryMd({
     api: params.api,
-    workspaceDir: params.workspaceDir,
+    sourceDir,
     absPath,
     content,
     sourceSha256,
@@ -789,7 +809,9 @@ async function importDailyMemory(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir: string;
+  workspaceDir?: string;
+  sourceDir?: string;
+  targetWorkspaceDir?: string;
   agentId?: string;
   sessionKey?: string;
   archiveImportedFiles: boolean;
@@ -799,7 +821,9 @@ async function importDailyMemory(params: {
   skippedImportedCount: number;
   unsupportedCount: number;
 }> {
-  const memoryDir = path.join(params.workspaceDir, "memory");
+  const sourceDir = resolveLegacySourceDir(params);
+  const targetWorkspaceDir = resolveLegacyTargetWorkspaceDir(params);
+  const memoryDir = path.join(sourceDir, "memory");
   let dirents: Dirent[] = [];
   try {
     dirents = (await fs.readdir(memoryDir, { withFileTypes: true })) as Dirent[];
@@ -815,7 +839,7 @@ async function importDailyMemory(params: {
   const scope = await resolveUserAndWorkspaceScope({
     api: params.api,
     pool: params.pool,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: targetWorkspaceDir,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     configuredExternalId: params.cfg.identity?.externalId,
@@ -915,7 +939,7 @@ async function importDailyMemory(params: {
       }
       if (params.archiveImportedFiles) {
         const archiveRelPath = await archiveLegacyFile({
-          workspaceDir: params.workspaceDir,
+          sourceDir,
           absPath,
           archiveSubdir: "legacy-daily",
           fileName: entry.name,
@@ -952,11 +976,15 @@ export async function scanLegacyWorkspace(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir: string;
+  workspaceDir?: string;
+  sourceDir?: string;
+  targetWorkspaceDir?: string;
   agentId?: string;
   sessionKey?: string;
 }): Promise<LegacyWorkspaceScanResult> {
-  const memoryPath = path.join(params.workspaceDir, "MEMORY.md");
+  const sourceDir = resolveLegacySourceDir(params);
+  const targetWorkspaceDir = resolveLegacyTargetWorkspaceDir(params);
+  const memoryPath = path.join(sourceDir, "MEMORY.md");
   let memoryMd: LegacyMemoryMdScan = {
     path: "MEMORY.md",
     state: "absent",
@@ -977,7 +1005,7 @@ export async function scanLegacyWorkspace(params: {
       const scope = await resolveUserAndWorkspaceScope({
         api: params.api,
         pool: params.pool,
-        workspaceDir: params.workspaceDir,
+        workspaceDir: targetWorkspaceDir,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         configuredExternalId: params.cfg.identity?.externalId,
@@ -1003,13 +1031,13 @@ export async function scanLegacyWorkspace(params: {
   }
 
   const dailyFiles: LegacyDailyFileScan[] = [];
-  const memoryDir = path.join(params.workspaceDir, "memory");
+  const memoryDir = path.join(sourceDir, "memory");
   try {
     const dirents = (await fs.readdir(memoryDir, { withFileTypes: true })) as Dirent[];
     const scope = await resolveUserAndWorkspaceScope({
       api: params.api,
       pool: params.pool,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: targetWorkspaceDir,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       configuredExternalId: params.cfg.identity?.externalId,
@@ -1077,7 +1105,9 @@ export async function scanLegacyWorkspace(params: {
   const unreadableCount = dailyFiles.filter((file) => file.state === "unreadable").length;
 
   return {
-    workspaceDir: params.workspaceDir,
+    sourceDir,
+    targetWorkspaceDir,
+    workspaceDir: sourceDir,
     memoryMd,
     dailyFiles,
     activeLegacyCount,
@@ -1092,7 +1122,9 @@ export async function runLegacyWorkspaceImport(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir: string;
+  workspaceDir?: string;
+  sourceDir?: string;
+  targetWorkspaceDir?: string;
   agentId?: string;
   sessionKey?: string;
   cleanupMemoryMdAfterImport?: boolean;
@@ -1121,7 +1153,9 @@ export async function runOneTimeWorkspaceImport(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir: string;
+  workspaceDir?: string;
+  sourceDir?: string;
+  targetWorkspaceDir?: string;
   agentId?: string;
   sessionKey?: string;
   cleanupMemoryMdAfterImport?: boolean;

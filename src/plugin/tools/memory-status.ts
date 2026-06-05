@@ -6,6 +6,7 @@ import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveConfiguredLegacyImportScope } from "../../workspace.js";
 
 function isPromptInjectionAllowed(api: any): boolean {
   const currentConfig =
@@ -175,11 +176,16 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
           pendingMessages: pending.pendingMessages,
         };
         try {
+          const legacyImportScope = resolveConfiguredLegacyImportScope(ctx.cfg);
+          if (!legacyImportScope) {
+            throw new Error("workspace_dir_unavailable");
+          }
           const legacyScan = await scanLegacyWorkspace({
             api,
             cfg: ctx.cfg!,
             pool: ctx.getPool(),
-            workspaceDir: ctx.cfg!.workspaceDir,
+            sourceDir: legacyImportScope.sourceDir,
+            targetWorkspaceDir: legacyImportScope.targetWorkspaceDir,
             agentId: (api as any)?.runtime?.agentId,
             sessionKey: (api as any)?.runtime?.sessionKey,
           });
