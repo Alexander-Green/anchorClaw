@@ -256,7 +256,12 @@ function buildApi() {
       sessionKey: "agent:main:main",
       workspaceDir: "/tmp/work",
       config: {
-        current: () => ({ plugins: { slots: { memory: "anchorclaw" } } }),
+        current: () => ({
+          plugins: { slots: { memory: "anchorclaw" } },
+          agents: {
+            list: [{ id: "main", default: true, workspace: "/tmp/work" }],
+          },
+        }),
       },
       events: {
         onSessionTranscriptUpdate: vi.fn((listener: (update: { sessionFile?: unknown }) => void) => {
@@ -327,7 +332,12 @@ function buildApiLegacyLifecycle() {
       sessionKey: "agent:main:main",
       workspaceDir: "/tmp/work",
       config: {
-        current: () => ({ plugins: { slots: { memory: "anchorclaw" } } }),
+        current: () => ({
+          plugins: { slots: { memory: "anchorclaw" } },
+          agents: {
+            list: [{ id: "main", default: true, workspace: "/tmp/work" }],
+          },
+        }),
       },
       events: {
         onSessionTranscriptUpdate: vi.fn((listener: (update: { sessionFile?: unknown }) => void) => {
@@ -395,6 +405,7 @@ beforeEach(() => {
     postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
     sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
     identity: { externalId: "test" },
+    maintenance: { workspaceScope: { mode: "default-agent" } },
     workspaceDir: "/tmp/work",
   });
   memoryGetFromDb.mockResolvedValue({
@@ -1341,6 +1352,68 @@ describe("phase2 session delta listener", () => {
     });
   });
 
+  it("uses resolved runtime workspace for memory_status legacy import active check", async () => {
+    const pool = {
+      query: vi.fn(async (sql?: string) => {
+        const queryText = String(sql ?? "");
+        if (queryText.includes("to_regclass(")) {
+          return {
+            rows: [
+              {
+                memory_items: "memory_items",
+                memory_daily_entries: "memory_daily_entries",
+                session_index_files: "session_index_files",
+                session_index_chunks: "session_index_chunks",
+                schema_migrations: "schema_migrations",
+              },
+            ],
+          };
+        }
+        if (queryText.includes("schema_migrations")) {
+          return { rows: [{ id: "0002" }] };
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn(async () => ({
+        query: vi.fn(async () => ({ rows: [] })),
+        release: vi.fn(),
+      })),
+    };
+    createPool.mockReturnValue(pool);
+    statFs.mockResolvedValueOnce({ size: 1 });
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { search: { enabled: true }, visibility: "current" },
+      identity: { externalId: "test" },
+      maintenance: { workspaceScope: { mode: "default-agent" } },
+      workspaceDir: "/cfg/workspace",
+    });
+    const { api, runServiceStart } = buildApi();
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/runtime/workspace" }],
+      },
+    });
+
+    await registerAndWaitStartup({ api, runServiceStart });
+    const statusRegistration = (api.registerTool as any).mock.calls
+      .map((call: any[]) => call[0])
+      .find((tool: any) => tool?.name === "memory_status");
+    expect(statusRegistration).toBeDefined();
+
+    await statusRegistration.execute("toolcall-status-active-runtime-workspace-1", { check: true });
+
+    expect(scanLegacyWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceDir: path.resolve("/runtime/workspace"),
+        targetWorkspaceDir: path.resolve("/runtime/workspace"),
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
   it("warns when startup scan finds active legacy files", async () => {
     scanLegacyWorkspaceMock.mockResolvedValueOnce({
       workspaceDir: "/tmp/work",
@@ -1365,9 +1438,13 @@ describe("phase2 session delta listener", () => {
     await registerAndWaitStartup({ api, runServiceStart });
 
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("anchorclaw: active legacy memory files detected (2); run openclaw anchorclaw import"),
+      expect.stringContaining(
+        "anchorclaw: active legacy memory files detected (2; agent main, /tmp/work); run openclaw anchorclaw import",
+      ),
     );
-    expect(api.logger.info).not.toHaveBeenCalledWith("anchorclaw: startup step legacy-import-scan found no active legacy files");
+    expect(api.logger.info).not.toHaveBeenCalledWith(
+      "anchorclaw: startup step legacy-import-scan found no active legacy files (agent main, /tmp/work)",
+    );
   });
 
   it("logs legacy import scan failure without blocking startup", async () => {
@@ -1377,47 +1454,113 @@ describe("phase2 session delta listener", () => {
     await registerAndWaitStartup({ api, runServiceStart });
 
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("anchorclaw: legacy import scan failed (EACCES)"),
-    );
-    expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("anchorclaw: startup step legacy-import-scan failed (EACCES)"),
+      expect.stringContaining("anchorclaw: startup step legacy-import-scan failed (agent main, /tmp/work, EACCES)"),
     );
   });
 
-  it("uses cfg.workspaceDir as the startup scan source of truth", async () => {
+  it("uses resolved runtime workspace scope as the startup scan source of truth", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
       identity: { externalId: "test" },
+      maintenance: { workspaceScope: { mode: "default-agent" } },
       workspaceDir: "/cfg/workspace",
     });
     const { api, runServiceStart } = buildApi();
-    (api.runtime as any).workspaceDir = "/runtime/workspace";
+    (api.runtime as any).workspaceDir = "/runtime/ignored-workspace";
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/runtime/workspace" }],
+      },
+    });
 
     await registerAndWaitStartup({ api, runServiceStart });
 
     expect(scanLegacyWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        sourceDir: path.resolve("/cfg/workspace"),
-        targetWorkspaceDir: path.resolve("/cfg/workspace"),
+        sourceDir: path.resolve("/runtime/workspace"),
+        targetWorkspaceDir: path.resolve("/runtime/workspace"),
       }),
     );
   });
 
-  it("skips startup legacy scan when cfg.workspaceDir is not set", async () => {
+  it("fans out startup legacy scan across all unique agent workspaces and dedupes shared paths", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
+      identity: { externalId: "test" },
+      maintenance: { workspaceScope: { mode: "all-agent-workspaces" } },
+      workspaceDir: "/cfg/workspace",
+    });
+    scanLegacyWorkspaceMock
+      .mockResolvedValueOnce({
+        workspaceDir: "/agents/shared",
+        memoryMd: { path: "MEMORY.md", state: "absent", sha256: null, importedSameSha: false },
+        dailyFiles: [],
+        activeLegacyCount: 0,
+        pendingCount: 0,
+        unsupportedCount: 0,
+        hasActiveLegacy: false,
+      } as any)
+      .mockResolvedValueOnce({
+        workspaceDir: "/agents/qa",
+        memoryMd: { path: "MEMORY.md", state: "absent", sha256: null, importedSameSha: false },
+        dailyFiles: [],
+        activeLegacyCount: 0,
+        pendingCount: 0,
+        unsupportedCount: 0,
+        hasActiveLegacy: false,
+      } as any);
+    const { api, runServiceStart } = buildApi();
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/agents/shared" },
+          { id: "ops", workspace: "/agents/shared" },
+          { id: "qa", workspace: "/agents/qa" },
+        ],
+      },
+    });
+
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    expect(scanLegacyWorkspaceMock).toHaveBeenCalledTimes(2);
+    expect(scanLegacyWorkspaceMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sourceDir: path.resolve("/agents/shared"),
+        targetWorkspaceDir: path.resolve("/agents/shared"),
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(scanLegacyWorkspaceMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sourceDir: path.resolve("/agents/qa"),
+        targetWorkspaceDir: path.resolve("/agents/qa"),
+        agentId: "qa",
+        sessionKey: undefined,
+      }),
+    );
+  });
+
+  it("skips startup background coverage when maintenance.workspaceScope is not configured", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { search: { enabled: true }, visibility: "current", sync: { deltaBytes: 4_096, deltaMessages: 2 } },
       identity: { externalId: "test" },
     });
     const { api, runServiceStart } = buildApi();
-    (api.runtime as any).workspaceDir = "/runtime/workspace";
 
     await registerAndWaitStartup({ api, runServiceStart });
 
-    expect(scanLegacyWorkspaceMock).not.toHaveBeenCalled();
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("anchorclaw: startup step legacy-import-scan skipped (workspace_dir_unavailable)"),
+      "anchorclaw: startup background coverage disabled because maintenance.workspaceScope is not configured",
     );
+    expect(scanLegacyWorkspaceMock).not.toHaveBeenCalled();
   });
+
 });

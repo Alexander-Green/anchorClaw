@@ -112,4 +112,51 @@ describe("extractMaintenanceCandidates", () => {
       }),
     ).rejects.toThrow("extractor completion failed (boom)");
   });
+
+  it("enforces maxCandidates after parsing model output", async () => {
+    completeMock.mockResolvedValue({
+      text: JSON.stringify({
+        summary: "daily summary",
+        candidates: [
+          {
+            content: "First durable candidate.",
+            type: "fact",
+            confidence: 95,
+          },
+          {
+            content: "Second durable candidate.",
+            type: "note",
+            confidence: 90,
+          },
+          {
+            content: "Third durable candidate.",
+            type: "fact",
+            confidence: 88,
+          },
+        ],
+      }),
+    });
+
+    const { extractMaintenanceCandidates } = await import("./extractor.js");
+
+    const result = await extractMaintenanceCandidates({
+      api: {
+        runtime: {
+          llm: {
+            complete: completeMock,
+          },
+        },
+      } as any,
+      sourcePath: "memory/2026-06-02.md#window=1",
+      fileHash: "abc123",
+      transcript: "remember several durable things",
+      maxCandidates: 2,
+    });
+
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates.map((candidate) => candidate.content)).toEqual([
+      "First durable candidate.",
+      "Second durable candidate.",
+    ]);
+  });
 });

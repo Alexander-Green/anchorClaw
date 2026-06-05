@@ -1,13 +1,8 @@
 import path from "node:path";
 
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig as OpenClawRuntimeConfig } from "openclaw/plugin-sdk/health";
 
-import type { AnchorClawConfig } from "../config.js";
+import { resolveWorkspaceTargets } from "../workspace-targets.js";
 
 export type AnchorClawImportOptions = {
   defaultAgent?: boolean;
@@ -27,7 +22,6 @@ export type PlannedAnchorClawImportTarget = {
   agentId?: string;
   agentIds: string[];
   sessionKey?: string;
-  deprecatedWorkspaceDirFallback: boolean;
 };
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -86,15 +80,11 @@ function resolveTargetSessionKey(params: {
 function buildTargetLabel(params: {
   selector: PlannedAnchorClawImportTarget["selector"];
   agentIds: readonly string[];
-  deprecatedWorkspaceDirFallback: boolean;
 }): string {
   if (params.selector === "default-agent") {
-    const fallbackSuffix = params.deprecatedWorkspaceDirFallback
-      ? " (deprecated anchorclaw.workspaceDir fallback)"
-      : "";
     return params.agentIds[0]
-      ? `default agent ${params.agentIds[0]}${fallbackSuffix}`
-      : `default agent${fallbackSuffix}`;
+      ? `default agent ${params.agentIds[0]}`
+      : "default agent";
   }
   if (params.selector === "agent") {
     return `agent ${params.agentIds[0] ?? "unknown"}`;
@@ -123,18 +113,7 @@ function ensureRuntimeConfigForSelector(
   );
 }
 
-function assertConfiguredAgent(runtimeConfig: OpenClawRuntimeConfig, agentId: string): void {
-  const agentIds = listAgentIds(runtimeConfig);
-  if (agentIds.includes(agentId)) {
-    return;
-  }
-  throw new Error(
-    `Agent ${JSON.stringify(agentId)} is not defined in OpenClaw config. Known agents: ${agentIds.join(", ")}.`,
-  );
-}
-
 export function planAnchorClawImportTargets(params: {
-  cfg: AnchorClawConfig;
   opts: AnchorClawImportOptions;
   runtimeConfig?: OpenClawRuntimeConfig;
   runtimeAgentId?: string;
@@ -148,45 +127,27 @@ export function planAnchorClawImportTargets(params: {
   }
 
   if (selector === "default-agent") {
-    if (!params.runtimeConfig) {
-      const targetWorkspaceDir = path.resolve(params.cfg.workspaceDir);
-      return [
-        {
-          selector,
-          label: buildTargetLabel({
-            selector,
-            agentIds: [],
-            deprecatedWorkspaceDirFallback: true,
-          }),
-          sourceDir: resolveSourceDir(sourceDirOverride, targetWorkspaceDir),
-          targetWorkspaceDir,
-          agentId: undefined,
-          agentIds: [],
-          sessionKey: undefined,
-          deprecatedWorkspaceDirFallback: true,
-        },
-      ];
-    }
-    const defaultAgentId = resolveDefaultAgentId(params.runtimeConfig);
-    const targetWorkspaceDir = path.resolve(resolveAgentWorkspaceDir(params.runtimeConfig, defaultAgentId));
+    const runtimeConfig = ensureRuntimeConfigForSelector(params.runtimeConfig, selector);
+    const [target] = resolveWorkspaceTargets({
+      runtimeConfig,
+      selector: { mode: "default-agent" },
+    });
     return [
       {
         selector,
         label: buildTargetLabel({
           selector,
-          agentIds: [defaultAgentId],
-          deprecatedWorkspaceDirFallback: false,
+          agentIds: target.agentIds,
         }),
-        sourceDir: resolveSourceDir(sourceDirOverride, targetWorkspaceDir),
-        targetWorkspaceDir,
-        agentId: defaultAgentId,
-        agentIds: [defaultAgentId],
+        sourceDir: resolveSourceDir(sourceDirOverride, target.workspaceDir),
+        targetWorkspaceDir: target.workspaceDir,
+        agentId: target.primaryAgentId,
+        agentIds: target.agentIds,
         sessionKey: resolveTargetSessionKey({
           runtimeAgentId: params.runtimeAgentId,
           runtimeSessionKey: params.runtimeSessionKey,
-          agentIds: [defaultAgentId],
+          agentIds: target.agentIds,
         }),
-        deprecatedWorkspaceDirFallback: false,
       },
     ];
   }
@@ -194,58 +155,48 @@ export function planAnchorClawImportTargets(params: {
   if (selector === "agent") {
     const runtimeConfig = ensureRuntimeConfigForSelector(params.runtimeConfig, selector);
     const resolvedAgentId = agentId!;
-    assertConfiguredAgent(runtimeConfig, resolvedAgentId);
-    const targetWorkspaceDir = path.resolve(resolveAgentWorkspaceDir(runtimeConfig, resolvedAgentId));
+    const [target] = resolveWorkspaceTargets({
+      runtimeConfig,
+      selector: { mode: "agent", agentId: resolvedAgentId },
+    });
     return [
       {
         selector,
         label: buildTargetLabel({
           selector,
-          agentIds: [resolvedAgentId],
-          deprecatedWorkspaceDirFallback: false,
+          agentIds: target.agentIds,
         }),
-        sourceDir: resolveSourceDir(sourceDirOverride, targetWorkspaceDir),
-        targetWorkspaceDir,
-        agentId: resolvedAgentId,
-        agentIds: [resolvedAgentId],
+        sourceDir: resolveSourceDir(sourceDirOverride, target.workspaceDir),
+        targetWorkspaceDir: target.workspaceDir,
+        agentId: target.primaryAgentId,
+        agentIds: target.agentIds,
         sessionKey: resolveTargetSessionKey({
           runtimeAgentId: params.runtimeAgentId,
           runtimeSessionKey: params.runtimeSessionKey,
-          agentIds: [resolvedAgentId],
+          agentIds: target.agentIds,
         }),
-        deprecatedWorkspaceDirFallback: false,
       },
     ];
   }
 
   const runtimeConfig = ensureRuntimeConfigForSelector(params.runtimeConfig, selector);
-  const groupedTargets = new Map<string, string[]>();
-  for (const currentAgentId of listAgentIds(runtimeConfig)) {
-    const targetWorkspaceDir = path.resolve(resolveAgentWorkspaceDir(runtimeConfig, currentAgentId));
-    const existing = groupedTargets.get(targetWorkspaceDir);
-    if (existing) {
-      existing.push(currentAgentId);
-    } else {
-      groupedTargets.set(targetWorkspaceDir, [currentAgentId]);
-    }
-  }
-
-  return Array.from(groupedTargets.entries()).map(([targetWorkspaceDir, agentIds]) => ({
+  return resolveWorkspaceTargets({
+    runtimeConfig,
+    selector: { mode: "all-agent-workspaces" },
+  }).map((target) => ({
     selector,
     label: buildTargetLabel({
       selector,
-      agentIds,
-      deprecatedWorkspaceDirFallback: false,
+      agentIds: target.agentIds,
     }),
-    sourceDir: targetWorkspaceDir,
-    targetWorkspaceDir,
-    agentId: agentIds[0],
-    agentIds,
+    sourceDir: target.workspaceDir,
+    targetWorkspaceDir: target.workspaceDir,
+    agentId: target.primaryAgentId,
+    agentIds: target.agentIds,
     sessionKey: resolveTargetSessionKey({
       runtimeAgentId: params.runtimeAgentId,
       runtimeSessionKey: params.runtimeSessionKey,
-      agentIds,
+      agentIds: target.agentIds,
     }),
-    deprecatedWorkspaceDirFallback: false,
   }));
 }

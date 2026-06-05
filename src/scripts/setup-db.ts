@@ -6,6 +6,8 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Client } from "pg";
 
+import { resolveWorkspaceTargets } from "../workspace-targets.js";
+
 export type AnchorClawSetupOptions = {
   adminUrl?: string;
   dbName?: string;
@@ -13,11 +15,16 @@ export type AnchorClawSetupOptions = {
   dbPassword?: string;
   rotateDbPassword?: boolean;
   schema?: string;
-  workspaceDir?: string;
+  maintenanceWorkspaceScope?: "default-agent" | "all-agent-workspaces";
   schemaNone?: boolean;
   skipConfig?: boolean;
   nonInteractive?: boolean;
 };
+
+type MaintenanceWorkspaceScopeConfig =
+  | { mode: "default-agent" }
+  | { mode: "all-agent-workspaces" }
+  | { mode: "agents"; agents: string[] };
 
 type ResolvedSetupOptions = {
   adminUrl: string;
@@ -26,7 +33,9 @@ type ResolvedSetupOptions = {
   dbPassword: string;
   rotateDbPassword: boolean;
   schema: string | undefined;
-  workspaceDir: string | undefined;
+  maintenanceWorkspaceScope?: MaintenanceWorkspaceScopeConfig;
+  maintenanceEnabled: boolean;
+  extractorEnabled: boolean;
   skipConfig: boolean;
   nonInteractive: boolean;
 };
@@ -101,20 +110,6 @@ function resolveOpenClawHomeDir(env: NodeJS.ProcessEnv = process.env): string | 
   return explicitHome;
 }
 
-function resolveWorkspaceDefault(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const explicitWorkspace = normalizeEnvPath(env.OPENCLAW_WORKSPACE_DIR);
-  if (explicitWorkspace) {
-    return resolve(explicitWorkspace);
-  }
-  const home = resolveOpenClawHomeDir(env);
-  if (!home) {
-    return undefined;
-  }
-  const profile = normalizeEnvPath(env.OPENCLAW_PROFILE);
-  const workspaceName = profile && profile.toLowerCase() !== "default" ? `workspace-${profile}` : "workspace";
-  return resolve(home, ".openclaw", workspaceName);
-}
-
 function resolveOpenClawConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   const explicitPath = normalizeEnvPath(env.OPENCLAW_CONFIG_PATH);
   if (explicitPath) {
@@ -128,9 +123,233 @@ function resolveOpenClawConfigPath(env: NodeJS.ProcessEnv = process.env): string
   return resolve(home, ".openclaw", "openclaw.json");
 }
 
-function resolveOptionalWorkspaceDir(value: string | undefined): string | undefined {
+function normalizeMaintenanceWorkspaceScopeMode(
+  value: string | undefined,
+): "default-agent" | "all-agent-workspaces" | undefined {
   const trimmed = value?.trim();
-  return trimmed ? resolve(trimmed) : undefined;
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === "default-agent" || trimmed === "all-agent-workspaces") {
+    return trimmed;
+  }
+  throw new Error(
+    'maintenance-workspace-scope must be "default-agent" or "all-agent-workspaces"',
+  );
+}
+
+function scopeConfigFromMode(mode: "default-agent" | "all-agent-workspaces"): MaintenanceWorkspaceScopeConfig {
+  return { mode };
+}
+
+function readOpenClawConfigRecord(): Record<string, any> | undefined {
+  const cfgPath = resolveOpenClawConfigPath();
+  if (!existsSync(cfgPath)) {
+    return undefined;
+  }
+  return JSON.parse(readFileSync(cfgPath, "utf-8")) as Record<string, any>;
+}
+
+function normalizeAgentIdList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const agentIds: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      return undefined;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    agentIds.push(trimmed);
+  }
+  return agentIds.length > 0 ? agentIds : undefined;
+}
+
+function readExistingMaintenanceWorkspaceScope(
+  cfg: Record<string, any> | undefined,
+): MaintenanceWorkspaceScopeConfig | undefined {
+  const scope = cfg?.plugins?.entries?.anchorclaw?.config?.maintenance?.workspaceScope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
+    return undefined;
+  }
+  const mode = typeof (scope as Record<string, any>).mode === "string"
+    ? (scope as Record<string, any>).mode.trim()
+    : "";
+  if (mode === "default-agent" || mode === "all-agent-workspaces") {
+    return { mode };
+  }
+  if (mode === "agents") {
+    const agentIds = normalizeAgentIdList((scope as Record<string, any>).agents);
+    return agentIds ? { mode, agents: agentIds } : undefined;
+  }
+  return undefined;
+}
+
+function formatMaintenanceWorkspaceScope(scope: MaintenanceWorkspaceScopeConfig | undefined): string | undefined {
+  if (!scope) {
+    return undefined;
+  }
+  if (scope.mode === "agents") {
+    return `agents (${scope.agents.join(", ")})`;
+  }
+  return scope.mode;
+}
+
+type MaintenanceScopePromptChoice = {
+  label: string;
+  detail: string;
+  maintenanceEnabled: boolean;
+  extractorEnabled: boolean;
+  scope?: MaintenanceWorkspaceScopeConfig;
+};
+
+function dedupeMaintenanceScopeChoices(
+  choices: MaintenanceScopePromptChoice[],
+): MaintenanceScopePromptChoice[] {
+  const seen = new Set<string>();
+  const deduped: MaintenanceScopePromptChoice[] = [];
+  for (const choice of choices) {
+    const key = JSON.stringify({
+      extractorEnabled: choice.extractorEnabled,
+      scope: choice.scope ?? null,
+    });
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(choice);
+  }
+  return deduped;
+}
+
+function buildMaintenanceScopePromptChoices(params: {
+  existingScope?: MaintenanceWorkspaceScopeConfig;
+  openClawConfig?: Record<string, any>;
+}): MaintenanceScopePromptChoice[] {
+  const choices: MaintenanceScopePromptChoice[] = [];
+  if (params.existingScope) {
+    choices.push({
+      label: `keep current scope (${formatMaintenanceWorkspaceScope(params.existingScope)})`,
+      detail: "Preserve the existing maintenance.workspaceScope setting.",
+      maintenanceEnabled: true,
+      extractorEnabled: true,
+      scope: params.existingScope,
+    });
+  }
+
+  let defaultWorkspaceDetail = "OpenClaw default agent workspace";
+  let allWorkspaceDetail: string | undefined;
+
+  if (params.openClawConfig) {
+    try {
+      const [defaultTarget] = resolveWorkspaceTargets({
+        runtimeConfig: params.openClawConfig as any,
+        selector: { mode: "default-agent" },
+      });
+      defaultWorkspaceDetail = defaultTarget.workspaceDir;
+      const allTargets = resolveWorkspaceTargets({
+        runtimeConfig: params.openClawConfig as any,
+        selector: { mode: "all-agent-workspaces" },
+      });
+      if (allTargets.length > 1) {
+        allWorkspaceDetail = allTargets
+          .map((target) => `${target.label} -> ${target.workspaceDir}`)
+          .join(" | ");
+      }
+    } catch {
+      // Keep fallback labels if config cannot be resolved during setup prompting.
+    }
+  }
+
+  choices.push({
+    label: "default agent workspace",
+    detail: defaultWorkspaceDetail,
+    maintenanceEnabled: true,
+    extractorEnabled: true,
+    scope: { mode: "default-agent" },
+  });
+
+  if (allWorkspaceDetail) {
+    choices.push({
+      label: "all agent workspaces",
+      detail: allWorkspaceDetail,
+      maintenanceEnabled: true,
+      extractorEnabled: true,
+      scope: { mode: "all-agent-workspaces" },
+    });
+  }
+
+  choices.push({
+    label: "disable maintenance",
+    detail: "Do not start the background maintenance scheduler yet.",
+    maintenanceEnabled: false,
+    extractorEnabled: false,
+  });
+
+  return dedupeMaintenanceScopeChoices(choices);
+}
+
+async function promptForMaintenanceWorkspaceScope(params: {
+  rl: ReturnType<typeof createInterface>;
+  existingScope?: MaintenanceWorkspaceScopeConfig;
+  openClawConfig?: Record<string, any>;
+}): Promise<{
+  maintenanceEnabled: boolean;
+  extractorEnabled: boolean;
+  maintenanceWorkspaceScope?: MaintenanceWorkspaceScopeConfig;
+}> {
+  const choices = buildMaintenanceScopePromptChoices(params);
+  const defaultChoice = choices[0];
+
+  console.log("\nSelect maintenance extractor workspace scope:");
+  for (const [index, choice] of choices.entries()) {
+    console.log(`${index + 1}. ${choice.label} -> ${choice.detail}`);
+  }
+
+  while (true) {
+    const answer = (await params.rl.question("Choice [1]: ")).trim();
+    if (!answer) {
+      return {
+        maintenanceEnabled: defaultChoice!.maintenanceEnabled,
+        extractorEnabled: defaultChoice!.extractorEnabled,
+        maintenanceWorkspaceScope: defaultChoice!.scope,
+      };
+    }
+    const selected = Number.parseInt(answer, 10);
+    if (Number.isInteger(selected) && selected >= 1 && selected <= choices.length) {
+      const choice = choices[selected - 1]!;
+      return {
+        maintenanceEnabled: choice.maintenanceEnabled,
+        extractorEnabled: choice.extractorEnabled,
+        maintenanceWorkspaceScope: choice.scope,
+      };
+    }
+    console.warn(`Invalid selection: ${JSON.stringify(answer)}. Enter a number from 1 to ${choices.length}.`);
+  }
+}
+
+function ensureNonInteractiveMaintenanceScopeDecision(params: {
+  skipConfig: boolean;
+  maintenanceWorkspaceScopeMode?: "default-agent" | "all-agent-workspaces";
+  existingScope?: MaintenanceWorkspaceScopeConfig;
+}): MaintenanceWorkspaceScopeConfig | undefined {
+  if (params.skipConfig) {
+    return undefined;
+  }
+  if (params.maintenanceWorkspaceScopeMode) {
+    return scopeConfigFromMode(params.maintenanceWorkspaceScopeMode);
+  }
+  if (params.existingScope) {
+    return params.existingScope;
+  }
+  throw new Error(
+    'maintenance workspace scope is required for non-interactive setup because setup enables extractor by default; pass --maintenance-workspace-scope "default-agent" or "all-agent-workspaces", preconfigure maintenance.workspaceScope, or use --skip-config',
+  );
 }
 
 function readPromptInjectionConfigState(cfg: Record<string, any>): PromptInjectionConfigState {
@@ -167,18 +386,6 @@ function readSessionMemoryHookConfigState(cfg: Record<string, any>): SessionMemo
   return "unset";
 }
 
-function ensureWorkspaceDirForConfig(params: {
-  workspaceDir: string | undefined;
-  skipConfig: boolean;
-}): void {
-  if (params.skipConfig || params.workspaceDir) {
-    return;
-  }
-  throw new Error(
-    "workspaceDir could not be resolved for config update; pass --workspace-dir, set OPENCLAW_WORKSPACE_DIR, or use --skip-config",
-  );
-}
-
 async function promptIfNeeded(params: {
   options: AnchorClawSetupOptions;
 }): Promise<ResolvedSetupOptions> {
@@ -191,6 +398,16 @@ async function promptIfNeeded(params: {
   const nonInteractive = Boolean(params.options.nonInteractive);
   const skipConfig = Boolean(params.options.skipConfig);
   let rotateDbPassword = Boolean(params.options.rotateDbPassword);
+  const maintenanceWorkspaceScopeMode = normalizeMaintenanceWorkspaceScopeMode(
+    params.options.maintenanceWorkspaceScope,
+  );
+  const existingConfig = readOpenClawConfigRecord();
+  const existingMaintenanceWorkspaceScope = readExistingMaintenanceWorkspaceScope(existingConfig);
+  let maintenanceEnabled = !skipConfig;
+  let extractorEnabled = !skipConfig;
+  let maintenanceWorkspaceScope = maintenanceWorkspaceScopeMode
+    ? scopeConfigFromMode(maintenanceWorkspaceScopeMode)
+    : undefined;
 
   let adminUrl = params.options.adminUrl?.trim() || defaults.adminUrl;
   let dbName = params.options.dbName?.trim() || defaults.dbName;
@@ -207,7 +424,6 @@ async function promptIfNeeded(params: {
   }
 
   let dbPassword = params.options.dbPassword?.trim() || "";
-  let workspaceDir = resolveOptionalWorkspaceDir(params.options.workspaceDir) ?? resolveWorkspaceDefault();
 
   if (!nonInteractive) {
     const rl = createInterface({ input, output });
@@ -235,23 +451,31 @@ async function promptIfNeeded(params: {
       if (passwordAnswer) {
         dbPassword = passwordAnswer;
       }
-
-      if (!skipConfig) {
-        const workspacePrompt = workspaceDir
-          ? `Workspace directory [${workspaceDir}]: `
-          : "Workspace directory [leave empty to configure later]: ";
-        const workspaceAnswer = (await rl.question(workspacePrompt)).trim();
-        if (workspaceAnswer) {
-          workspaceDir = resolve(workspaceAnswer);
-        }
-      }
-
       const shouldUpdateByDefault = !skipConfig;
       const updateAnswer = (await rl.question(`Update openclaw.json? [${shouldUpdateByDefault ? "Y/n" : "y/N"}]: `)).trim().toLowerCase();
       const update = updateAnswer
         ? !["n", "no"].includes(updateAnswer)
         : shouldUpdateByDefault;
       params.options.skipConfig = !update;
+
+      if (!params.options.skipConfig) {
+        if (!maintenanceWorkspaceScope) {
+          const promptResult = await promptForMaintenanceWorkspaceScope({
+            rl,
+            existingScope: existingMaintenanceWorkspaceScope,
+            openClawConfig: existingConfig,
+          });
+          maintenanceEnabled = promptResult.maintenanceEnabled;
+          extractorEnabled = promptResult.extractorEnabled;
+          maintenanceWorkspaceScope = promptResult.maintenanceWorkspaceScope;
+        } else {
+          maintenanceEnabled = true;
+          extractorEnabled = true;
+        }
+      } else {
+        maintenanceEnabled = false;
+        extractorEnabled = false;
+      }
 
       if (dbPassword) {
         const rotateAnswer = (
@@ -266,6 +490,14 @@ async function promptIfNeeded(params: {
     } finally {
       rl.close();
     }
+  } else {
+    maintenanceWorkspaceScope = ensureNonInteractiveMaintenanceScopeDecision({
+      skipConfig,
+      maintenanceWorkspaceScopeMode,
+      existingScope: existingMaintenanceWorkspaceScope,
+    });
+    maintenanceEnabled = !skipConfig;
+    extractorEnabled = !skipConfig;
   }
 
   validateDatabaseName(dbName);
@@ -285,7 +517,9 @@ async function promptIfNeeded(params: {
     dbPassword,
     rotateDbPassword,
     schema,
-    workspaceDir,
+    maintenanceWorkspaceScope,
+    maintenanceEnabled,
+    extractorEnabled,
     skipConfig: Boolean(params.options.skipConfig),
     nonInteractive,
   };
@@ -431,7 +665,9 @@ function updateOpenClawConfig(params: {
   dbPassword?: string;
   adminUrl: string;
   schema: string | undefined;
-  workspaceDir: string | undefined;
+  maintenanceWorkspaceScope?: MaintenanceWorkspaceScopeConfig;
+  maintenanceEnabled: boolean;
+  extractorEnabled: boolean;
 }): {
   path: string;
   updated: boolean;
@@ -484,15 +720,15 @@ function updateOpenClawConfig(params: {
     nextPostgresConfig.password = params.dbPassword;
   }
   cfg.plugins.entries.anchorclaw.config.postgres = nextPostgresConfig;
-  if (params.workspaceDir) {
-    cfg.plugins.entries.anchorclaw.config.workspaceDir = params.workspaceDir;
-  }
   const existingMaintenanceConfig = asRecord(cfg.plugins.entries.anchorclaw.config.maintenance);
+  const existingMaintenanceWorkspaceScope = readExistingMaintenanceWorkspaceScope(cfg);
+  const resolvedMaintenanceWorkspaceScope =
+    params.maintenanceWorkspaceScope ?? existingMaintenanceWorkspaceScope;
   const existingExtractorConfig = asRecord(existingMaintenanceConfig.extractor);
   delete existingExtractorConfig.agentId;
-  cfg.plugins.entries.anchorclaw.config.maintenance = {
+  const nextMaintenanceConfig: Record<string, unknown> = {
     ...existingMaintenanceConfig,
-    enabled: true,
+    enabled: params.maintenanceEnabled,
     dryRun: false,
     intervalMinutes:
       typeof existingMaintenanceConfig.intervalMinutes === "number"
@@ -502,9 +738,10 @@ function updateOpenClawConfig(params: {
       typeof existingMaintenanceConfig.batchSize === "number"
         ? existingMaintenanceConfig.batchSize
         : 200,
+    ...(resolvedMaintenanceWorkspaceScope ? { workspaceScope: resolvedMaintenanceWorkspaceScope } : {}),
     extractor: {
       ...existingExtractorConfig,
-      enabled: true,
+      enabled: params.extractorEnabled,
       maxCandidates:
         typeof existingExtractorConfig.maxCandidates === "number"
           ? existingExtractorConfig.maxCandidates
@@ -515,6 +752,10 @@ function updateOpenClawConfig(params: {
           : 12_000,
     },
   };
+  if (!resolvedMaintenanceWorkspaceScope) {
+    delete nextMaintenanceConfig.workspaceScope;
+  }
+  cfg.plugins.entries.anchorclaw.config.maintenance = nextMaintenanceConfig;
   cfg.plugins.entries.anchorclaw.hooks ??= {};
   cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection = true;
 
@@ -546,10 +787,6 @@ function updateOpenClawConfig(params: {
 
 export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Promise<void> {
   const options = await promptIfNeeded({ options: opts });
-  ensureWorkspaceDirForConfig({
-    workspaceDir: options.workspaceDir,
-    skipConfig: options.skipConfig,
-  });
   const dbState = await ensureDatabaseAndRole({
     adminUrl: options.adminUrl,
     dbName: options.dbName,
@@ -573,7 +810,9 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
       dbPassword: shouldWriteConfigPassword ? options.dbPassword : undefined,
       adminUrl: options.adminUrl,
       schema: options.schema,
-      workspaceDir: options.workspaceDir,
+      maintenanceWorkspaceScope: options.maintenanceWorkspaceScope,
+      maintenanceEnabled: options.maintenanceEnabled,
+      extractorEnabled: options.extractorEnabled,
     });
   }
 
@@ -611,10 +850,13 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     if (configUpdate.promptInjectionAfter === "enabled" && configUpdate.promptInjectionBefore !== "enabled") {
       console.log("- hooks.allowPromptInjection: enabled for DB-backed daily startup injection");
     }
-  }
-  if (options.workspaceDir) {
-    console.log(`- workspaceDir: ${options.workspaceDir}`);
-  } else if (!options.skipConfig) {
-    console.warn("- workspaceDir: not configured; set plugins.entries.anchorclaw.config.workspaceDir before enabling import");
+    if (options.maintenanceEnabled && options.extractorEnabled) {
+      const scopeLabel = formatMaintenanceWorkspaceScope(options.maintenanceWorkspaceScope);
+      if (scopeLabel) {
+        console.log(`- maintenance extractor scope: ${scopeLabel}`);
+      }
+    } else {
+      console.log("- maintenance: disabled");
+    }
   }
 }

@@ -1,6 +1,11 @@
 import type { OpenClawPluginApi } from "../api.js";
 import type { AnchorClawConfig } from "../config.js";
 import { runMaintenanceCycle } from "../maintenance/job.js";
+import {
+  resolveWorkspaceTargets,
+  type ResolvedWorkspaceTarget,
+  type WorkspaceTargetSelector,
+} from "../workspace-targets.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 
 export type MaintenanceRuntime = {
@@ -8,6 +13,53 @@ export type MaintenanceRuntime = {
   startMaintenance: () => void;
   triggerMaintenanceNow: () => void;
 };
+
+function resolveMaintenanceWorkspaceSelector(
+  cfg: AnchorClawConfig,
+): WorkspaceTargetSelector | undefined {
+  const scope = cfg.maintenance?.workspaceScope;
+  if (!scope) {
+    return undefined;
+  }
+  if (scope.mode === "default-agent" || scope.mode === "all-agent-workspaces") {
+    return { mode: scope.mode };
+  }
+  return { mode: "agents", agentIds: scope.agents };
+}
+
+function resolveConfiguredMaintenanceTargets(params: {
+  api: OpenClawPluginApi;
+  cfg: AnchorClawConfig;
+}): ResolvedWorkspaceTarget[] | undefined {
+  const selector = resolveMaintenanceWorkspaceSelector(params.cfg);
+  if (!selector) {
+    params.api.logger.warn(
+      "anchorclaw: maintenance disabled because maintenance.workspaceScope is not configured",
+    );
+    return undefined;
+  }
+  const runtimeConfig =
+    typeof (params.api as any)?.runtime?.config?.current === "function"
+      ? (params.api as any).runtime.config.current()
+      : undefined;
+  if (!runtimeConfig) {
+    params.api.logger.warn(
+      "anchorclaw: maintenance disabled because OpenClaw runtime config is unavailable",
+    );
+    return undefined;
+  }
+  try {
+    return resolveWorkspaceTargets({
+      runtimeConfig: runtimeConfig as any,
+      selector,
+    });
+  } catch (error) {
+    params.api.logger.warn(
+      `anchorclaw: maintenance disabled because workspace scope could not be resolved (${error instanceof Error ? error.message : String(error)})`,
+    );
+    return undefined;
+  }
+}
 
 export function createMaintenanceRuntime(params: {
   api: OpenClawPluginApi;
@@ -31,7 +83,10 @@ export function createMaintenanceRuntime(params: {
     }
   }
 
-  const runOnce = async (jobCfg: NonNullable<AnchorClawConfig["maintenance"]>) => {
+  const runOnce = async (
+    jobCfg: NonNullable<AnchorClawConfig["maintenance"]>,
+    targets: readonly ResolvedWorkspaceTarget[],
+  ) => {
     if (stopped || inFlight) {
       return;
     }
@@ -51,26 +106,31 @@ export function createMaintenanceRuntime(params: {
         }
         waitingForDurableReady = false;
         warnedDurableState = null;
-        const workspaceDir = ctx.cfg!.workspaceDir;
-        const result = await runMaintenanceCycle({
-          api,
-          cfg: ctx.cfg!,
-          pool: ctx.getPool(),
-          workspaceDir,
-          agentId: (api as any)?.runtime?.agentId,
-          sessionKey: (api as any)?.runtime?.sessionKey,
-          dryRun,
-          batchSize: jobCfg.batchSize ?? 200,
-        });
-        if (result.status === "failed") {
-          api.logger.warn(
-            `anchorclaw: maintenance cycle failed (${result.error ?? "unknown"})`,
+        const currentRuntimeAgentId = String((api as any)?.runtime?.agentId ?? "");
+        const currentSessionKey = (api as any)?.runtime?.sessionKey;
+
+        for (const target of targets) {
+          const result = await runMaintenanceCycle({
+            api,
+            cfg: ctx.cfg!,
+            pool: ctx.getPool(),
+            workspaceDir: target.workspaceDir,
+            agentId: target.primaryAgentId,
+            sessionKey: target.agentIds.includes(currentRuntimeAgentId) ? currentSessionKey : undefined,
+            dryRun,
+            batchSize: jobCfg.batchSize ?? 200,
+          });
+          const labelSuffix = targets.length > 1 ? ` (${target.label})` : "";
+          if (result.status === "failed") {
+            api.logger.warn(
+              `anchorclaw: maintenance cycle failed${labelSuffix} (${result.error ?? "unknown"})`,
+            );
+            continue;
+          }
+          api.logger.info(
+            `anchorclaw: maintenance cycle completed${labelSuffix} (dryRun=${result.dryRun}, scanned=${result.scannedCount}, heuristicCandidates=${result.heuristicCandidateCount}, inserted=${result.insertedCount}, skipped=${result.skippedCount})`,
           );
-          return;
         }
-        api.logger.info(
-          `anchorclaw: maintenance cycle completed (dryRun=${result.dryRun}, scanned=${result.scannedCount}, heuristicCandidates=${result.heuristicCandidateCount}, inserted=${result.insertedCount}, skipped=${result.skippedCount})`,
-        );
       } catch (error) {
         api.logger.warn(
           `anchorclaw: maintenance scheduler error (${error instanceof Error ? error.message : String(error)})`,
@@ -89,19 +149,23 @@ export function createMaintenanceRuntime(params: {
     if (!jobCfg?.enabled) {
       return;
     }
+    const targets = resolveConfiguredMaintenanceTargets({ api, cfg });
+    if (!targets || targets.length === 0) {
+      return;
+    }
     const intervalMinutes = jobCfg.intervalMinutes ?? 12 * 60;
     const intervalMs = intervalMinutes * 60_000;
     const dryRun = jobCfg.dryRun ?? true;
     initialRunDeferred = !dryRun;
     if (dryRun) {
-      void runOnce(jobCfg);
+      void runOnce(jobCfg, targets);
     }
     timer = setInterval(() => {
-      void runOnce(jobCfg);
+      void runOnce(jobCfg, targets);
     }, intervalMs);
     timer.unref?.();
     api.logger.info(
-      `anchorclaw: maintenance scheduler started (intervalMinutes=${intervalMinutes}, dryRun=${jobCfg.dryRun ?? true})`,
+      `anchorclaw: maintenance scheduler started (intervalMinutes=${intervalMinutes}, dryRun=${jobCfg.dryRun ?? true}, targets=${targets.length})`,
     );
   }
 
@@ -115,8 +179,12 @@ export function createMaintenanceRuntime(params: {
       pendingImmediateTrigger = false;
       if (ctx.cfg.maintenance?.enabled) {
         if (initialRunDeferred || waitingForDurableReady) {
+          const targets = resolveConfiguredMaintenanceTargets({ api, cfg: ctx.cfg });
+          if (!targets || targets.length === 0) {
+            return;
+          }
           initialRunDeferred = false;
-          void runOnce(ctx.cfg.maintenance);
+          void runOnce(ctx.cfg.maintenance, targets);
         }
       }
     }
@@ -140,8 +208,12 @@ export function createMaintenanceRuntime(params: {
       if (!initialRunDeferred && !waitingForDurableReady) {
         return;
       }
+      const targets = resolveConfiguredMaintenanceTargets({ api, cfg: ctx.cfg });
+      if (!targets || targets.length === 0) {
+        return;
+      }
       initialRunDeferred = false;
-      void runOnce(ctx.cfg.maintenance);
+      void runOnce(ctx.cfg.maintenance, targets);
     },
   };
 }

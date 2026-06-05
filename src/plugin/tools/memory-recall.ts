@@ -1,8 +1,11 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { memoryRecallDb } from "../../memory/recall.js";
-import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
+import {
+  ensureToolRuntimeReady,
+  resolveRuntimeToolWorkspace,
+  type ToolRegistrationParams,
+} from "./common.js";
 import { buildSearchLikeDetailsEnvelope, formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
 
 function normalizeExact(value: unknown): string {
@@ -94,19 +97,14 @@ export function registerMemoryRecallTool({ ctx, ensureStartupBootstrap }: ToolRe
       const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
-      const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
-      if (!workspaceDir) {
-        return {
-          content: [{ type: "text", text: `anchorclaw: memory_recall unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
-          details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
-        };
-      }
+      const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+      if ("content" in workspaceTarget) return workspaceTarget;
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: ctx.getPool(),
-        workspaceDir,
-        agentId: (api as any)?.runtime?.agentId,
-        sessionKey: (api as any)?.runtime?.sessionKey,
+        workspaceDir: workspaceTarget.workspaceDir,
+        agentId: workspaceTarget.agentId,
+        sessionKey: workspaceTarget.sessionKey,
         configuredExternalId: ctx.cfg?.identity?.externalId,
       });
       const limits = resolveMemoryLimits(ctx.cfg!);

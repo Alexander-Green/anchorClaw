@@ -258,9 +258,82 @@ hardening rather than first-pass feasibility.
 
 All reads and writes run in `(user_id, workspace_id)` scope.
 
-`workspace_id` is derived from `workspaceDir`:
+`workspace_id` is derived from the effective workspace path after resolution,
+not from a user-facing label. Different absolute workspace paths mean different
+DB workspace scopes, even when agent names look related.
 
-- name format: `dir:<sha256(resolved workspaceDir)>`
+## Multi-Agent Workspace Model
+
+AnchorClaw is moving away from the old single-plugin-workspace model.
+
+The old bridge looked like this:
+
+- one global `plugins.entries.anchorclaw.config.workspaceDir`
+- old `maintenance.extractor.agentId`
+- runtime/import/maintenance code deciding ad hoc when to trust those values
+
+That model breaks down as soon as OpenClaw runs more than one agent workspace.
+It becomes ambiguous which workspace owns:
+
+- daily writes
+- durable promotion
+- startup recovery
+- legacy import scans
+- `memory/*` compatibility reads
+
+So the long-term contract is now:
+
+- runtime scope comes from the active OpenClaw runtime agent;
+- import target scope comes from explicit agent selectors;
+- background maintenance scope comes from explicit
+  `maintenance.workspaceScope`;
+- shared physical workspaces are deduped by effective path, not by agent name.
+
+### Why `workspaceDir` And `maintenance.extractor.agentId` Were Removed
+
+Starting in `0.0.9`:
+
+- `maintenance.extractor.agentId` is removed
+- `plugins.entries.anchorclaw.config.workspaceDir` is removed
+
+Reason:
+
+- they describe a single-workspace worldview;
+- AnchorClaw now supports a multi-agent workspace model;
+- one global workspace key is no longer a reliable source of truth for runtime
+  routing;
+- extractor routing is now owned by explicit workspace-scope planning, not by
+  a single stored agent id.
+
+### Workspace Matrix
+
+The intended matrix is:
+
+| Situation | Effective workspace target |
+| --- | --- |
+| one implicit/default agent | that agent's resolved workspace |
+| explicit `--agent ops` import | resolved workspace of `ops` |
+| background maintenance with `workspaceScope=default-agent` | resolved workspace of the default agent |
+| background maintenance with `workspaceScope=all-agent-workspaces` | every unique resolved workspace, deduped by path |
+| multiple agents sharing one physical workspace | one DB workspace scope for that shared path |
+| external backup/legacy source import | read from external `sourceDir`, write into explicit target workspace |
+
+### Practical Consequences
+
+This model means:
+
+- agent identity is metadata/provenance, not the durable workspace key by
+  itself;
+- the effective workspace path is what maps to DB `workspace_id`;
+- two agents can intentionally land in one DB workspace scope if they share the
+  same resolved path;
+- one agent can target a completely different workspace than legacy config once
+  runtime agent resolution is available;
+- explicit operator scope is preferred over fallback guessing.
+
+`workspace_id` is derived from the effective resolved workspace path:
+
+- name format: `dir:<sha256(resolved workspace path)>`
 - changing workspace directory creates a new memory scope
 
 `user_id` resolution:
@@ -274,7 +347,7 @@ Operational implications:
 - fallback identity can cause shared memory when multiple people use the same OS
   account;
 - AnchorClaw logs a startup warning when fallback identity is active;
-- the live agent workspace should match `plugins.entries.anchorclaw.config.workspaceDir`.
+- the effective runtime workspace is resolved from the active OpenClaw agent.
 
 ## SQL-First Search
 

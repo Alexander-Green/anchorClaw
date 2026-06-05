@@ -31,7 +31,7 @@ function buildCfg() {
       dryRun: false,
       intervalMinutes: 720,
       batchSize: 200,
-      extractor: { enabled: true, agentId: "main", maxCandidates: 10, maxCharsPerRun: 12000 },
+      extractor: { enabled: true, maxCandidates: 10, maxCharsPerRun: 12000 },
     },
   } as any;
 }
@@ -565,6 +565,174 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(extractorArgs[0]?.sourcePath).toBe("memory/2026-05-20.md#window=1");
     expect(recordedLedgerInserts).toHaveLength(1);
     expect(recordedLedgerInserts[0]?.[4]).toBe("memory/2026-05-20.md");
+  });
+
+  it("pages past fully processed oldest rows to reach newer pending daily work", async () => {
+    const extractorArgs: Array<{ transcript: string; sourcePath: string }> = [];
+    extractMaintenanceCandidates.mockImplementation(
+      async (params: { transcript: string; sourcePath: string }) => {
+        extractorArgs.push(params);
+        return { summary: "summary", candidates: [] };
+      },
+    );
+
+    const queryCalls: Array<{ sql: string; values?: unknown[] }> = [];
+    const pool = {
+      query: vi.fn(async (sql: string, values?: unknown[]) => {
+        queryCalls.push({ sql, values });
+        if (sql.includes("INSERT INTO memory_maintenance_runs")) {
+          return { rows: [{ id: "run-paging" }], rowCount: 1 };
+        }
+        if (sql.includes("FROM memory_daily_entries")) {
+          const offset = Number(values?.[4] ?? 0);
+          if (offset === 0) {
+            return {
+              rows: [
+                buildDailyRow({
+                  id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                  path: "memory/2026-05-20.md",
+                  contentSha: "sha-old",
+                  content: "remember this old rule that has already been processed before",
+                }),
+              ],
+              rowCount: 1,
+            };
+          }
+          return {
+            rows: [
+              buildDailyRow({
+                id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                path: "memory/2026-05-21.md",
+                logicalDate: "2026-05-21",
+                contentSha: "sha-new",
+                updatedAt: "2026-05-21T00:00:00.000Z",
+                content: "remember this newer rule that should still be extracted now",
+              }),
+            ],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          const entryIds = values?.[2] as string[] | undefined;
+          if (entryIds?.includes("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")) {
+            return {
+              rows: [
+                {
+                  daily_entry_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                  content_sha256: "sha-old",
+                  window_index: 0,
+                },
+              ],
+              rowCount: 1,
+            };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("UPDATE memory_maintenance_runs")) {
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    } as any;
+
+    const result = await runMaintenanceCycle({
+      api: buildApi(),
+      cfg: buildCfg(),
+      pool,
+      workspaceDir: "/workspace",
+      dryRun: false,
+      batchSize: 1,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.scannedCount).toBe(1);
+    expect(extractorArgs).toHaveLength(1);
+    expect(extractorArgs[0]?.sourcePath).toBe("memory/2026-05-21.md#window=1");
+    expect(extractorArgs[0]?.transcript).toContain("newer rule");
+    const dailyQueries = queryCalls.filter((call) => call.sql.includes("FROM memory_daily_entries"));
+    expect(dailyQueries).toHaveLength(2);
+    expect(dailyQueries[0]?.values?.[4]).toBe(0);
+    expect(dailyQueries[1]?.values?.[4]).toBe(1);
+  });
+
+  it("completes without extractor calls when all paged daily rows are already processed", async () => {
+    const queryCalls: Array<{ sql: string; values?: unknown[] }> = [];
+    const pool = {
+      query: vi.fn(async (sql: string, values?: unknown[]) => {
+        queryCalls.push({ sql, values });
+        if (sql.includes("INSERT INTO memory_maintenance_runs")) {
+          return { rows: [{ id: "run-no-pending" }], rowCount: 1 };
+        }
+        if (sql.includes("FROM memory_daily_entries")) {
+          const offset = Number(values?.[4] ?? 0);
+          if (offset === 0) {
+            return {
+              rows: [
+                buildDailyRow({
+                  id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                  path: "memory/2026-05-20.md",
+                  contentSha: "sha-old-1",
+                  content: "remember this already-processed rule from the first page",
+                }),
+              ],
+              rowCount: 1,
+            };
+          }
+          if (offset === 1) {
+            return {
+              rows: [
+                buildDailyRow({
+                  id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                  path: "memory/2026-05-21.md",
+                  logicalDate: "2026-05-21",
+                  contentSha: "sha-old-2",
+                  updatedAt: "2026-05-21T00:00:00.000Z",
+                  content: "remember this already-processed rule from the second page too",
+                }),
+              ],
+              rowCount: 1,
+            };
+          }
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("FROM memory_daily_extraction_windows")) {
+          const entryIds = values?.[2] as string[] | undefined;
+          return {
+            rows: (entryIds ?? []).map((id) => ({
+              daily_entry_id: id,
+              content_sha256: id.includes("aaaa") ? "sha-old-1" : "sha-old-2",
+              window_index: 0,
+            })),
+            rowCount: entryIds?.length ?? 0,
+          };
+        }
+        if (sql.includes("UPDATE memory_maintenance_runs")) {
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    } as any;
+
+    const result = await runMaintenanceCycle({
+      api: buildApi(),
+      cfg: buildCfg(),
+      pool,
+      workspaceDir: "/workspace",
+      dryRun: false,
+      batchSize: 1,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.scannedCount).toBe(0);
+    expect(extractMaintenanceCandidates).not.toHaveBeenCalled();
+    const dailyQueries = queryCalls.filter((call) => call.sql.includes("FROM memory_daily_entries"));
+    expect(dailyQueries).toHaveLength(3);
+    expect(dailyQueries[0]?.values?.[4]).toBe(0);
+    expect(dailyQueries[1]?.values?.[4]).toBe(1);
+    expect(dailyQueries[2]?.values?.[4]).toBe(2);
   });
 
   it("fails when extractor output is malformed", async () => {

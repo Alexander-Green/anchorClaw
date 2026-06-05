@@ -159,7 +159,11 @@ export async function extractMaintenanceCandidates(params: {
       maxTokens: 1200,
       temperature: 0,
     });
-    return parseExtractorResult(result.text);
+    const parsed = parseExtractorResult(result.text);
+    return {
+      ...parsed,
+      candidates: parsed.candidates.slice(0, Math.max(0, params.maxCandidates)),
+    };
   } catch (error) {
     if (
       error instanceof Error &&

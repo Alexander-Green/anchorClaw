@@ -6,8 +6,11 @@ import type { OpenClawPluginApi } from "../api.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import type { PostgresPool } from "../postgres.js";
 import { resolveDailyLogicalDate } from "../memory/daily.js";
-import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
+import {
+  resolveRuntimeWorkspaceTarget,
+  RUNTIME_WORKSPACE_UNAVAILABLE,
+} from "./runtime-workspace.js";
 
 const FLUSH_INBOX_ROOT = ".anchorclaw/flush-inbox";
 const FLUSH_INBOX_SOURCE_TYPE = "flush-inbox";
@@ -260,7 +263,12 @@ export async function drainFlushInbox(params: {
   if (params.ctx.disabledReason || !params.ctx.cfg) {
     return { scannedFiles: 0, importedFiles: 0, skippedImportedFiles: 0 };
   }
-  const workspaceDir = params.workspaceDir ?? requireConfiguredWorkspaceDir(params.ctx.cfg);
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveRuntimeWorkspaceTarget({ api: params.api })?.workspaceDir;
+  if (!workspaceDir) {
+    throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
+  }
   const inboxRootAbs = path.join(workspaceDir, ...FLUSH_INBOX_ROOT.split("/"));
   let files: Array<{ absPath: string; relPath: string }> = [];
   try {

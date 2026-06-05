@@ -1,7 +1,10 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { memoryForgetDb } from "../../memory/forget.js";
-import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
+import {
+  ensureToolRuntimeReady,
+  resolveRuntimeToolWorkspace,
+  type ToolRegistrationParams,
+} from "./common.js";
 
 export function registerMemoryForgetTool({ ctx, refreshPromptCache, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
@@ -30,19 +33,14 @@ export function registerMemoryForgetTool({ ctx, refreshPromptCache, ensureStartu
       const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
-      const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
-      if (!workspaceDir) {
-        return {
-          content: [{ type: "text", text: `anchorclaw: memory_forget unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
-          details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
-        };
-      }
+      const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+      if ("content" in workspaceTarget) return workspaceTarget;
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: ctx.getPool(),
-        workspaceDir,
-        agentId: (api as any)?.runtime?.agentId,
-        sessionKey: (api as any)?.runtime?.sessionKey,
+        workspaceDir: workspaceTarget.workspaceDir,
+        agentId: workspaceTarget.agentId,
+        sessionKey: workspaceTarget.sessionKey,
         configuredExternalId: ctx.cfg?.identity?.externalId,
       });
 

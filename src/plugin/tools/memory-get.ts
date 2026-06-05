@@ -3,8 +3,11 @@ import { resolveSessionsSearchState } from "../../config.js";
 import { memoryGetFromDb } from "../../memory/get.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { canAccessSessionPathByVisibility } from "../../memory/sessions-visibility.js";
-import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
+import {
+  ensureToolRuntimeReady,
+  resolveRuntimeToolWorkspace,
+  type ToolRegistrationParams,
+} from "./common.js";
 
 export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
@@ -30,19 +33,14 @@ export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegis
       const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
-      const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
-      if (!workspaceDir) {
-        return {
-          content: [{ type: "text", text: `anchorclaw: memory_get unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
-          details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
-        };
-      }
+      const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+      if ("content" in workspaceTarget) return workspaceTarget;
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: ctx.getPool(),
-        workspaceDir,
-        agentId: (api as any)?.runtime?.agentId,
-        sessionKey: (api as any)?.runtime?.sessionKey,
+        workspaceDir: workspaceTarget.workspaceDir,
+        agentId: workspaceTarget.agentId,
+        sessionKey: workspaceTarget.sessionKey,
         configuredExternalId: ctx.cfg?.identity?.externalId,
       });
       const limits = resolveMemoryLimits(ctx.cfg!);
@@ -106,7 +104,7 @@ export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegis
           workspaceId: scope.workspaceId,
           agentId: (api as any)?.runtime?.agentId,
           sessionsVisibility,
-          workspaceDir,
+          workspaceDir: workspaceTarget.workspaceDir,
           limits,
           lookup,
           ...(typeof fromLine === "number" ? { fromLine } : {}),

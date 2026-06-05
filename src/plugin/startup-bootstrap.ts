@@ -1,17 +1,72 @@
 import type { OpenClawPluginApi } from "../api.js";
+import type { AnchorClawConfig } from "../config.js";
 import { scanLegacyWorkspace } from "../importer.js";
+import {
+  resolveWorkspaceTargets,
+  type ResolvedWorkspaceTarget,
+  type WorkspaceTargetSelector,
+} from "../workspace-targets.js";
 import { drainFlushInbox } from "./flush-inbox.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 import {
-  resolveConfiguredLegacyImportScope,
-  resolveConfiguredWorkspaceDir,
-  WORKSPACE_DIR_UNAVAILABLE,
-} from "../workspace.js";
+  RUNTIME_WORKSPACE_UNAVAILABLE,
+} from "./runtime-workspace.js";
 
 export type StartupBootstrapRuntime = {
   ensureStartupBootstrap: () => Promise<void>;
   kickoffStartupBootstrap: () => void;
 };
+
+function resolveStartupWorkspaceSelector(
+  cfg: AnchorClawConfig,
+): WorkspaceTargetSelector | undefined {
+  const scope = cfg.maintenance?.workspaceScope;
+  if (!scope) {
+    return undefined;
+  }
+  if (scope.mode === "default-agent" || scope.mode === "all-agent-workspaces") {
+    return { mode: scope.mode };
+  }
+  return { mode: "agents", agentIds: scope.agents };
+}
+
+function resolveStartupBootstrapTargets(params: {
+  api: OpenClawPluginApi;
+  cfg: AnchorClawConfig;
+}): ResolvedWorkspaceTarget[] | undefined {
+  const selector = resolveStartupWorkspaceSelector(params.cfg);
+  if (!selector) {
+    params.api.logger.warn(
+      "anchorclaw: startup background coverage disabled because maintenance.workspaceScope is not configured",
+    );
+    return undefined;
+  }
+  const runtimeConfig =
+    typeof (params.api as any)?.runtime?.config?.current === "function"
+      ? (params.api as any).runtime.config.current()
+      : undefined;
+  if (!runtimeConfig) {
+    params.api.logger.warn(
+      "anchorclaw: startup background coverage disabled because OpenClaw runtime config is unavailable",
+    );
+    return undefined;
+  }
+  try {
+    return resolveWorkspaceTargets({
+      runtimeConfig: runtimeConfig as any,
+      selector,
+    });
+  } catch (error) {
+    params.api.logger.warn(
+      `anchorclaw: startup background coverage disabled because workspace scope could not be resolved (${error instanceof Error ? error.message : String(error)})`,
+    );
+    return undefined;
+  }
+}
+
+function buildStartupTargetLabel(target: ResolvedWorkspaceTarget): string {
+  return `${target.label}, ${target.workspaceDir}`;
+}
 
 export function createStartupBootstrapRuntime(params: {
   api: OpenClawPluginApi;
@@ -92,32 +147,38 @@ export function createStartupBootstrapRuntime(params: {
     }
 
     api.logger.info("anchorclaw: startup step flush-inbox-recovery started");
-    try {
-      const workspaceDir = resolveConfiguredWorkspaceDir(importCfg);
-      if (workspaceDir) {
-        const flushStats = await drainFlushInbox({
-          api,
-          ctx,
-          workspaceDir,
-        });
-        api.logger.info(
-          `anchorclaw: startup step flush-inbox-recovery succeeded (scanned=${flushStats.scannedFiles}, imported=${flushStats.importedFiles}, skipped=${flushStats.skippedImportedFiles})`,
-        );
-      } else {
-        api.logger.warn(
-          `anchorclaw: startup step flush-inbox-recovery skipped (${WORKSPACE_DIR_UNAVAILABLE})`,
-        );
+    const startupTargets = resolveStartupBootstrapTargets({ api, cfg: importCfg });
+    if (!startupTargets || startupTargets.length === 0) {
+      api.logger.warn(
+        `anchorclaw: startup step flush-inbox-recovery skipped (${RUNTIME_WORKSPACE_UNAVAILABLE})`,
+      );
+    } else {
+      for (const target of startupTargets) {
+        const targetLabel = buildStartupTargetLabel(target);
+        try {
+          const flushStats = await drainFlushInbox({
+            api,
+            ctx,
+            workspaceDir: target.workspaceDir,
+          });
+          api.logger.info(
+            `anchorclaw: startup step flush-inbox-recovery succeeded (${targetLabel}, scanned=${flushStats.scannedFiles}, imported=${flushStats.importedFiles}, skipped=${flushStats.skippedImportedFiles})`,
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(
+            `anchorclaw: startup step flush-inbox-recovery failed (${targetLabel}, ${message})`,
+          );
+        }
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      api.logger.warn(`anchorclaw: startup step flush-inbox-recovery failed (${message})`);
     }
 
     api.logger.info("anchorclaw: startup step legacy-import-scan started");
     try {
-      const legacyImportScope = resolveConfiguredLegacyImportScope(importCfg);
-      if (!legacyImportScope) {
-        const reason = WORKSPACE_DIR_UNAVAILABLE;
+      let startupImportReason: string | null = null;
+      if (!startupTargets || startupTargets.length === 0) {
+        const reason = RUNTIME_WORKSPACE_UNAVAILABLE;
+        startupImportReason = reason;
         ctx.setDurableState({
           overall: "ready",
           import: "not_needed",
@@ -126,21 +187,43 @@ export function createStartupBootstrapRuntime(params: {
         });
         api.logger.warn(`anchorclaw: startup step legacy-import-scan skipped (${reason})`);
       } else {
-        const legacyScan = await scanLegacyWorkspace({
-          api,
-          cfg: importCfg,
-          pool: ctx.getPool(),
-          sourceDir: legacyImportScope.sourceDir,
-          targetWorkspaceDir: legacyImportScope.targetWorkspaceDir,
-          agentId: (api as any)?.runtime?.agentId,
-          sessionKey: (api as any)?.runtime?.sessionKey,
-        });
-        if (legacyScan.hasActiveLegacy) {
-          api.logger.warn(
-            `anchorclaw: active legacy memory files detected (${legacyScan.activeLegacyCount}); run openclaw anchorclaw import`,
-          );
-        } else {
-          api.logger.info("anchorclaw: startup step legacy-import-scan found no active legacy files");
+        const currentRuntimeAgentId = String((api as any)?.runtime?.agentId ?? "");
+        let firstScanFailure: string | null = null;
+        for (const target of startupTargets) {
+          const targetLabel = buildStartupTargetLabel(target);
+          try {
+            const legacyScan = await scanLegacyWorkspace({
+              api,
+              cfg: importCfg,
+              pool: ctx.getPool(),
+              sourceDir: target.workspaceDir,
+              targetWorkspaceDir: target.workspaceDir,
+              agentId: target.primaryAgentId,
+              sessionKey: target.agentIds.includes(currentRuntimeAgentId)
+                ? (api as any)?.runtime?.sessionKey
+                : undefined,
+            });
+            if (legacyScan.hasActiveLegacy) {
+              api.logger.warn(
+                `anchorclaw: active legacy memory files detected (${legacyScan.activeLegacyCount}; ${targetLabel}); run openclaw anchorclaw import`,
+              );
+            } else {
+              api.logger.info(
+                `anchorclaw: startup step legacy-import-scan found no active legacy files (${targetLabel})`,
+              );
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (!firstScanFailure) {
+              firstScanFailure = message;
+            }
+            api.logger.warn(
+              `anchorclaw: startup step legacy-import-scan failed (${targetLabel}, ${message})`,
+            );
+          }
+        }
+        if (firstScanFailure) {
+          startupImportReason = `legacy_import_scan_failed: ${firstScanFailure}`;
         }
       }
       ctx.setDurableState({
@@ -149,6 +232,7 @@ export function createStartupBootstrapRuntime(params: {
         migrations: "ready",
         import: "not_needed",
         cleanup: "not_needed",
+        reason: startupImportReason,
         lastImportRunId: null,
         lastSourceSha256: null,
       });

@@ -3,14 +3,8 @@ import { describe, expect, it } from "vitest";
 import { planAnchorClawImportTargets } from "./import-legacy-plan.js";
 
 describe("planAnchorClawImportTargets", () => {
-  const cfg = {
-    workspaceDir: "/cfg/workspace",
-    postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-  } as any;
-
   it("plans a default-agent import from an external source directory", () => {
     const targets = planAnchorClawImportTargets({
-      cfg,
       opts: {
         defaultAgent: true,
         sourceDir: "/legacy/export",
@@ -33,14 +27,12 @@ describe("planAnchorClawImportTargets", () => {
         agentId: "main",
         agentIds: ["main"],
         sessionKey: "agent:main:test",
-        deprecatedWorkspaceDirFallback: false,
       },
     ]);
   });
 
   it("dedupes shared workspaces for --all-agent-workspaces", () => {
     const targets = planAnchorClawImportTargets({
-      cfg,
       opts: {
         allAgentWorkspaces: true,
       },
@@ -66,7 +58,6 @@ describe("planAnchorClawImportTargets", () => {
         agentId: "main",
         agentIds: ["main", "ops"],
         sessionKey: "agent:ops:test",
-        deprecatedWorkspaceDirFallback: false,
       },
       {
         selector: "all-agent-workspaces",
@@ -76,37 +67,23 @@ describe("planAnchorClawImportTargets", () => {
         agentId: "qa",
         agentIds: ["qa"],
         sessionKey: undefined,
-        deprecatedWorkspaceDirFallback: false,
       },
     ]);
   });
 
-  it("falls back to anchorclaw.workspaceDir for --default-agent when runtime config is unavailable", () => {
-    const targets = planAnchorClawImportTargets({
-      cfg,
-      opts: {
-        defaultAgent: true,
-      },
-    });
-
-    expect(targets).toEqual([
-      {
-        selector: "default-agent",
-        label: "default agent (deprecated anchorclaw.workspaceDir fallback)",
-        sourceDir: "/cfg/workspace",
-        targetWorkspaceDir: "/cfg/workspace",
-        agentId: undefined,
-        agentIds: [],
-        sessionKey: undefined,
-        deprecatedWorkspaceDirFallback: true,
-      },
-    ]);
+  it("rejects --default-agent when runtime config is unavailable", () => {
+    expect(() =>
+      planAnchorClawImportTargets({
+        opts: {
+          defaultAgent: true,
+        },
+      }),
+    ).toThrow("OpenClaw runtime config is unavailable; this agent target cannot be resolved safely.");
   });
 
   it("rejects mutually exclusive selectors", () => {
     expect(() =>
       planAnchorClawImportTargets({
-        cfg,
         opts: {
           defaultAgent: true,
           allAgentWorkspaces: true,
@@ -118,7 +95,6 @@ describe("planAnchorClawImportTargets", () => {
   it("rejects --source-dir with --all-agent-workspaces", () => {
     expect(() =>
       planAnchorClawImportTargets({
-        cfg,
         opts: {
           allAgentWorkspaces: true,
           sourceDir: "/legacy/export",
@@ -135,7 +111,6 @@ describe("planAnchorClawImportTargets", () => {
   it("rejects unknown explicit agents", () => {
     expect(() =>
       planAnchorClawImportTargets({
-        cfg,
         opts: {
           agent: "ghost",
         },

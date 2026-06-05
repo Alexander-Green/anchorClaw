@@ -6,12 +6,16 @@ const {
   scanLegacyWorkspaceMock,
   runLegacyWorkspaceImportMock,
   poolEnd,
+  readlineState,
 } = vi.hoisted(() => ({
   parseCfg: vi.fn(),
   createPool: vi.fn(),
   scanLegacyWorkspaceMock: vi.fn(),
   runLegacyWorkspaceImportMock: vi.fn(),
   poolEnd: vi.fn(async () => undefined),
+  readlineState: {
+    answers: [] as string[],
+  },
 }));
 
 vi.mock("../config.js", () => ({
@@ -29,6 +33,13 @@ vi.mock("../importer.js", () => ({
   runLegacyWorkspaceImport: runLegacyWorkspaceImportMock,
 }));
 
+vi.mock("node:readline/promises", () => ({
+  createInterface: vi.fn(() => ({
+    question: vi.fn(async () => readlineState.answers.shift() ?? ""),
+    close: vi.fn(),
+  })),
+}));
+
 import { runAnchorClawImport } from "./import-legacy.js";
 
 describe("runAnchorClawImport", () => {
@@ -42,9 +53,9 @@ describe("runAnchorClawImport", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    readlineState.answers = [];
 
     parseCfg.mockReturnValue({
-      workspaceDir: "/cfg/workspace",
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
     });
 
@@ -106,7 +117,7 @@ describe("runAnchorClawImport", () => {
     expect(scanLegacyWorkspaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         api,
-        cfg: expect.objectContaining({ workspaceDir: "/cfg/workspace" }),
+        cfg: expect.objectContaining({ postgres: expect.any(Object) }),
         sourceDir: "/runtime/default",
         targetWorkspaceDir: "/runtime/default",
         agentId: "main",
@@ -136,7 +147,7 @@ describe("runAnchorClawImport", () => {
     expect(runLegacyWorkspaceImportMock).toHaveBeenCalledWith(
       expect.objectContaining({
         api,
-        cfg: expect.objectContaining({ workspaceDir: "/cfg/workspace" }),
+        cfg: expect.objectContaining({ postgres: expect.any(Object) }),
         sourceDir: "/runtime/default",
         targetWorkspaceDir: "/runtime/default",
         cleanupMemoryMdAfterImport: true,
@@ -218,5 +229,78 @@ describe("runAnchorClawImport", () => {
     expect(consoleWarnSpy).toHaveBeenCalledWith(
       "Warning: unreadable legacy daily files were skipped; fix file permissions or contents, then rerun `openclaw anchorclaw import`.",
     );
+  });
+
+  it("prompts for a target interactively and defaults to default-agent on enter", async () => {
+    readlineState.answers = [""];
+    const api = {
+      pluginConfig: {},
+      runtime: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+        config: { current: () => runtimeConfig },
+      },
+    } as any;
+
+    await runAnchorClawImport(api, {});
+
+    expect(scanLegacyWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceDir: "/runtime/default",
+        targetWorkspaceDir: "/runtime/default",
+        agentId: "main",
+      }),
+    );
+    expect(consoleLogSpy).toHaveBeenCalledWith("\nSelect AnchorClaw import target:");
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      "\nNext step: run `openclaw anchorclaw import --default-agent --apply` to migrate and archive active legacy files.",
+    );
+  });
+
+  it("allows selecting a specific configured agent interactively", async () => {
+    readlineState.answers = ["2"];
+    const multiAgentRuntimeConfig = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/runtime/default" },
+          { id: "ops", workspace: "/runtime/ops" },
+        ],
+      },
+    } as any;
+    const api = {
+      pluginConfig: {},
+      runtime: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+        config: { current: () => multiAgentRuntimeConfig },
+      },
+    } as any;
+
+    await runAnchorClawImport(api, {});
+
+    expect(scanLegacyWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceDir: "/runtime/ops",
+        targetWorkspaceDir: "/runtime/ops",
+        agentId: "ops",
+        sessionKey: undefined,
+      }),
+    );
+    expect(consoleLogSpy).toHaveBeenCalledWith("\nAnchorClaw legacy import scan (agent ops)");
+  });
+
+  it("keeps non-interactive mode strict when no selector is supplied", async () => {
+    const api = {
+      pluginConfig: {},
+      runtime: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+        config: { current: () => runtimeConfig },
+      },
+    } as any;
+
+    await expect(
+      runAnchorClawImport(api, { nonInteractive: true }),
+    ).rejects.toThrow(/Choose one import target/);
   });
 });

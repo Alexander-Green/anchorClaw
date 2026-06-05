@@ -4,8 +4,11 @@ import type { OpenClawPluginApi } from "../api.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { resolveDailyLogicalDate } from "../memory/daily.js";
 import type { PostgresPool } from "../postgres.js";
-import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
+import {
+  resolveRuntimeWorkspaceTarget,
+  RUNTIME_WORKSPACE_UNAVAILABLE,
+} from "./runtime-workspace.js";
 
 const SESSION_CAPTURE_SOURCE_TYPE = "session-capture";
 const SESSION_CAPTURE_SOURCE_KIND = "session_memory";
@@ -158,10 +161,22 @@ function resolveRuntimeTimezone(api: OpenClawPluginApi): string | undefined {
 }
 
 function resolveHookWorkspaceDir(params: {
-  cfg: NonNullable<PluginRuntimeContext["cfg"]>;
+  api: OpenClawPluginApi;
   hookContext?: BeforeResetHookContext;
 }): string {
-  return nonEmptyString(params.hookContext?.workspaceDir) ?? requireConfiguredWorkspaceDir(params.cfg);
+  const hookWorkspaceDir = nonEmptyString(params.hookContext?.workspaceDir);
+  if (hookWorkspaceDir) {
+    return hookWorkspaceDir;
+  }
+  const runtimeTarget = resolveRuntimeWorkspaceTarget({
+    api: params.api,
+    agentId: nonEmptyString(params.hookContext?.agentId),
+    sessionKey: nonEmptyString(params.hookContext?.sessionKey),
+  });
+  if (!runtimeTarget) {
+    throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
+  }
+  return runtimeTarget.workspaceDir;
 }
 
 function buildSessionSourceId(params: {
@@ -408,7 +423,7 @@ export async function captureBeforeResetSessionMemory(params: {
   await params.ctx.ensureReady();
 
   const workspaceDir = resolveHookWorkspaceDir({
-    cfg: params.ctx.cfg,
+    api: params.api,
     hookContext: params.hookContext,
   });
   const pool = params.ctx.getPool();

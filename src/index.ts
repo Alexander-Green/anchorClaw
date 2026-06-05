@@ -41,7 +41,10 @@ export default definePluginEntry({
           .option("--db-password <pass>", "App user password (auto-generated if omitted)")
           .option("--rotate-db-password", "Allow password rotation for an existing app user")
           .option("--schema <name>", 'Schema name (default: memory, use "none" for search_path/public fallback)')
-          .option("--workspace-dir <path>", "OpenClaw workspace directory for AnchorClaw import/scope")
+          .option(
+            "--maintenance-workspace-scope <mode>",
+            'Maintenance extractor scope: "default-agent" or "all-agent-workspaces"',
+          )
           .option("--schema-none", "Disable dedicated schema and use default PostgreSQL search_path")
           .option("--skip-config", "Do not update ~/.openclaw/openclaw.json")
           .option("--non-interactive", "Disable prompts and use defaults/flags only")
@@ -52,7 +55,7 @@ export default definePluginEntry({
             dbPassword?: string;
             rotateDbPassword?: boolean;
             schema?: string;
-            workspaceDir?: string;
+            maintenanceWorkspaceScope?: "default-agent" | "all-agent-workspaces";
             schemaNone?: boolean;
             skipConfig?: boolean;
             nonInteractive?: boolean;
@@ -64,7 +67,7 @@ export default definePluginEntry({
               dbPassword: opts.dbPassword,
               rotateDbPassword: opts.rotateDbPassword,
               schema: opts.schema,
-              workspaceDir: opts.workspaceDir,
+              maintenanceWorkspaceScope: opts.maintenanceWorkspaceScope,
               schemaNone: opts.schemaNone,
               skipConfig: opts.skipConfig,
               nonInteractive: opts.nonInteractive,

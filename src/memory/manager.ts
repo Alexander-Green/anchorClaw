@@ -14,7 +14,7 @@ import {
 import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "./sessions-index-sync.js";
 import { canAccessSessionPathByVisibility, filterSessionHitsByVisibility } from "./sessions-visibility.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
-import { resolveConfiguredWorkspaceDir } from "../workspace.js";
+import { resolveWorkspaceTargets } from "../workspace-targets.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -71,6 +71,8 @@ type MemorySyncProgressUpdate = {
   total: number;
   label?: string;
 };
+
+const RUNTIME_WORKSPACE_UNAVAILABLE = "runtime_workspace_unavailable";
 
 export type MemorySearchManager = {
   search: (
@@ -146,9 +148,26 @@ export function createAnchorClawMemorySearchManager(
   const sessionsVisibility = sessionsSearch.visibility;
   const sessionsEnabled = sessionsSearch.effective;
 
-  const resolveWorkspaceDir = (): string | undefined => resolveConfiguredWorkspaceDir(cfg);
+  const resolveWorkspaceDir = (): string | undefined => {
+    const runtimeConfig =
+      typeof (api as any)?.runtime?.config?.current === "function"
+        ? (api as any).runtime.config.current()
+        : undefined;
+    if (!runtimeConfig) {
+      return undefined;
+    }
+    try {
+      const [target] = resolveWorkspaceTargets({
+        runtimeConfig: runtimeConfig as any,
+        selector: { mode: "agent", agentId: params.agentId },
+      });
+      return target?.workspaceDir;
+    } catch {
+      return undefined;
+    }
+  };
   const warnWorkspaceUnavailable = (operation: "search" | "readFile" | "sync") => {
-    api.logger.warn(`anchorclaw: manager ${operation} skipped (${operation === "sync" ? "workspace unavailable" : "workspace_dir_unavailable"})`);
+    api.logger?.warn?.(`anchorclaw: manager ${operation} skipped (${RUNTIME_WORKSPACE_UNAVAILABLE})`);
   };
 
   const resolveWorkspaceRelativePath = (relPath: string): string | null => {
@@ -420,7 +439,7 @@ export function createAnchorClawMemorySearchManager(
 
     status() {
       const limits = resolveMemoryLimits(cfg);
-      const workspaceDir = resolveConfiguredWorkspaceDir(cfg);
+      const workspaceDir = resolveWorkspaceDir();
       return {
         backend: "builtin",
         provider: "anchorclaw-postgres",
@@ -437,7 +456,7 @@ export function createAnchorClawMemorySearchManager(
           ...(sessionsSearch.reason ? { sessionsSearchReason: sessionsSearch.reason } : {}),
           sessionsVisibility,
           purpose: params.purpose ?? "default",
-          ...(!workspaceDir ? { degraded: true, error: "workspace_dir_unavailable" } : {}),
+          ...(!workspaceDir ? { degraded: true, error: RUNTIME_WORKSPACE_UNAVAILABLE } : {}),
         },
       };
     },

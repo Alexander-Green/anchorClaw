@@ -4,8 +4,11 @@ import {
   buildPromptMemorySection,
   queryPromptMemoryItems,
 } from "../memory/prompt.js";
-import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
+import {
+  resolveRuntimeWorkspaceTarget,
+  RUNTIME_WORKSPACE_UNAVAILABLE,
+} from "./runtime-workspace.js";
 
 export type PromptCacheRuntime = {
   refreshPromptCache: (options?: { force?: boolean }) => Promise<void>;
@@ -32,12 +35,16 @@ export function createPromptCacheRuntime(params: {
     const refreshPromise = (async () => {
       try {
         await ctx.ensureReady();
+        const workspaceTarget = resolveRuntimeWorkspaceTarget({ api });
+        if (!workspaceTarget) {
+          throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
+        }
         const scope = await resolveUserAndWorkspaceScope({
           api,
           pool: ctx.getPool(),
-          workspaceDir: requireConfiguredWorkspaceDir(ctx.cfg),
-          agentId: (api as any)?.runtime?.agentId,
-          sessionKey: (api as any)?.runtime?.sessionKey,
+          workspaceDir: workspaceTarget.workspaceDir,
+          agentId: workspaceTarget.agentId,
+          sessionKey: workspaceTarget.sessionKey,
           configuredExternalId: ctx.cfg?.identity?.externalId,
         });
         const items = await queryPromptMemoryItems({

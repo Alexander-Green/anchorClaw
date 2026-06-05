@@ -100,7 +100,6 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
       cfg: {
-        workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
@@ -160,7 +159,6 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
       cfg: {
-        workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
@@ -203,7 +201,6 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
       cfg: {
-        workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
@@ -262,7 +259,6 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
       cfg: {
-        workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
@@ -326,7 +322,6 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
       cfg: {
-        workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
@@ -376,7 +371,6 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     const result = await runLegacyWorkspaceImport({
       api: createApi(),
       cfg: {
-        workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
@@ -428,7 +422,6 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     const result = await runLegacyWorkspaceImport({
       api: createApi(),
       cfg: {
-        workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
@@ -473,7 +466,6 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     const result = await scanLegacyWorkspace({
       api: createApi(),
       cfg: {
-        workspaceDir: "/tmp/work",
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
@@ -534,7 +526,6 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     const result = await runOneTimeWorkspaceImport({
       api: createApi(),
       cfg: {
-        workspaceDir: "/tmp/cfg-workspace",
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,

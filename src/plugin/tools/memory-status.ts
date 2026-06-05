@@ -2,11 +2,14 @@ import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
 import { resolveSessionsSearchState } from "../../config.js";
 import { scanLegacyWorkspace } from "../../importer.js";
 import type { MemoryStatusCheckResult } from "../types.js";
-import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
+import {
+  ensureToolRuntimeReady,
+  resolveRuntimeToolWorkspace,
+  type ToolRegistrationParams,
+} from "./common.js";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveConfiguredLegacyImportScope } from "../../workspace.js";
 
 function isPromptInjectionAllowed(api: any): boolean {
   const currentConfig =
@@ -176,18 +179,18 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
           pendingMessages: pending.pendingMessages,
         };
         try {
-          const legacyImportScope = resolveConfiguredLegacyImportScope(ctx.cfg);
-          if (!legacyImportScope) {
-            throw new Error("workspace_dir_unavailable");
+          const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+          if ("content" in workspaceTarget) {
+            throw new Error(String(workspaceTarget.details.error ?? "runtime_workspace_unavailable"));
           }
           const legacyScan = await scanLegacyWorkspace({
             api,
             cfg: ctx.cfg!,
             pool: ctx.getPool(),
-            sourceDir: legacyImportScope.sourceDir,
-            targetWorkspaceDir: legacyImportScope.targetWorkspaceDir,
-            agentId: (api as any)?.runtime?.agentId,
-            sessionKey: (api as any)?.runtime?.sessionKey,
+            sourceDir: workspaceTarget.workspaceDir,
+            targetWorkspaceDir: workspaceTarget.workspaceDir,
+            agentId: workspaceTarget.agentId,
+            sessionKey: workspaceTarget.sessionKey,
           });
           base.legacyImport = {
             active: legacyScan.hasActiveLegacy,

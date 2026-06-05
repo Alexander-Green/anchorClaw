@@ -10,21 +10,35 @@ vi.mock("../maintenance/job.js", () => ({
 function buildApi() {
   return {
     logger: { info: vi.fn(), warn: vi.fn() },
-    runtime: { agentId: "main", sessionKey: "session-key" },
+    runtime: {
+      agentId: "main",
+      sessionKey: "session-key",
+      config: {
+        current: () => ({
+          agents: {
+            list: [{ id: "main", default: true, workspace: "/workspace" }],
+          },
+        }),
+      },
+    },
   } as any;
 }
 
-function buildCtx(overall: "pending" | "ready" | "blocked" | "degraded") {
+function buildCtx(
+  overall: "pending" | "ready" | "blocked" | "degraded",
+  maintenanceOverrides?: Record<string, unknown>,
+) {
   return {
     cfg: {
-      workspaceDir: "/workspace",
       postgres: { host: "localhost", database: "anchorclaw", user: "anchorclaw" },
       maintenance: {
         enabled: true,
         dryRun: false,
         intervalMinutes: 720,
         batchSize: 200,
-        extractor: { enabled: true, agentId: "main", maxCandidates: 10, maxCharsPerRun: 12000 },
+        workspaceScope: { mode: "default-agent" },
+        extractor: { enabled: true, maxCandidates: 10, maxCharsPerRun: 12000 },
+        ...maintenanceOverrides,
       },
     },
     durableState: {
@@ -145,6 +159,8 @@ describe("createMaintenanceRuntime", () => {
     runtime.triggerMaintenanceNow();
     await Promise.resolve();
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     runtime.cleanupMaintenance();
 
     expect(runMaintenanceCycle).toHaveBeenCalledTimes(1);
@@ -192,5 +208,197 @@ describe("createMaintenanceRuntime", () => {
     runtime.cleanupMaintenance();
 
     expect(runMaintenanceCycle).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start maintenance without an explicit workspace scope", () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    (globalThis as any).setInterval = vi.fn();
+    (globalThis as any).clearInterval = vi.fn();
+
+    try {
+      const api = buildApi();
+      const ctx = buildCtx("ready", { workspaceScope: undefined });
+
+      const runtime = createMaintenanceRuntime({ api, ctx });
+      runtime.cleanupMaintenance();
+
+      expect(globalThis.setInterval).not.toHaveBeenCalled();
+      expect(runMaintenanceCycle).not.toHaveBeenCalled();
+      expect(api.logger.warn).toHaveBeenCalledWith(
+        "anchorclaw: maintenance disabled because maintenance.workspaceScope is not configured",
+      );
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  it("uses the resolved default-agent workspace instead of cfg.workspaceDir", async () => {
+    const api = buildApi();
+    (api as any).runtime.config.current = () => ({
+      agents: {
+        list: [{ id: "ops", default: true, workspace: "/agents/ops" }],
+      },
+    });
+    const ctx = buildCtx("ready");
+
+    const runtime = createMaintenanceRuntime({ api, ctx });
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.triggerMaintenanceNow();
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.cleanupMaintenance();
+
+    expect(runMaintenanceCycle).toHaveBeenCalledTimes(1);
+    expect(runMaintenanceCycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/agents/ops",
+        agentId: "ops",
+        sessionKey: undefined,
+      }),
+    );
+  });
+
+  it("fans out all unique agent workspaces and dedupes shared paths", async () => {
+    const api = buildApi();
+    (api as any).runtime.config.current = () => ({
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/agents/shared" },
+          { id: "ops", workspace: "/agents/shared" },
+          { id: "qa", workspace: "/agents/qa" },
+        ],
+      },
+    });
+    const ctx = buildCtx("ready", {
+      workspaceScope: { mode: "all-agent-workspaces" },
+    });
+
+    const runtime = createMaintenanceRuntime({ api, ctx });
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.triggerMaintenanceNow();
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.cleanupMaintenance();
+
+    expect(runMaintenanceCycle).toHaveBeenCalledTimes(2);
+    expect(runMaintenanceCycle).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        workspaceDir: "/agents/shared",
+        agentId: "main",
+        sessionKey: "session-key",
+      }),
+    );
+    expect(runMaintenanceCycle).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        workspaceDir: "/agents/qa",
+        agentId: "qa",
+        sessionKey: undefined,
+      }),
+    );
+  });
+
+  it("resolves explicit agents scope and dedupes shared selected workspaces", async () => {
+    const api = buildApi();
+    (api as any).runtime.config.current = () => ({
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/agents/shared" },
+          { id: "ops", workspace: "/agents/shared" },
+          { id: "qa", workspace: "/agents/qa" },
+        ],
+      },
+    });
+    const ctx = buildCtx("ready", {
+      workspaceScope: { mode: "agents", agents: ["ops", "main", "qa"] },
+    });
+
+    const runtime = createMaintenanceRuntime({ api, ctx });
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.triggerMaintenanceNow();
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.cleanupMaintenance();
+
+    expect(runMaintenanceCycle).toHaveBeenCalledTimes(2);
+    expect(runMaintenanceCycle).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        workspaceDir: "/agents/shared",
+        agentId: "ops",
+        sessionKey: "session-key",
+      }),
+    );
+    expect(runMaintenanceCycle).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        workspaceDir: "/agents/qa",
+        agentId: "qa",
+        sessionKey: undefined,
+      }),
+    );
+  });
+
+  it("continues other selected workspaces when one maintenance cycle fails", async () => {
+    runMaintenanceCycle
+      .mockResolvedValueOnce({
+        status: "failed",
+        runId: "run-failed",
+        scannedCount: 0,
+        heuristicCandidateCount: 0,
+        insertedCount: 0,
+        skippedCount: 0,
+        dryRun: false,
+        error: "first workspace boom",
+      })
+      .mockResolvedValueOnce({
+        status: "completed",
+        runId: "run-ok",
+        scannedCount: 2,
+        heuristicCandidateCount: 1,
+        insertedCount: 1,
+        skippedCount: 0,
+        dryRun: false,
+      });
+
+    const api = buildApi();
+    (api as any).runtime.config.current = () => ({
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/agents/shared" },
+          { id: "qa", workspace: "/agents/qa" },
+        ],
+      },
+    });
+    const ctx = buildCtx("ready", {
+      workspaceScope: { mode: "all-agent-workspaces" },
+    });
+
+    const runtime = createMaintenanceRuntime({ api, ctx });
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.triggerMaintenanceNow();
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.cleanupMaintenance();
+
+    expect(runMaintenanceCycle).toHaveBeenCalledTimes(2);
+    expect(runMaintenanceCycle).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        workspaceDir: "/agents/qa",
+        agentId: "qa",
+        sessionKey: undefined,
+      }),
+    );
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      "anchorclaw: maintenance cycle failed (agent main) (first workspace boom)",
+    );
   });
 });

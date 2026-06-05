@@ -25,10 +25,20 @@ function buildCtx() {
     ctx: {
       api: {
         registerTool,
-        runtime: { agentId: "main", sessionKey: "agent:main:main" },
+        runtime: {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          config: {
+            current: () => ({
+              agents: {
+                list: [{ id: "main", default: true, workspace: "/runtime/workspace" }],
+              },
+            }),
+          },
+        },
       },
       disabledReason: null,
-      cfg: { workspaceDir: "/workspace" },
+      cfg: { workspaceDir: "/legacy-workspace" },
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
     } as any,

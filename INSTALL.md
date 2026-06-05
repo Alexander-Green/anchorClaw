@@ -3,6 +3,15 @@
 This guide keeps the operator details out of the main README. Start with
 [README.md](./README.md) if you want the product overview first.
 
+> Alpha migration notice:
+> `maintenance.extractor.agentId` and
+> `plugins.entries.anchorclaw.config.workspaceDir` were removed starting in
+> `0.0.9`.
+> AnchorClaw is moving to an explicit multi-agent workspace model, so runtime
+> scope comes from OpenClaw agent context instead of one global plugin
+> workspace key.
+> See [ARCHITECTURE.md#multi-agent-workspace-model](./ARCHITECTURE.md#multi-agent-workspace-model).
+
 ## Prerequisites
 
 - OpenClaw host `>= 2026.5.12` with memory plugin slots
@@ -38,7 +47,6 @@ By default, setup updates `~/.openclaw/openclaw.json` with:
 - `plugins.slots.memory = "anchorclaw"`
 - `plugins.entries.anchorclaw.enabled = true`
 - `plugins.entries.anchorclaw.config.postgres`
-- `plugins.entries.anchorclaw.config.workspaceDir`
 - `plugins.entries.anchorclaw.hooks.allowPromptInjection = true`
 - `hooks.internal.entries["session-memory"].enabled = false`
 
@@ -48,23 +56,9 @@ Setup preserves unrelated top-level `anchorclaw.config` keys such as
 Setup rewrites `anchorclaw.config.postgres`; if you use SSL or custom pool
 settings, add those overrides after setup.
 
-Setup does not mutate `<workspaceDir>/AGENTS.md`. Existing OpenClaw instructions
+Setup does not mutate workspace `AGENTS.md`. Existing OpenClaw instructions
 that mention `MEMORY.md` or `memory/YYYY-MM-DD.md` remain compatible through
 AnchorClaw's runtime/tool layer.
-
-## Workspace Rule
-
-`workspaceDir` is AnchorClaw's source of truth for workspace scoping, legacy
-import scans, prompt cache, and DB-backed `memory/*` compatibility reads.
-
-Setup accepts `--workspace-dir`; otherwise it uses `OPENCLAW_WORKSPACE_DIR` when
-present, then the OpenClaw default workspace path. If config update is enabled
-and no workspace path can be resolved, setup fails fast instead of writing a
-partial config.
-
-Current operational rule: the live agent workspace should match AnchorClaw
-`workspaceDir`. If they diverge, runtime paths such as `/new` and `/reset` can
-write into a different DB workspace scope than import, search, and store paths.
 
 ## Skip Config Mode
 
@@ -128,6 +122,23 @@ openclaw anchorclaw import --apply --keep-files
 `--keep-files` is only for exceptional situations. It leaves active legacy files
 in place and can reintroduce duplicate prompt injection risk.
 
+Import target selection:
+
+- `--default-agent`: import into the resolved default agent workspace
+- `--agent <id>`: import into one specific configured agent workspace
+- `--all-agent-workspaces`: import every unique workspace from `agents.list`
+- `--source-dir <path>`: override where legacy files are read from; this does
+  not replace target selection
+
+Examples:
+
+```bash
+openclaw anchorclaw import --default-agent
+openclaw anchorclaw import --agent ops
+openclaw anchorclaw import --all-agent-workspaces
+openclaw anchorclaw import --source-dir /path/to/legacy --default-agent
+```
+
 ## CLI Setup Details
 
 By default, setup runs in interactive mode and prompts for:
@@ -138,7 +149,6 @@ By default, setup runs in interactive mode and prompts for:
 - schema name (`none` uses the default PostgreSQL `search_path`)
 - app password, or auto-generate
 - whether to update `~/.openclaw/openclaw.json`
-- workspace directory when config update is enabled
 
 Non-interactive example:
 
@@ -148,14 +158,35 @@ openclaw anchorclaw setup \
   --db-name anchorclaw \
   --db-user anchorclaw \
   --schema memory \
+  --maintenance-workspace-scope default-agent \
   --non-interactive
 ```
+
+When `setup --non-interactive` updates `~/.openclaw/openclaw.json`, it must
+know what maintenance workspace scope to write.
+
+Use `--maintenance-workspace-scope default-agent` for the normal single-agent or
+implicit-main case.
+
+Use `--maintenance-workspace-scope all-agent-workspaces` when maintenance should
+cover every unique configured workspace from `agents.list`.
+
+If `maintenance.workspaceScope` is already present in config, the flag can be
+omitted and setup preserves the existing value.
+
+If you only want to create/update the database objects and do not want setup to
+touch config, use `--skip-config --non-interactive`.
+
+If config update is enabled and no maintenance scope is available from either
+the flag or existing config, setup fails fast instead of guessing.
 
 Useful flags:
 
 - `--skip-config`: keep `~/.openclaw/openclaw.json` unchanged
 - `--schema-none`: use PostgreSQL default `search_path`
 - `--db-password <pass>`: set app user password explicitly
+- `--maintenance-workspace-scope <mode>`: write maintenance scope into config;
+  supported values are `default-agent` and `all-agent-workspaces`
 
 Defaults when omitted:
 
@@ -246,7 +277,6 @@ Preferred identity for Docker and production:
     "entries": {
       "anchorclaw": {
         "config": {
-          "workspaceDir": "/root/.openclaw/workspace",
           "identity": {
             "externalId": "family-main-01"
           }
@@ -263,8 +293,7 @@ sharing the same OS user account will share the same AnchorClaw `user_id`.
 
 AnchorClaw logs a startup warning when fallback identity is active.
 
-Workspace identity is isolated per user and per resolved workspace directory
-(`dir:<sha256(resolved workspaceDir)>`).
+Workspace identity is isolated per user and per resolved agent workspace path.
 
 ## Postgres SSL
 

@@ -4,13 +4,16 @@ import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { isSessionFileForAgent, isSessionFileForAnyKnownAgent } from "../memory/sessions.js";
 import { normalizeSessionLookupPath } from "../memory/sessions-index.js";
 import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "../memory/sessions-index-sync.js";
-import { requireConfiguredWorkspaceDir } from "../workspace.js";
 import {
   countNewlinesInRange,
   isSessionArchiveArtifactPath,
   resolveSessionDeltaThresholds,
 } from "./session-delta-helpers.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
+import {
+  resolveRuntimeWorkspaceTarget,
+  RUNTIME_WORKSPACE_UNAVAILABLE,
+} from "./runtime-workspace.js";
 import { sessionPathForFile } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import fs from "node:fs/promises";
 
@@ -45,12 +48,16 @@ export function createSessionDeltaRuntime(params: {
     ctx.sessionsIndex.bootstrapPromise = (async () => {
       try {
         await ctx.ensureReady();
+        const workspaceTarget = resolveRuntimeWorkspaceTarget({ api });
+        if (!workspaceTarget) {
+          throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
+        }
         const scope = await resolveUserAndWorkspaceScope({
           api,
           pool: ctx.getPool(),
-          workspaceDir: requireConfiguredWorkspaceDir(ctx.cfg),
-          agentId: (api as any)?.runtime?.agentId,
-          sessionKey: (api as any)?.runtime?.sessionKey,
+          workspaceDir: workspaceTarget.workspaceDir,
+          agentId: workspaceTarget.agentId,
+          sessionKey: workspaceTarget.sessionKey,
           configuredExternalId: ctx.cfg?.identity?.externalId,
         });
         const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
@@ -169,12 +176,16 @@ export function createSessionDeltaRuntime(params: {
           `anchorclaw: sessions delta flush start (batch=${batch.length}, dirty=${dirtyFiles.length}, visibility=${ctx.cfg?.sessions?.visibility ?? "current"})`,
         );
         await ctx.ensureReady();
+        const workspaceTarget = resolveRuntimeWorkspaceTarget({ api });
+        if (!workspaceTarget) {
+          throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
+        }
         const scope = await resolveUserAndWorkspaceScope({
           api,
           pool: ctx.getPool(),
-          workspaceDir: requireConfiguredWorkspaceDir(ctx.cfg),
-          agentId: (api as any)?.runtime?.agentId,
-          sessionKey: (api as any)?.runtime?.sessionKey,
+          workspaceDir: workspaceTarget.workspaceDir,
+          agentId: workspaceTarget.agentId,
+          sessionKey: workspaceTarget.sessionKey,
           configuredExternalId: ctx.cfg?.identity?.externalId,
         });
         const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");

@@ -21,12 +21,22 @@ function buildCtx() {
       api: {
         registerTool,
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        runtime: { agentId: "main", sessionKey: "agent:main:main" },
+        runtime: {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          config: {
+            current: () => ({
+              agents: {
+                list: [{ id: "main", default: true, workspace: "/runtime/workspace" }],
+              },
+            }),
+          },
+        },
       },
       disabledReason: null,
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
-      cfg: { workspaceDir: "/workspace" },
+      cfg: { workspaceDir: "/legacy-workspace" },
       resolveActor: vi.fn(() => "tester"),
     } as any,
     registerTool,
@@ -75,6 +85,13 @@ describe("memory_store visible output", () => {
       type: "fact",
     });
     expect(refreshPromptCache).toHaveBeenCalledWith({ force: true });
+    expect(resolveScopeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/runtime/workspace",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
   });
 
   it("waits for lazy startup bootstrap when durable state is still pending", async () => {

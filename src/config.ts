@@ -1,5 +1,9 @@
+export type AnchorClawMaintenanceWorkspaceScope =
+  | { mode: "default-agent" }
+  | { mode: "all-agent-workspaces" }
+  | { mode: "agents"; agents: string[] };
+
 export type AnchorClawConfig = {
-  workspaceDir: string;
   debug?: {
     promptLogEnabled?: boolean;
   };
@@ -37,9 +41,9 @@ export type AnchorClawConfig = {
     dryRun?: boolean;
     intervalMinutes?: number;
     batchSize?: number;
+    workspaceScope?: AnchorClawMaintenanceWorkspaceScope;
     extractor?: {
       enabled?: boolean;
-      agentId?: string;
       maxCandidates?: number;
       maxCharsPerRun?: number;
     };
@@ -53,6 +57,10 @@ export type AnchorClawConfig = {
 
 export const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 export const DEFAULT_SESSION_DELTA_MESSAGES = 50;
+const MULTI_AGENT_ARCHITECTURE_REF = "See ARCHITECTURE.md#multi-agent-workspace-model";
+const WORKSPACE_DIR_REMOVED_MESSAGE =
+  "workspaceDir was removed in AnchorClaw 0.0.9 because workspace routing now follows the OpenClaw multi-agent model. " +
+  MULTI_AGENT_ARCHITECTURE_REF;
 
 export type SessionsSearchState = {
   configured: boolean;
@@ -120,6 +128,33 @@ function readRequiredString(value: unknown, label: string): string {
   return resolveEnvVars(value.trim());
 }
 
+function readNonEmptyStringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      throw new Error(`${label} must contain only strings`);
+    }
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      throw new Error(`${label} must not contain empty values`);
+    }
+    const resolved = resolveEnvVars(trimmed);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    items.push(resolved);
+  }
+  if (items.length === 0) {
+    throw new Error(`${label} must contain at least one agent id`);
+  }
+  return items;
+}
+
 function readOptionalPort(value: unknown, label: string): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
@@ -184,8 +219,10 @@ export const anchorClawConfigSchema = {
     if (!obj) {
       throw new Error("anchorclaw config required");
     }
-    assertAllowedKeys(obj, ["workspaceDir", "debug", "sessions", "identity", "postgres", "maintenance", "limits"], "anchorclaw config");
-    const workspaceDir = readRequiredString(obj.workspaceDir, "workspaceDir");
+    if (Object.prototype.hasOwnProperty.call(obj, "workspaceDir")) {
+      throw new Error(WORKSPACE_DIR_REMOVED_MESSAGE);
+    }
+    assertAllowedKeys(obj, ["debug", "sessions", "identity", "postgres", "maintenance", "limits"], "anchorclaw config");
 
     const debugObj = asRecord(obj.debug);
     if (obj.debug !== undefined && !debugObj) {
@@ -338,7 +375,11 @@ export const anchorClawConfigSchema = {
       throw new Error("maintenance must be an object");
     }
     if (maintenanceObj) {
-      assertAllowedKeys(maintenanceObj, ["enabled", "dryRun", "intervalMinutes", "batchSize", "extractor"], "maintenance");
+      assertAllowedKeys(
+        maintenanceObj,
+        ["enabled", "dryRun", "intervalMinutes", "batchSize", "workspaceScope", "extractor"],
+        "maintenance",
+      );
     }
     const maintenanceEnabled = maintenanceObj
       ? readOptionalBoolean(maintenanceObj.enabled, "maintenance.enabled")
@@ -362,22 +403,59 @@ export const anchorClawConfigSchema = {
           max: 2000,
         })
       : undefined;
+    const maintenanceWorkspaceScopeObj = maintenanceObj ? asRecord(maintenanceObj.workspaceScope) : null;
+    if (maintenanceObj?.workspaceScope !== undefined && !maintenanceWorkspaceScopeObj) {
+      throw new Error("maintenance.workspaceScope must be an object");
+    }
+    if (maintenanceWorkspaceScopeObj) {
+      assertAllowedKeys(maintenanceWorkspaceScopeObj, ["mode", "agents"], "maintenance.workspaceScope");
+    }
+    let maintenanceWorkspaceScope: AnchorClawMaintenanceWorkspaceScope | undefined;
+    if (maintenanceWorkspaceScopeObj) {
+      const mode = readRequiredString(maintenanceWorkspaceScopeObj.mode, "maintenance.workspaceScope.mode");
+      if (mode === "default-agent") {
+        if (maintenanceWorkspaceScopeObj.agents !== undefined) {
+          throw new Error("maintenance.workspaceScope.agents is only allowed when mode=agents");
+        }
+        maintenanceWorkspaceScope = { mode };
+      } else if (mode === "all-agent-workspaces") {
+        if (maintenanceWorkspaceScopeObj.agents !== undefined) {
+          throw new Error("maintenance.workspaceScope.agents is only allowed when mode=agents");
+        }
+        maintenanceWorkspaceScope = { mode };
+      } else if (mode === "agents") {
+        maintenanceWorkspaceScope = {
+          mode,
+          agents: readNonEmptyStringArray(
+            maintenanceWorkspaceScopeObj.agents,
+            "maintenance.workspaceScope.agents",
+          ),
+        };
+      } else {
+        throw new Error(
+          'maintenance.workspaceScope.mode must be one of "default-agent", "all-agent-workspaces", or "agents"',
+        );
+      }
+    }
     const maintenanceExtractorObj = maintenanceObj ? asRecord(maintenanceObj.extractor) : null;
     if (maintenanceObj?.extractor !== undefined && !maintenanceExtractorObj) {
       throw new Error("maintenance.extractor must be an object");
     }
+    if (maintenanceExtractorObj && Object.prototype.hasOwnProperty.call(maintenanceExtractorObj, "agentId")) {
+      throw new Error(
+        "maintenance.extractor.agentId was removed in AnchorClaw 0.0.9 because workspace routing now follows the OpenClaw multi-agent model. " +
+          MULTI_AGENT_ARCHITECTURE_REF,
+      );
+    }
     if (maintenanceExtractorObj) {
       assertAllowedKeys(
         maintenanceExtractorObj,
-        ["enabled", "agentId", "maxCandidates", "maxCharsPerRun"],
+        ["enabled", "maxCandidates", "maxCharsPerRun"],
         "maintenance.extractor",
       );
     }
     const maintenanceExtractorEnabled = maintenanceExtractorObj
       ? readOptionalBoolean(maintenanceExtractorObj.enabled, "maintenance.extractor.enabled")
-      : undefined;
-    const maintenanceExtractorAgentId = maintenanceExtractorObj
-      ? readOptionalNonEmptyString(maintenanceExtractorObj.agentId, "maintenance.extractor.agentId")
       : undefined;
     const maintenanceExtractorMaxCandidates = maintenanceExtractorObj
       ? readOptionalIntegerInRange({
@@ -429,7 +507,6 @@ export const anchorClawConfigSchema = {
       : undefined;
 
     return {
-      workspaceDir,
       ...(typeof debugPromptLogEnabled === "boolean"
         ? {
             debug: {
@@ -475,9 +552,9 @@ export const anchorClawConfigSchema = {
         dryRun: maintenanceDryRun ?? true,
         intervalMinutes: maintenanceIntervalMinutes ?? 12 * 60,
         batchSize: maintenanceBatchSize ?? 200,
+        ...(maintenanceWorkspaceScope ? { workspaceScope: maintenanceWorkspaceScope } : {}),
         extractor: {
           enabled: maintenanceExtractorEnabled ?? false,
-          agentId: maintenanceExtractorAgentId ?? "main",
           maxCandidates: maintenanceExtractorMaxCandidates ?? 10,
           maxCharsPerRun: maintenanceExtractorMaxCharsPerRun ?? 12_000,
         },

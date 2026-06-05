@@ -1,7 +1,12 @@
+import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
+
+import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { anchorClawConfigSchema, type AnchorClawConfig } from "../config.js";
 import { runLegacyWorkspaceImport, scanLegacyWorkspace } from "../importer.js";
 import { createPostgresPool } from "../postgres.js";
+import { resolveWorkspaceTargets } from "../workspace-targets.js";
 import {
   planAnchorClawImportTargets,
   type AnchorClawImportOptions,
@@ -10,6 +15,126 @@ import {
 
 function resolveCliConfig(api: OpenClawPluginApi): AnchorClawConfig {
   return anchorClawConfigSchema.parse(api.pluginConfig);
+}
+
+function hasExplicitImportSelector(opts: AnchorClawImportOptions): boolean {
+  return Boolean(opts.defaultAgent || opts.agent?.trim() || opts.allAgentWorkspaces);
+}
+
+type InteractiveImportChoice = {
+  label: string;
+  workspaceSummary: string;
+  options: AnchorClawImportOptions;
+};
+
+function dedupeChoices(choices: InteractiveImportChoice[]): InteractiveImportChoice[] {
+  const seen = new Set<string>();
+  const deduped: InteractiveImportChoice[] = [];
+  for (const choice of choices) {
+    const key = JSON.stringify({
+      defaultAgent: Boolean(choice.options.defaultAgent),
+      agent: choice.options.agent ?? null,
+      allAgentWorkspaces: Boolean(choice.options.allAgentWorkspaces),
+      sourceDir: choice.options.sourceDir ?? null,
+      apply: Boolean(choice.options.apply),
+      keepFiles: Boolean(choice.options.keepFiles),
+      nonInteractive: Boolean(choice.options.nonInteractive),
+    });
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(choice);
+  }
+  return deduped;
+}
+
+function buildInteractiveImportChoices(params: {
+  opts: AnchorClawImportOptions;
+  runtimeConfig?: any;
+}): InteractiveImportChoice[] {
+  if (!params.runtimeConfig) {
+    return [];
+  }
+
+  const choices: InteractiveImportChoice[] = [];
+  const defaultAgentId = resolveDefaultAgentId(params.runtimeConfig);
+  const [defaultTarget] = resolveWorkspaceTargets({
+    runtimeConfig: params.runtimeConfig,
+    selector: { mode: "default-agent" },
+  });
+  choices.push({
+    label: `default agent ${defaultAgentId}`,
+    workspaceSummary: defaultTarget.workspaceDir,
+    options: { ...params.opts, defaultAgent: true },
+  });
+
+  for (const agentId of listAgentIds(params.runtimeConfig)) {
+    if (agentId === defaultAgentId) {
+      continue;
+    }
+    const [agentTarget] = resolveWorkspaceTargets({
+      runtimeConfig: params.runtimeConfig,
+      selector: { mode: "agent", agentId },
+    });
+    choices.push({
+      label: `agent ${agentId}`,
+      workspaceSummary: agentTarget.workspaceDir,
+      options: { ...params.opts, agent: agentId },
+    });
+  }
+
+  if (!params.opts.sourceDir) {
+    const allTargets = resolveWorkspaceTargets({
+      runtimeConfig: params.runtimeConfig,
+      selector: { mode: "all-agent-workspaces" },
+    });
+    if (allTargets.length > 1) {
+      choices.push({
+        label: "all agent workspaces",
+        workspaceSummary: allTargets.map((target) => `${target.label} -> ${target.workspaceDir}`).join(" | "),
+        options: { ...params.opts, allAgentWorkspaces: true },
+      });
+    }
+  }
+
+  return dedupeChoices(choices);
+}
+
+async function resolveInteractiveImportOptions(params: {
+  opts: AnchorClawImportOptions;
+  runtimeConfig?: any;
+}): Promise<AnchorClawImportOptions> {
+  if (hasExplicitImportSelector(params.opts) || params.opts.nonInteractive) {
+    return params.opts;
+  }
+
+  const choices = buildInteractiveImportChoices(params);
+  if (choices.length === 0) {
+    throw new Error("OpenClaw runtime config is unavailable; import target selection requires it.");
+  }
+
+  console.log("\nSelect AnchorClaw import target:");
+  for (const [index, choice] of choices.entries()) {
+    console.log(`${index + 1}. ${choice.label} -> ${choice.workspaceSummary}`);
+  }
+
+  const rl = createInterface({ input, output });
+  try {
+    while (true) {
+      const answer = (await rl.question("Choice [1]: ")).trim();
+      if (!answer) {
+        return choices[0]!.options;
+      }
+      const selected = Number.parseInt(answer, 10);
+      if (Number.isInteger(selected) && selected >= 1 && selected <= choices.length) {
+        return choices[selected - 1]!.options;
+      }
+      console.warn(`Invalid selection: ${JSON.stringify(answer)}. Enter a number from 1 to ${choices.length}.`);
+    }
+  } finally {
+    rl.close();
+  }
 }
 
 function printLegacyScan(target: PlannedAnchorClawImportTarget, scan: Awaited<ReturnType<typeof scanLegacyWorkspace>>) {
@@ -57,9 +182,12 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
     typeof (api as any)?.runtime?.config?.current === "function"
       ? ((api as any).runtime.config.current() as any)
       : undefined;
-  const targets = planAnchorClawImportTargets({
-    cfg,
+  const effectiveOpts = await resolveInteractiveImportOptions({
     opts,
+    runtimeConfig,
+  });
+  const targets = planAnchorClawImportTargets({
+    opts: effectiveOpts,
     runtimeConfig,
     runtimeAgentId: (api as any)?.runtime?.agentId,
     runtimeSessionKey: (api as any)?.runtime?.sessionKey,
@@ -70,12 +198,6 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
     let unreadableCount = 0;
 
     for (const target of targets) {
-      if (target.deprecatedWorkspaceDirFallback) {
-        console.warn(
-          "Warning: OpenClaw runtime config was unavailable; falling back to anchorclaw.workspaceDir for target resolution.",
-        );
-      }
-
       const scan = await scanLegacyWorkspace({
         api,
         cfg,
@@ -89,7 +211,7 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
       hasActiveLegacy = hasActiveLegacy || scan.hasActiveLegacy;
       unreadableCount += scan.unreadableCount;
 
-      if (opts.apply) {
+      if (effectiveOpts.apply) {
         const result = await runLegacyWorkspaceImport({
           api,
           cfg,
@@ -98,8 +220,8 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
           targetWorkspaceDir: target.targetWorkspaceDir,
           agentId: target.agentId,
           sessionKey: target.sessionKey,
-          cleanupMemoryMdAfterImport: !opts.keepFiles,
-          archiveImportedFiles: !opts.keepFiles,
+          cleanupMemoryMdAfterImport: !effectiveOpts.keepFiles,
+          archiveImportedFiles: !effectiveOpts.keepFiles,
         });
 
         console.log(`\nAnchorClaw legacy import complete (${target.label})`);
@@ -116,9 +238,9 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
       }
     }
 
-    if (!opts.apply) {
+    if (!effectiveOpts.apply) {
       if (hasActiveLegacy) {
-        console.log(`\nNext step: run \`${buildApplyHint(opts)}\` to migrate and archive active legacy files.`);
+        console.log(`\nNext step: run \`${buildApplyHint(effectiveOpts)}\` to migrate and archive active legacy files.`);
       } else {
         console.log("\nNo active legacy files detected across the selected import targets.");
       }
@@ -130,7 +252,7 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
       return;
     }
 
-    if (opts.keepFiles) {
+    if (effectiveOpts.keepFiles) {
       console.warn("Warning: --keep-files leaves legacy files active and can reintroduce duplicate prompt injection risk.");
     }
   } finally {

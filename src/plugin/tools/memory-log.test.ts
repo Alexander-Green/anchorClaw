@@ -31,7 +31,10 @@ function buildCtx() {
           config: {
             current: () => ({
               plugins: { slots: { memory: "anchorclaw" } },
-              agents: { defaults: { userTimezone: "America/Chicago" } },
+              agents: {
+                list: [{ id: "main", default: true, workspace: "/runtime/workspace" }],
+                defaults: { userTimezone: "America/Chicago" },
+              },
             }),
           },
         },
@@ -39,7 +42,7 @@ function buildCtx() {
       disabledReason: null,
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn(), connect: vi.fn() })),
-      cfg: { workspaceDir: "/workspace" },
+      cfg: { workspaceDir: "/legacy-workspace" },
       resolveActor: vi.fn(() => "tester"),
       durableState: { overall: "ready" },
     } as any,
@@ -92,6 +95,13 @@ describe("memory_log tool", () => {
         sourceKind: "memory_log",
       }),
     );
+    expect(resolveScopeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/runtime/workspace",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
   });
 
   it("accepts OpenClaw-style daily path alias", async () => {
@@ -140,6 +150,28 @@ describe("memory_log tool", () => {
       disabled: true,
       error: "invalid daily path",
     });
+    expect(appendDailyEntryDbMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to cfg.workspaceDir when runtime config is unavailable", async () => {
+    const { ctx, registerTool } = buildCtx();
+    (ctx.api.runtime as any).config = undefined;
+
+    registerMemoryLogTool({
+      ctx,
+      refreshPromptCache: vi.fn(),
+    } as any);
+    const def = registerTool.mock.calls[0]?.[0];
+
+    const result = await def.execute("toolcall-4", {
+      content: "No runtime config",
+    });
+
+    expect(result.details).toMatchObject({
+      disabled: true,
+      error: "runtime_workspace_unavailable",
+    });
+    expect(resolveScopeMock).not.toHaveBeenCalled();
     expect(appendDailyEntryDbMock).not.toHaveBeenCalled();
   });
 });

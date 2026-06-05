@@ -1,7 +1,10 @@
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { appendDailyEntryDb, resolveDailyLogicalDate } from "../../memory/daily.js";
-import { resolveConfiguredWorkspaceDir, WORKSPACE_DIR_UNAVAILABLE } from "../../workspace.js";
-import { ensureToolRuntimeReady, type ToolRegistrationParams } from "./common.js";
+import {
+  ensureToolRuntimeReady,
+  resolveRuntimeToolWorkspace,
+  type ToolRegistrationParams,
+} from "./common.js";
 
 function resolveRuntimeTimezone(api: any): string | undefined {
   const currentConfig =
@@ -40,13 +43,8 @@ export function registerMemoryLogTool({ ctx, ensureStartupBootstrap }: ToolRegis
       const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
-      const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
-      if (!workspaceDir) {
-        return {
-          content: [{ type: "text", text: `anchorclaw: memory_log unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
-          details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
-        };
-      }
+      const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+      if ("content" in workspaceTarget) return workspaceTarget;
 
       const record = (params ?? {}) as Record<string, unknown>;
       const content = typeof record.content === "string" ? record.content : "";
@@ -74,9 +72,9 @@ export function registerMemoryLogTool({ ctx, ensureStartupBootstrap }: ToolRegis
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: ctx.getPool(),
-        workspaceDir,
-        agentId: (api as any)?.runtime?.agentId,
-        sessionKey: (api as any)?.runtime?.sessionKey,
+        workspaceDir: workspaceTarget.workspaceDir,
+        agentId: workspaceTarget.agentId,
+        sessionKey: workspaceTarget.sessionKey,
         configuredExternalId: ctx.cfg?.identity?.externalId,
       });
 
@@ -105,8 +103,8 @@ export function registerMemoryLogTool({ ctx, ensureStartupBootstrap }: ToolRegis
         sourceKind: "memory_log",
         metadata: {
           tool: "memory_log",
-          runtimeAgentId: (api as any)?.runtime?.agentId ?? "main",
-          sessionKey: (api as any)?.runtime?.sessionKey ?? null,
+          runtimeAgentId: workspaceTarget.agentId,
+          sessionKey: workspaceTarget.sessionKey ?? null,
         },
       });
 

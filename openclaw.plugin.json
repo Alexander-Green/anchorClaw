@@ -66,12 +66,6 @@
       "label": "Postgres",
       "help": "Postgres connection settings for AnchorClaw memory storage"
     },
-    "workspaceDir": {
-      "label": "Workspace Directory",
-      "placeholder": "/root/.openclaw/workspace",
-      "help": "Explicit workspace root used by AnchorClaw for import, workspace scoping, prompt cache, and memory/* reads.",
-      "advanced": true
-    },
     "postgres.host": {
       "label": "Host",
       "placeholder": "localhost",
@@ -144,6 +138,27 @@
       "help": "Time before an idle connection is closed",
       "advanced": true
     },
+    "maintenance": {
+      "label": "Maintenance",
+      "help": "Background daily-to-durable maintenance settings",
+      "advanced": true
+    },
+    "maintenance.workspaceScope": {
+      "label": "Workspace Scope",
+      "help": "Which OpenClaw workspace set the maintenance extractor should process",
+      "advanced": true
+    },
+    "maintenance.workspaceScope.mode": {
+      "label": "Scope Mode",
+      "placeholder": "default-agent",
+      "help": "default-agent, all-agent-workspaces, or agents",
+      "advanced": true
+    },
+    "maintenance.workspaceScope.agents": {
+      "label": "Scope Agents",
+      "help": "Explicit agent IDs when scope mode is agents",
+      "advanced": true
+    },
     "limits": {
       "label": "Limits",
       "help": "Safety limits for memory tools",
@@ -172,10 +187,6 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "workspaceDir": {
-        "type": "string",
-        "minLength": 1
-      },
       "debug": {
         "type": "object",
         "additionalProperties": false,
@@ -237,6 +248,24 @@
             "minimum": 1,
             "maximum": 2000
           },
+          "workspaceScope": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["default-agent", "all-agent-workspaces", "agents"]
+              },
+              "agents": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              }
+            }
+          },
           "extractor": {
             "type": "object",
             "additionalProperties": false,
@@ -244,10 +273,6 @@
               "enabled": {
                 "type": "boolean",
                 "default": false
-              },
-              "agentId": {
-                "type": "string",
-                "default": "main"
               },
               "maxCandidates": {
                 "type": "number",

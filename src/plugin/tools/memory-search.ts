@@ -7,12 +7,8 @@ import { memorySearchSessions } from "../../memory/sessions.js";
 import { hasSessionsIndexRows, memorySearchSessionsIndexDb } from "../../memory/sessions-index.js";
 import { filterSessionHitsByVisibility } from "../../memory/sessions-visibility.js";
 import {
-  resolveConfiguredLegacyImportScope,
-  resolveConfiguredWorkspaceDir,
-  WORKSPACE_DIR_UNAVAILABLE,
-} from "../../workspace.js";
-import {
   ensureToolRuntimeReady,
+  resolveRuntimeToolWorkspace,
   type ToolRegistrationParams,
 } from "./common.js";
 import { buildSearchLikeDetailsEnvelope, formatSearchLikeVisibleOutput } from "./memory-visible-output.js";
@@ -87,12 +83,14 @@ async function buildLegacyImportWarning(params: {
   ctx: ToolRegistrationParams["ctx"];
   api: any;
   corpus: string;
+  workspaceDir: string;
+  agentId: string;
+  sessionKey?: string;
 }): Promise<string | null> {
   if (params.corpus !== "memory" && params.corpus !== "all") {
     return null;
   }
-  const legacyImportScope = resolveConfiguredLegacyImportScope(params.ctx.cfg);
-  if (!legacyImportScope || !params.ctx.cfg) {
+  if (!params.ctx.cfg) {
     return null;
   }
   try {
@@ -100,10 +98,10 @@ async function buildLegacyImportWarning(params: {
       api: params.api,
       cfg: params.ctx.cfg,
       pool: params.ctx.getPool(),
-      sourceDir: legacyImportScope.sourceDir,
-      targetWorkspaceDir: legacyImportScope.targetWorkspaceDir,
-      agentId: (params.api as any)?.runtime?.agentId,
-      sessionKey: (params.api as any)?.runtime?.sessionKey,
+      sourceDir: params.workspaceDir,
+      targetWorkspaceDir: params.workspaceDir,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
     });
     if (!legacyScan.hasActiveLegacy) {
       return null;
@@ -211,19 +209,14 @@ export function registerMemorySearchTool({
         };
       }
       try {
-        const workspaceDir = resolveConfiguredWorkspaceDir(ctx.cfg);
-        if (!workspaceDir) {
-          return {
-            content: [{ type: "text", text: `anchorclaw: memory_search unavailable (${WORKSPACE_DIR_UNAVAILABLE})` }],
-            details: { disabled: true, error: WORKSPACE_DIR_UNAVAILABLE },
-          };
-        }
+        const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+        if ("content" in workspaceTarget) return workspaceTarget;
         const scope = await resolveUserAndWorkspaceScope({
           api,
           pool: ctx.getPool(),
-          workspaceDir,
-          agentId: (api as any)?.runtime?.agentId,
-          sessionKey: (api as any)?.runtime?.sessionKey,
+          workspaceDir: workspaceTarget.workspaceDir,
+          agentId: workspaceTarget.agentId,
+          sessionKey: workspaceTarget.sessionKey,
           configuredExternalId: ctx.cfg?.identity?.externalId,
         });
         const limits = resolveMemoryLimits(ctx.cfg!);
@@ -466,11 +459,20 @@ export function registerMemorySearchTool({
       });
       const legacyImportWarning =
         hits.length === 0
-          ? await buildLegacyImportWarning({
-              ctx,
-              api,
-              corpus: trimmedCorpus,
-            })
+          ? await (async () => {
+              const legacyWorkspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+              if ("content" in legacyWorkspaceTarget) {
+                return null;
+              }
+              return buildLegacyImportWarning({
+                ctx,
+                api,
+                corpus: trimmedCorpus,
+                workspaceDir: legacyWorkspaceTarget.workspaceDir,
+                agentId: legacyWorkspaceTarget.agentId,
+                sessionKey: legacyWorkspaceTarget.sessionKey,
+              });
+            })()
           : null;
       const text = legacyImportWarning ? `${visible}\n\n${legacyImportWarning}` : visible;
       return {

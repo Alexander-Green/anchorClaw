@@ -67,6 +67,20 @@ vi.mock("./sessions-visibility.js", () => ({
 
 import { createAnchorClawMemorySearchManager } from "./manager.js";
 
+function buildRuntime(workspaceDir = "/runtime/workspace") {
+  return {
+    sessionKey: "agent:main:main",
+    workspaceDir: "/legacy-workspace",
+    config: {
+      current: () => ({
+        agents: {
+          list: [{ id: "main", default: true, workspace: workspaceDir }],
+        },
+      }),
+    },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   resolveScope.mockResolvedValue({
@@ -81,14 +95,11 @@ describe("createAnchorClawMemorySearchManager.sync", () => {
 
     const manager = createAnchorClawMemorySearchManager({
       api: {
-        runtime: {
-          sessionKey: "agent:main:main",
-          workspaceDir: "/workspace",
-        },
+        runtime: buildRuntime(),
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/workspace",
+        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -129,14 +140,11 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     filterSessionHitsByVisibility.mockResolvedValueOnce([]);
     const manager = createAnchorClawMemorySearchManager({
       api: {
-        runtime: {
-          sessionKey: "agent:main:main",
-          workspaceDir: "/workspace",
-        },
+        runtime: buildRuntime(),
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/workspace",
+        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -165,14 +173,11 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     filterSessionHitsByVisibility.mockResolvedValueOnce([]);
     const manager = createAnchorClawMemorySearchManager({
       api: {
-        runtime: {
-          sessionKey: "agent:main:main",
-          workspaceDir: "/workspace",
-        },
+        runtime: buildRuntime(),
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/workspace",
+        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -219,14 +224,11 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     } as any);
     const manager = createAnchorClawMemorySearchManager({
       api: {
-        runtime: {
-          sessionKey: "agent:main:main",
-          workspaceDir: "/workspace",
-        },
+        runtime: buildRuntime(),
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/workspace",
+        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -239,7 +241,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     expect(memoryGetFromDb).not.toHaveBeenCalled();
   });
 
-  it("warns and exposes degraded status when workspaceDir is unavailable", async () => {
+  it("warns and exposes degraded status when runtime workspace is unavailable", async () => {
     const logger = { warn: vi.fn() };
     const manager = createAnchorClawMemorySearchManager({
       api: {
@@ -250,7 +252,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "   ",
+        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -262,13 +264,13 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     await expect(manager.readFile({ relPath: "MEMORY.md" })).resolves.toEqual({ text: "", path: "MEMORY.md" });
     await manager.sync?.({});
 
-    expect(logger.warn).toHaveBeenCalledWith("anchorclaw: manager search skipped (workspace_dir_unavailable)");
-    expect(logger.warn).toHaveBeenCalledWith("anchorclaw: manager readFile skipped (workspace_dir_unavailable)");
-    expect(logger.warn).toHaveBeenCalledWith("anchorclaw: manager sync skipped (workspace unavailable)");
+    expect(logger.warn).toHaveBeenCalledWith("anchorclaw: manager search skipped (runtime_workspace_unavailable)");
+    expect(logger.warn).toHaveBeenCalledWith("anchorclaw: manager readFile skipped (runtime_workspace_unavailable)");
+    expect(logger.warn).toHaveBeenCalledWith("anchorclaw: manager sync skipped (runtime_workspace_unavailable)");
     expect(manager.status()).toMatchObject({
       custom: {
         degraded: true,
-        error: "workspace_dir_unavailable",
+        error: "runtime_workspace_unavailable",
       },
     });
   });
@@ -287,14 +289,11 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     ] as any);
     const manager = createAnchorClawMemorySearchManager({
       api: {
-        runtime: {
-          sessionKey: "agent:main:main",
-          workspaceDir: "/workspace",
-        },
+        runtime: buildRuntime(),
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/workspace",
+        workspaceDir: "/legacy-workspace",
         sessions: { visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -331,14 +330,11 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     } as any);
     const manager = createAnchorClawMemorySearchManager({
       api: {
-        runtime: {
-          sessionKey: "agent:main:main",
-          workspaceDir: "/workspace",
-        },
+        runtime: buildRuntime(),
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/workspace",
+        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -356,7 +352,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     expect(memoryGetFromDb).toHaveBeenCalledWith(
       expect.objectContaining({
         lookup: "memory/2026-05-20.md",
-        workspaceDir: path.resolve("/workspace"),
+        workspaceDir: path.resolve("/runtime/workspace"),
       }),
     );
   });

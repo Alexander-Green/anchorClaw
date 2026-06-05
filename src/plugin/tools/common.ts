@@ -1,4 +1,8 @@
 import type { PluginRuntimeContext } from "../runtime-context.js";
+import {
+  resolveRuntimeWorkspaceTarget,
+  RUNTIME_WORKSPACE_UNAVAILABLE,
+} from "../runtime-workspace.js";
 
 export type ToolRegistrationParams = {
   ctx: PluginRuntimeContext;
@@ -6,6 +10,16 @@ export type ToolRegistrationParams = {
   ensureSessionsIndexBootstrapped: () => Promise<void>;
   ensureStartupBootstrap?: () => Promise<void>;
 };
+
+function buildToolUnavailableResponse(error: string): {
+  content: { type: "text"; text: string }[];
+  details: { disabled: true; error: string };
+} {
+  return {
+    content: [{ type: "text", text: `anchorclaw: tool unavailable (${error})` }],
+    details: { disabled: true, error },
+  };
+}
 
 export function getToolUnavailableResponse(ctx: PluginRuntimeContext):
   | { content: { type: "text"; text: string }[]; details: { disabled: true; error: string } }
@@ -44,4 +58,16 @@ export async function ensureToolRuntimeReady(
     await ensureStartupBootstrap();
   }
   return getToolUnavailableResponse(ctx);
+}
+
+export function resolveRuntimeToolWorkspace(params: {
+  ctx: PluginRuntimeContext;
+}):
+  | { workspaceDir: string; agentId: string; sessionKey?: string }
+  | { content: { type: "text"; text: string }[]; details: { disabled: true; error: string } } {
+  const target = resolveRuntimeWorkspaceTarget({ api: params.ctx.api });
+  if (!target) {
+    return buildToolUnavailableResponse(RUNTIME_WORKSPACE_UNAVAILABLE);
+  }
+  return target;
 }

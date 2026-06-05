@@ -333,6 +333,75 @@ function selectPendingWindowsForRun(params: {
     .slice(0, Math.max(1, params.batchSize));
 }
 
+async function selectPendingWindowsPage(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+  batchSize: number;
+  maxChars: number;
+}): Promise<DailyWindow[]> {
+  const pageSize = Math.max(1, params.batchSize);
+
+  for (let offset = 0; ; offset += pageSize) {
+    const dailyRows = await params.pool.query<DailyEntryRow>(
+      `
+      SELECT id, path, logical_date::text AS logical_date, content, content_sha256, source_kind, updated_at
+      FROM memory_daily_entries
+      WHERE user_id = $1
+        AND workspace_id = $2
+        AND source_kind = ANY($3::text[])
+      ORDER BY logical_date ASC, updated_at ASC, id ASC
+      LIMIT $4
+      OFFSET $5
+      `,
+      [
+        params.userId,
+        params.workspaceId,
+        EXTRACTOR_ALLOWED_DAILY_SOURCE_KINDS,
+        pageSize,
+        offset,
+      ],
+    );
+
+    if ((dailyRows.rowCount ?? 0) === 0) {
+      return [];
+    }
+
+    const allWindows = dailyRows.rows.flatMap((row) => splitDailyIntoWindows(row, params.maxChars));
+    const dailyEntryIds = Array.from(new Set(allWindows.map((window) => window.dailyEntryId)));
+    const processedRows =
+      dailyEntryIds.length > 0
+        ? await params.pool.query<ProcessedWindowRow>(
+            `
+            SELECT daily_entry_id, content_sha256, window_index
+            FROM memory_daily_extraction_windows
+            WHERE user_id = $1
+              AND workspace_id = $2
+              AND daily_entry_id = ANY($3::uuid[])
+            `,
+            [params.userId, params.workspaceId, dailyEntryIds],
+          )
+        : { rows: [], rowCount: 0 };
+
+    const processedKeys = new Set(
+      processedRows.rows.map((row) => `${row.daily_entry_id}:${row.content_sha256}:${row.window_index}`),
+    );
+
+    const pendingWindows = selectPendingWindowsForRun({
+      allWindows,
+      processedKeys,
+      batchSize: params.batchSize,
+    });
+    if (pendingWindows.length > 0) {
+      return pendingWindows;
+    }
+
+    if ((dailyRows.rowCount ?? 0) < pageSize) {
+      return [];
+    }
+  }
+}
+
 export type MaintenanceCycleResult = {
   status: "completed" | "failed";
   runId: string | null;
@@ -382,49 +451,13 @@ export async function runMaintenanceCycle(params: {
     );
     runId = runInsert.rows[0]?.id ?? null;
 
-    const dailyRows = await params.pool.query<DailyEntryRow>(
-      `
-      SELECT id, path, logical_date::text AS logical_date, content, content_sha256, source_kind, updated_at
-      FROM memory_daily_entries
-      WHERE user_id = $1
-        AND workspace_id = $2
-        AND source_kind = ANY($3::text[])
-      ORDER BY logical_date ASC, updated_at ASC, id ASC
-      LIMIT $4
-      `,
-      [
-        scope.userId,
-        scope.workspaceId,
-        EXTRACTOR_ALLOWED_DAILY_SOURCE_KINDS,
-        Math.max(1, params.batchSize),
-      ],
-    );
-
     const maxChars = params.cfg.maintenance?.extractor?.maxCharsPerRun ?? 12_000;
-    const allWindows = dailyRows.rows.flatMap((row) => splitDailyIntoWindows(row, maxChars));
-    const dailyEntryIds = Array.from(new Set(allWindows.map((window) => window.dailyEntryId)));
-    const processedRows =
-      dailyEntryIds.length > 0
-        ? await params.pool.query<ProcessedWindowRow>(
-            `
-            SELECT daily_entry_id, content_sha256, window_index
-            FROM memory_daily_extraction_windows
-            WHERE user_id = $1
-              AND workspace_id = $2
-              AND daily_entry_id = ANY($3::uuid[])
-            `,
-            [scope.userId, scope.workspaceId, dailyEntryIds],
-          )
-        : { rows: [], rowCount: 0 };
-
-    const processedKeys = new Set(
-      processedRows.rows.map((row) => `${row.daily_entry_id}:${row.content_sha256}:${row.window_index}`),
-    );
-
-    const pendingWindows = selectPendingWindowsForRun({
-      allWindows,
-      processedKeys,
+    const pendingWindows = await selectPendingWindowsPage({
+      pool: params.pool,
+      userId: scope.userId,
+      workspaceId: scope.workspaceId,
       batchSize: params.batchSize,
+      maxChars,
     });
     const preparedTranscript = prepareTranscript(pendingWindows, maxChars);
     const transcript = preparedTranscript.transcript;

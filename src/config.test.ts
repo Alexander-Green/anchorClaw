@@ -3,7 +3,6 @@ import { anchorClawConfigSchema } from "./config.js";
 
 function baseConfig(): Record<string, unknown> {
   return {
-    workspaceDir: "/workspace",
     postgres: {
       host: "localhost",
       database: "anchorclaw",
@@ -41,39 +40,15 @@ describe("anchorClawConfigSchema identity.externalId", () => {
 });
 
 describe("anchorClawConfigSchema workspaceDir", () => {
-  it("requires workspaceDir", () => {
-    expect(() =>
-      anchorClawConfigSchema.parse({
-        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-      }),
-    ).toThrow("workspaceDir required");
-  });
-
-  it("accepts env substitution for workspaceDir", () => {
-    const previous = process.env.ANCHORCLAW_TEST_WORKSPACE_DIR;
-    try {
-      process.env.ANCHORCLAW_TEST_WORKSPACE_DIR = "/workspace/from-env";
-      const parsed = anchorClawConfigSchema.parse({
-        ...baseConfig(),
-        workspaceDir: "${ANCHORCLAW_TEST_WORKSPACE_DIR}",
-      });
-      expect(parsed.workspaceDir).toBe("/workspace/from-env");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.ANCHORCLAW_TEST_WORKSPACE_DIR;
-      } else {
-        process.env.ANCHORCLAW_TEST_WORKSPACE_DIR = previous;
-      }
-    }
-  });
-
-  it("rejects blank workspaceDir when explicitly configured", () => {
+  it("rejects removed workspaceDir", () => {
     expect(() =>
       anchorClawConfigSchema.parse({
         ...baseConfig(),
-        workspaceDir: "   ",
+        workspaceDir: "/workspace",
       }),
-    ).toThrow("workspaceDir required");
+    ).toThrow(
+      "workspaceDir was removed in AnchorClaw 0.0.9 because workspace routing now follows the OpenClaw multi-agent model. See ARCHITECTURE.md#multi-agent-workspace-model",
+    );
   });
 });
 
@@ -212,9 +187,9 @@ describe("anchorClawConfigSchema maintenance", () => {
     expect(parsed.maintenance?.intervalMinutes).toBe(12 * 60);
     expect(parsed.maintenance?.batchSize).toBe(200);
     expect(parsed.maintenance?.extractor?.enabled).toBe(false);
-    expect(parsed.maintenance?.extractor?.agentId).toBe("main");
     expect(parsed.maintenance?.extractor?.maxCandidates).toBe(10);
     expect(parsed.maintenance?.extractor?.maxCharsPerRun).toBe(12_000);
+    expect(parsed.maintenance?.workspaceScope).toBeUndefined();
   });
 
   it("accepts custom maintenance settings", () => {
@@ -225,9 +200,11 @@ describe("anchorClawConfigSchema maintenance", () => {
         dryRun: false,
         intervalMinutes: 15,
         batchSize: 500,
+        workspaceScope: {
+          mode: "default-agent",
+        },
         extractor: {
           enabled: true,
-          agentId: "worker-a",
           maxCandidates: 8,
           maxCharsPerRun: 20000,
         },
@@ -237,9 +214,68 @@ describe("anchorClawConfigSchema maintenance", () => {
     expect(parsed.maintenance?.dryRun).toBe(false);
     expect(parsed.maintenance?.intervalMinutes).toBe(15);
     expect(parsed.maintenance?.batchSize).toBe(500);
+    expect(parsed.maintenance?.workspaceScope).toEqual({ mode: "default-agent" });
     expect(parsed.maintenance?.extractor?.enabled).toBe(true);
-    expect(parsed.maintenance?.extractor?.agentId).toBe("worker-a");
     expect(parsed.maintenance?.extractor?.maxCandidates).toBe(8);
     expect(parsed.maintenance?.extractor?.maxCharsPerRun).toBe(20000);
+  });
+
+  it("rejects removed maintenance.extractor.agentId", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        maintenance: {
+          extractor: {
+            enabled: true,
+            agentId: "worker-a",
+          },
+        },
+      }),
+    ).toThrow(
+      "maintenance.extractor.agentId was removed in AnchorClaw 0.0.9 because workspace routing now follows the OpenClaw multi-agent model. See ARCHITECTURE.md#multi-agent-workspace-model",
+    );
+  });
+
+  it("accepts maintenance workspaceScope mode=agents", () => {
+    const parsed = anchorClawConfigSchema.parse({
+      ...baseConfig(),
+      maintenance: {
+        workspaceScope: {
+          mode: "agents",
+          agents: ["main", "ops"],
+        },
+      },
+    });
+    expect(parsed.maintenance?.workspaceScope).toEqual({
+      mode: "agents",
+      agents: ["main", "ops"],
+    });
+  });
+
+  it("rejects maintenance workspaceScope agents outside mode=agents", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        maintenance: {
+          workspaceScope: {
+            mode: "default-agent",
+            agents: ["main"],
+          },
+        },
+      }),
+    ).toThrow("maintenance.workspaceScope.agents is only allowed when mode=agents");
+  });
+
+  it("rejects maintenance workspaceScope mode=agents without agent list", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        maintenance: {
+          workspaceScope: {
+            mode: "agents",
+          },
+        },
+      }),
+    ).toThrow("maintenance.workspaceScope.agents must be an array");
   });
 });
