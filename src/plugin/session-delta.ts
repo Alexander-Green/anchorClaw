@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveSessionsSearchState } from "../config.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
-import { isSessionFileForAgent, isSessionFileForAnyKnownAgent } from "../memory/sessions.js";
+import { isSessionFileForAgent } from "../memory/sessions.js";
 import { normalizeSessionLookupPath } from "../memory/sessions-index.js";
 import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "../memory/sessions-index-sync.js";
 import {
@@ -18,6 +18,14 @@ import { sessionPathForFile } from "openclaw/plugin-sdk/memory-core-host-engine-
 import fs from "node:fs/promises";
 
 const SESSION_DELTA_DEBOUNCE_MS = 5_000;
+
+function resolveSessionAgentId(lookup: string): string | null {
+  const parts = lookup.split("/").filter(Boolean);
+  if (parts.length !== 3 || parts[0] !== "sessions") {
+    return null;
+  }
+  return parts[1]?.trim() || null;
+}
 
 export type SessionDeltaRuntime = {
   ensureSessionsIndexBootstrapped: () => Promise<void>;
@@ -264,19 +272,9 @@ export function createSessionDeltaRuntime(params: {
     const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
     const isRelevantSessionDeltaPath = async (sessionFile: string): Promise<boolean> => {
       if ((ctx.cfg?.sessions?.visibility ?? "current") === "visible") {
-        const knownAgentTranscript = await isSessionFileForAnyKnownAgent(sessionFile);
-        if (!knownAgentTranscript) {
-          const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
-          ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
-          if (next === 1 || next === 5 || next % 20 === 0) {
-            api.logger.warn(
-              `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
-            );
-          }
-          return false;
-        }
         const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
-        if (!lookup) {
+        const transcriptAgentId = lookup ? resolveSessionAgentId(lookup) : null;
+        if (!lookup || !transcriptAgentId) {
           const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
           ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
           if (next === 1 || next === 5 || next % 20 === 0) {
@@ -286,7 +284,32 @@ export function createSessionDeltaRuntime(params: {
           }
           return false;
         }
-        return true;
+        const visibleAgentIds = await ctx.listVisibleAgentIds();
+        if (!visibleAgentIds.includes(transcriptAgentId)) {
+          const next = (ctx.sessionDelta.ignoredPathCounts.get(lookup) ?? 0) + 1;
+          ctx.sessionDelta.ignoredPathCounts.set(lookup, next);
+          if (next === 1 || next === 5 || next % 20 === 0) {
+            api.logger.warn(
+              `anchorclaw: ignored session delta update outside current workspace scope (${lookup}) [count=${next}]`,
+            );
+          }
+          return false;
+        }
+        const inAgentDir = await isSessionFileForAgent({
+          sessionFile,
+          agentId: transcriptAgentId,
+        });
+        if (inAgentDir) {
+          return true;
+        }
+        const next = (ctx.sessionDelta.ignoredPathCounts.get(lookup) ?? 0) + 1;
+        ctx.sessionDelta.ignoredPathCounts.set(lookup, next);
+        if (next === 1 || next === 5 || next % 20 === 0) {
+          api.logger.warn(
+            `anchorclaw: ignored session delta update due to unrecognized path (${lookup}) [count=${next}]`,
+          );
+        }
+        return false;
       }
       const inCurrentAgentDir = await isSessionFileForAgent({
         sessionFile,

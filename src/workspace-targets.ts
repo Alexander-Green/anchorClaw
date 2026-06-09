@@ -134,3 +134,24 @@ export function resolveWorkspaceTargets(params: {
     agentIds: requestedAgentIds,
   });
 }
+
+export function resolveAgentWorkspacePeerIds(params: {
+  runtimeConfig: OpenClawRuntimeConfig;
+  agentId: string;
+}): string[] {
+  const agentId = normalizeOptionalString(params.agentId);
+  if (!agentId) {
+    throw new Error("Agent id is required.");
+  }
+  assertConfiguredAgents(params.runtimeConfig, [agentId]);
+
+  const target = groupResolvedWorkspaceTargets({
+    runtimeConfig: params.runtimeConfig,
+    agentIds: listAgentIds(params.runtimeConfig),
+  }).find((candidate) => candidate.agentIds.includes(agentId));
+
+  if (!target) {
+    throw new Error(`Unable to resolve workspace peers for agent ${JSON.stringify(agentId)}.`);
+  }
+  return [...target.agentIds];
+}

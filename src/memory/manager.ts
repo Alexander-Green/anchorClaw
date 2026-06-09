@@ -6,7 +6,6 @@ import { resolveMemoryLimits } from "./limits.js";
 import { memoryGetFromDb } from "./get.js";
 import { memorySearchDb, type MemorySearchHit } from "./search.js";
 import { memorySearchSessions } from "./sessions.js";
-import { listKnownAgentIds } from "./sessions.js";
 import {
   hasSessionsIndexRows,
   memorySearchSessionsIndexDb,
@@ -14,7 +13,10 @@ import {
 import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "./sessions-index-sync.js";
 import { canAccessSessionPathByVisibility, filterSessionHitsByVisibility } from "./sessions-visibility.js";
 import { buildMemoryReadResult } from "./read-file-shared.js";
-import { resolveWorkspaceTargets } from "../workspace-targets.js";
+import {
+  resolveAgentWorkspacePeerIds,
+  resolveWorkspaceTargets,
+} from "../workspace-targets.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -148,11 +150,13 @@ export function createAnchorClawMemorySearchManager(
   const sessionsVisibility = sessionsSearch.visibility;
   const sessionsEnabled = sessionsSearch.effective;
 
+  const resolveRuntimeConfig = (): any | undefined =>
+    typeof (api as any)?.runtime?.config?.current === "function"
+      ? (api as any).runtime.config.current()
+      : undefined;
+
   const resolveWorkspaceDir = (): string | undefined => {
-    const runtimeConfig =
-      typeof (api as any)?.runtime?.config?.current === "function"
-        ? (api as any).runtime.config.current()
-        : undefined;
+    const runtimeConfig = resolveRuntimeConfig();
     if (!runtimeConfig) {
       return undefined;
     }
@@ -189,8 +193,18 @@ export function createAnchorClawMemorySearchManager(
 
   const listVisibleAgentIds = async (): Promise<string[]> => {
     const currentAgentId = params.agentId;
-    const agentIds = await listKnownAgentIds();
-    return [currentAgentId, ...agentIds.filter((agentId) => agentId !== currentAgentId)];
+    const runtimeConfig = resolveRuntimeConfig();
+    if (!runtimeConfig) {
+      return [currentAgentId];
+    }
+    try {
+      return resolveAgentWorkspacePeerIds({
+        runtimeConfig,
+        agentId: currentAgentId,
+      });
+    } catch {
+      return [currentAgentId];
+    }
   };
 
   return {

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveWorkspaceTargets } from "./workspace-targets.js";
+import {
+  resolveAgentWorkspacePeerIds,
+  resolveWorkspaceTargets,
+} from "./workspace-targets.js";
 
 describe("resolveWorkspaceTargets", () => {
   it("resolves implicit main as the default agent", () => {
@@ -180,5 +183,47 @@ describe("resolveWorkspaceTargets", () => {
         selector: { mode: "agents", agentIds: [] },
       }),
     ).toThrow(/At least one agent id is required/);
+  });
+});
+
+describe("resolveAgentWorkspacePeerIds", () => {
+  it("returns only agents that resolve to the same workspace", () => {
+    const peers = resolveAgentWorkspacePeerIds({
+      runtimeConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/agents/shared" },
+            { id: "ops", workspace: "/agents/shared" },
+            { id: "qa", workspace: "/agents/qa" },
+          ],
+        },
+      } as any,
+      agentId: "main",
+    });
+
+    expect(peers).toEqual(["main", "ops"]);
+  });
+
+  it("keeps implicit main in its own workspace group", () => {
+    expect(
+      resolveAgentWorkspacePeerIds({
+        runtimeConfig: {} as any,
+        agentId: "main",
+      }),
+    ).toEqual(["main"]);
+  });
+
+  it("keeps generated per-agent workspaces separate", () => {
+    const peers = resolveAgentWorkspacePeerIds({
+      runtimeConfig: {
+        agents: {
+          defaults: { workspace: "/agents/shared" },
+          list: [{ id: "main", default: true }, { id: "ops" }],
+        },
+      } as any,
+      agentId: "main",
+    });
+
+    expect(peers).toEqual(["main"]);
   });
 });

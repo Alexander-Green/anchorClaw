@@ -7,8 +7,8 @@ import {
 } from "../postgres.js";
 import { loadBundledMigrationsFromDisk } from "../migrations-fs.js";
 import { applyMigrations } from "../migrations.js";
-import { listKnownAgentIds } from "../memory/sessions.js";
 import { isTransientDbError } from "../db-errors.js";
+import { resolveAgentWorkspacePeerIds } from "../workspace-targets.js";
 import type {
   DurableMemoryState,
   PromptCacheState,
@@ -181,8 +181,21 @@ export function createPluginRuntimeContext(params: {
     },
     listVisibleAgentIds: async () => {
       const currentAgentId = String((params.api as any)?.runtime?.agentId ?? "main");
-      const agentIds = await listKnownAgentIds();
-      return [currentAgentId, ...agentIds.filter((agentId) => agentId !== currentAgentId)];
+      const runtimeConfig =
+        typeof (params.api as any)?.runtime?.config?.current === "function"
+          ? (params.api as any).runtime.config.current()
+          : undefined;
+      if (!runtimeConfig) {
+        return [currentAgentId];
+      }
+      try {
+        return resolveAgentWorkspacePeerIds({
+          runtimeConfig,
+          agentId: currentAgentId,
+        });
+      } catch {
+        return [currentAgentId];
+      }
     },
   };
 

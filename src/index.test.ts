@@ -19,7 +19,6 @@ const {
   scanLegacyWorkspaceMock,
   getIdentityWarning,
   isSessionFileForAgent,
-  isSessionFileForAnyKnownAgent,
   resolveSessionsDirForAgent,
   memoryGetFromDb,
   canAccessSessionPathByVisibility,
@@ -81,7 +80,6 @@ const {
   })),
   getIdentityWarning: vi.fn(() => null),
   isSessionFileForAgent: vi.fn(async () => true),
-  isSessionFileForAnyKnownAgent: vi.fn(async () => true),
   resolveSessionsDirForAgent: vi.fn(async () => "/tmp/.openclaw/agents/main/sessions"),
   memoryGetFromDb: vi.fn(),
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
@@ -171,7 +169,6 @@ vi.mock("./memory/sessions.js", () => ({
   listKnownAgentIds: vi.fn(async () => []),
   memorySearchSessions: vi.fn(async () => []),
   isSessionFileForAgent,
-  isSessionFileForAnyKnownAgent,
   resolveSessionsDirForAgent,
 }));
 
@@ -232,7 +229,13 @@ vi.mock("./identity-policy.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
   listSessionFilesForAgent: vi.fn(async () => []),
-  sessionPathForFile: vi.fn((value: string) => value),
+  sessionPathForFile: vi.fn((value: string) => {
+    const normalized = value.replaceAll("\\", "/");
+    const match = normalized.match(/\/agents\/([^/]+)\/sessions\/([^/]+)$/);
+    return match
+      ? `sessions/${match[1]}/${match[2]}`
+      : `sessions/${normalized.split("/").filter(Boolean).at(-1) ?? ""}`;
+  }),
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
 }));
@@ -717,17 +720,60 @@ describe("phase2 session delta listener", () => {
     expect(syncSessionsIndexDb).not.toHaveBeenCalled();
   });
 
-  it("accepts cross-agent transcript updates in visible visibility without current-agent filter", async () => {
+  it("accepts cross-agent transcript updates in visible visibility for a shared workspace", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { search: { enabled: true }, visibility: "visible" },
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
-    isSessionFileForAgent.mockResolvedValue(false);
-    isSessionFileForAnyKnownAgent.mockResolvedValue(true);
+    isSessionFileForAgent.mockResolvedValue(true);
     statFs.mockRejectedValue(new Error("ENOENT"));
     const { api, getTranscriptListener, runServiceStart } = buildApi();
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/work" },
+          { id: "other", workspace: "/tmp/work" },
+          { id: "qa", workspace: "/tmp/qa" },
+        ],
+      },
+    });
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const listener = getTranscriptListener();
+    listener?.({ sessionFile: "/tmp/agents/other/sessions/a.jsonl" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(isSessionFileForAgent).toHaveBeenCalledWith({
+      sessionFile: "/tmp/agents/other/sessions/a.jsonl",
+      agentId: "other",
+    });
+    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFiles: ["/tmp/agents/other/sessions/a.jsonl"],
+      }),
+    );
+  });
+
+  it("rejects cross-agent transcript updates from another workspace in visible visibility", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { search: { enabled: true }, visibility: "visible" },
+      identity: { externalId: "test" },
+    });
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/work" },
+          { id: "other", workspace: "/tmp/other" },
+        ],
+      },
+    });
     await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
@@ -735,11 +781,9 @@ describe("phase2 session delta listener", () => {
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(isSessionFileForAgent).not.toHaveBeenCalled();
-    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(1);
-    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFiles: ["/tmp/agents/other/sessions/a.jsonl"],
-      }),
+    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("outside current workspace scope"),
     );
   });
 
@@ -964,7 +1008,7 @@ describe("phase2 session delta listener", () => {
       identity: { externalId: "test" },
       workspaceDir: "/tmp/work",
     });
-    isSessionFileForAnyKnownAgent.mockResolvedValue(false);
+    isSessionFileForAgent.mockResolvedValue(false);
     const { api, getTranscriptListener, runServiceStart } = buildApi();
     await registerAndWaitStartup({ api, runServiceStart });
 

@@ -5,7 +5,6 @@ const {
   resolveScope,
   syncSessionsIndexDb,
   syncVisibleSessionsIndexDb,
-  listKnownAgentIds,
   filterSessionHitsByVisibility,
   canAccessSessionPathByVisibility,
   memorySearchDb,
@@ -15,7 +14,6 @@ const {
   resolveScope: vi.fn(),
   syncSessionsIndexDb: vi.fn(async () => undefined),
   syncVisibleSessionsIndexDb: vi.fn(async () => undefined),
-  listKnownAgentIds: vi.fn(async () => [] as string[]),
   filterSessionHitsByVisibility: vi.fn(async ({ hits }: { hits: unknown[] }) => hits),
   canAccessSessionPathByVisibility: vi.fn(async () => ({ allowed: true, reason: undefined as string | undefined })),
   memorySearchDb: vi.fn(async () => []),
@@ -43,7 +41,6 @@ vi.mock("./search.js", () => ({
 
 vi.mock("./sessions.js", () => ({
   memorySearchSessions: vi.fn(async () => []),
-  listKnownAgentIds,
 }));
 
 vi.mock("./sessions-index.js", () => ({
@@ -67,14 +64,19 @@ vi.mock("./sessions-visibility.js", () => ({
 
 import { createAnchorClawMemorySearchManager } from "./manager.js";
 
-function buildRuntime(workspaceDir = "/runtime/workspace") {
+function buildRuntime(
+  workspaceDir = "/runtime/workspace",
+  agents: Array<Record<string, unknown>> = [
+    { id: "main", default: true, workspace: workspaceDir },
+  ],
+) {
   return {
     sessionKey: "agent:main:main",
     workspaceDir: "/legacy-workspace",
     config: {
       current: () => ({
         agents: {
-          list: [{ id: "main", default: true, workspace: workspaceDir }],
+          list: agents,
         },
       }),
     },
@@ -90,12 +92,14 @@ beforeEach(() => {
 });
 
 describe("createAnchorClawMemorySearchManager.sync", () => {
-  it("in visible visibility syncs sessions for all known agents when sessionFiles are not provided", async () => {
-    listKnownAgentIds.mockResolvedValueOnce(["main", "other"]);
-
+  it("in visible visibility syncs only agents that share the resolved workspace", async () => {
     const manager = createAnchorClawMemorySearchManager({
       api: {
-        runtime: buildRuntime(),
+        runtime: buildRuntime("/runtime/shared", [
+          { id: "main", default: true, workspace: "/runtime/shared" },
+          { id: "ops", workspace: "/runtime/shared" },
+          { id: "qa", workspace: "/runtime/qa" },
+        ]),
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
@@ -116,10 +120,37 @@ describe("createAnchorClawMemorySearchManager.sync", () => {
         workspaceId: "w1",
         agentId: "main",
         force: true,
-        otherAgentIds: ["other"],
+        otherAgentIds: ["ops"],
       }),
     );
     expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+  });
+
+  it("does not fan visible sync out to agents from another workspace", async () => {
+    const manager = createAnchorClawMemorySearchManager({
+      api: {
+        runtime: buildRuntime("/runtime/main", [
+          { id: "main", default: true, workspace: "/runtime/main" },
+          { id: "ops", workspace: "/runtime/ops" },
+        ]),
+      } as any,
+      cfg: {
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        sessions: { search: { enabled: true }, visibility: "visible" },
+      } as any,
+      ensureReady: async () => undefined,
+      getPool: () => ({ query: vi.fn() }) as any,
+      agentId: "main",
+    });
+
+    await manager.sync?.();
+
+    expect(syncVisibleSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        otherAgentIds: [],
+      }),
+    );
   });
 });
 
