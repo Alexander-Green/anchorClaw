@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
-import { resolveDailyLogicalDate } from "../memory/daily.js";
+import { appendDailyBlockTx, resolveDailyLogicalDate } from "../memory/daily.js";
 import type { PostgresPool } from "../postgres.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 import {
@@ -282,115 +282,32 @@ async function appendSessionCaptureBlock(params: {
       };
     }
 
-    const existing = await client.query<{
-      id: string;
-      content: string;
-      updated_at: string;
-    }>(
-      `
-      SELECT id, content, updated_at
-      FROM memory_daily_entries
-      WHERE user_id = $1
-        AND workspace_id = $2
-        AND path = $3
-      LIMIT 1
-    `,
-      [params.userId, params.workspaceId, params.targetPath],
-    );
-
-    const before = existing.rows[0] ?? null;
-    const nextContent = before
-      ? `${before.content.replace(/\s*$/u, "")}\n\n${params.block}`
-      : params.block;
-    const nextSha = sha256Hex(nextContent);
-
-    const rowResult = await client.query<{ id: string; updated_at: string }>(
-      `
-      INSERT INTO memory_daily_entries (
-        user_id,
-        workspace_id,
-        logical_date,
-        path,
-        content,
-        content_sha256,
-        source_kind,
-        source_path,
-        metadata,
-        created_by
-      )
-      VALUES (
-        $1,
-        $2,
-        $3::date,
-        $4,
-        $5,
-        $6,
-        $7,
-        $8,
-        $9::jsonb,
-        $10
-      )
-      ON CONFLICT (user_id, workspace_id, path)
-      DO UPDATE SET
-        logical_date = EXCLUDED.logical_date,
-        content = EXCLUDED.content,
-        content_sha256 = EXCLUDED.content_sha256,
-        source_kind = EXCLUDED.source_kind,
-        source_path = EXCLUDED.source_path,
-        metadata = EXCLUDED.metadata,
-        updated_at = now()
-      RETURNING id, updated_at
-    `,
-      [
-        params.userId,
-        params.workspaceId,
-        params.logicalDate,
-        params.targetPath,
-        nextContent,
-        nextSha,
-        SESSION_CAPTURE_SOURCE_KIND,
-        params.relPath,
-        JSON.stringify({
-          ...params.metadata,
-          sessionCapture: true,
-          lastSessionCapturePath: params.relPath,
-          lastSessionCaptureSha256: params.contentSha256,
-        }),
-        params.actor,
-      ],
-    );
-    const row = rowResult.rows[0];
-    if (!row) {
-      throw new Error("failed to append session capture into memory_daily_entries");
-    }
-
-    await client.query(
-      `
-      INSERT INTO memory_audit_log (user_id, operation, before, after, actor, created_at)
-      VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, now())
-    `,
-      [
-        params.userId,
-        before ? "daily_session_capture_update" : "daily_session_capture_insert",
-        before ? JSON.stringify(before) : null,
-        JSON.stringify({
-          id: row.id,
-          path: params.targetPath,
-          logical_date: params.logicalDate,
-          source_kind: SESSION_CAPTURE_SOURCE_KIND,
-          source_path: params.relPath,
-          content_sha256: nextSha,
-        }),
-        params.actor,
-      ],
-    );
+    const stored = await appendDailyBlockTx({
+      client,
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      logicalDate: params.logicalDate,
+      path: params.targetPath,
+      content: params.block,
+      sourceKind: SESSION_CAPTURE_SOURCE_KIND,
+      sourcePath: params.relPath,
+      metadata: {
+        ...params.metadata,
+        sessionCapture: true,
+        sessionCapturePath: params.relPath,
+        sessionCaptureSha256: params.contentSha256,
+      },
+      actor: params.actor,
+      auditOperationInsert: "daily_session_capture_insert",
+      auditOperationUpdate: "daily_session_capture_update",
+    });
 
     await client.query("COMMIT");
     return {
       status: "captured",
       relPath: params.relPath,
       targetPath: params.targetPath,
-      dailyEntryId: row.id,
+      dailyEntryId: stored.id,
     };
   } catch (error) {
     try {

@@ -387,7 +387,7 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     expect(rename).toHaveBeenCalledTimes(1);
   });
 
-  it("reimports and archives a changed daily file when it reappears with a new sha", async () => {
+  it("does not let a changed legacy daily file replace an existing DB daily path", async () => {
     readFile.mockImplementation(async (targetPath: string) => {
       const normalizedPath = toPosixPath(targetPath);
       if (normalizedPath.endsWith("/MEMORY.md")) {
@@ -401,6 +401,17 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     readdir.mockResolvedValue([{ isFile: () => true, name: "2026-06-01.md" }] as any);
 
     const queryCalls: string[] = [];
+    const clientQuery = vi.fn(async (sql?: string) => {
+      const text = String(sql ?? "");
+      queryCalls.push(text);
+      if (text === "BEGIN" || text === "ROLLBACK") {
+        return { rows: [] };
+      }
+      if (text.includes("INSERT INTO memory_daily_entries")) {
+        return { rows: [] };
+      }
+      throw new Error(`unexpected client query: ${text}`);
+    });
     const pool = {
       query: vi.fn(async (sql?: string) => {
         const text = String(sql ?? "");
@@ -408,15 +419,12 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
         if (text.includes("FROM memory_import_files")) {
           return { rows: [] };
         }
-        if (text.includes("INSERT INTO memory_daily_entries")) {
-          return { rows: [{ id: "daily-row-1" }] };
-        }
-        if (text.includes("INSERT INTO memory_import_files")) {
-          return { rows: [{ id: "ledger-row-1" }] };
-        }
         return { rows: [] };
       }),
-      connect: vi.fn(),
+      connect: vi.fn(async () => ({
+        query: clientQuery,
+        release: vi.fn(),
+      })),
     } as any;
 
     const result = await runLegacyWorkspaceImport({
@@ -432,12 +440,12 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
       archiveImportedFiles: true,
     });
 
-    expect(result.dailyImportedCount).toBe(1);
+    expect(result.dailyImportedCount).toBe(0);
     expect(result.dailySkippedImportedCount).toBe(0);
-    expect(result.dailyArchivedCount).toBe(1);
+    expect(result.dailyArchivedCount).toBe(0);
     expect(queryCalls.some((sql) => sql.includes("INSERT INTO memory_daily_entries"))).toBe(true);
-    expect(queryCalls.some((sql) => sql.includes("INSERT INTO memory_import_files"))).toBe(true);
-    expect(rename).toHaveBeenCalledTimes(1);
+    expect(queryCalls.some((sql) => sql.includes("INSERT INTO memory_import_files"))).toBe(false);
+    expect(rename).not.toHaveBeenCalled();
   });
 
   it("keeps legacy scan alive when one daily file is unreadable", async () => {

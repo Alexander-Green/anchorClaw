@@ -104,8 +104,9 @@ What `--apply` does:
 - imports `MEMORY.md` into Postgres durable memory (`memory_items`);
 - backs up `MEMORY.md` to `.openclaw-repair/anchorclaw/`;
 - replaces `MEMORY.md` with an HTML-comment-only stub;
-- imports `memory/YYYY-MM-DD.md` files into DB daily entries
-  (`memory_daily_entries`);
+- imports `memory/YYYY-MM-DD.md` files into the DB daily projection
+  (`memory_daily_entries`) and immutable append ledger
+  (`memory_daily_blocks`);
 - archives imported daily files out of the active `memory/` directory into
   `.openclaw-repair/anchorclaw/legacy-daily/`.
 
@@ -255,9 +256,16 @@ index:
 transcript deltas trigger a targeted sessions reindex.
 
 `maintenance.enabled` starts the background maintenance scheduler. The
-maintenance extractor reads bounded DB daily windows and can promote durable
-candidates into `memory_items`; current setup writes the release-aligned
-`memory_log`-only lane by default.
+maintenance extractor reads stable, versioned windows from immutable
+`memory_log` daily blocks and can promote durable candidates into
+`memory_items`. `maintenance.extractor.maxCharsPerRun` controls how many stable
+windows fit into one LLM call; changing it does not make completed blocks
+pending again.
+
+Daily content is passed to the extractor as explicitly delimited untrusted
+data, separate from the system extraction policy. This is defence in depth
+against prompt injection; operators should still treat automatic promotion as
+an LLM-mediated path and keep normal database backups and audit review.
 
 `maintenance.dryRun=false` enables real durable promotion. `dryRun=true`
 reports heuristic candidate counts only and is useful as a conservative

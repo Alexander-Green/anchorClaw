@@ -578,7 +578,15 @@ async function detectUnsafeSchemaConflict(params: {
 SELECT table_name
 FROM information_schema.tables
 WHERE table_schema = $1
-AND table_name IN ('memory_items', 'session_index_files', 'session_index_chunks', 'schema_migrations')
+AND table_name IN (
+  'memory_items',
+  'memory_daily_entries',
+  'memory_daily_blocks',
+  'memory_daily_block_extraction_windows',
+  'session_index_files',
+  'session_index_chunks',
+  'schema_migrations'
+)
 `,
     [params.schema],
   );

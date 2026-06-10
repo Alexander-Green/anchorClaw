@@ -82,8 +82,9 @@ AnchorClaw starts lower in the stack:
 - **Deterministic upserts** through stable canonical keys instead of "maybe this
   duplicate is close enough."
 - **Full-text search out of the box** with no embeddings required for the MVP.
-- **DB-owned daily memory** for current context, session captures, and
-  day-specific notes.
+- **DB-owned daily memory** with immutable append blocks for provenance and a
+  canonical daily view for current context, session captures, and day-specific
+  notes.
 - **A safe legacy import path** that moves old `MEMORY.md` and `memory/*.md`
   content into Postgres without keeping duplicate active runtime files.
 - **Multi-agent workspace routing**: runtime operations follow the active agent,
@@ -123,9 +124,10 @@ AnchorClaw compatibility layer
         |
         v
 PostgreSQL source of truth
-  - memory_items           durable facts and notes
-  - memory_daily_entries   daily/current context
-  - session_index_*        optional sessions search
+  - memory_items          durable facts and notes
+  - memory_daily_entries  canonical daily/current views
+  - memory_daily_blocks   immutable daily append ledger
+  - session_index_*       optional sessions search
 ```
 
 `MEMORY.md` becomes a virtual DB-backed snapshot. `memory/YYYY-MM-DD.md` becomes
@@ -205,16 +207,17 @@ non-interactive setup, see [INSTALL.md](./INSTALL.md).
 AnchorClaw currently targets a Track A core runtime release:
 
 - durable memory is DB-backed through `memory_items`;
-- daily memory is DB-owned through `memory_daily_entries`;
+- daily memory is written as immutable `memory_daily_blocks` and projected into
+  DB-owned `memory_daily_entries` compatibility views;
 - daily startup injection runs on first-turn/new-session paths;
 - `MEMORY.md` and daily memory paths are DB-backed compatibility views;
 - legacy import/backfill is an explicit operator CLI;
 - sessions search is available as an explicit opt-in;
-- maintenance/extractor promotion runs from DB daily windows when enabled; the
-  release lane is now validated for `memory_log`-only promotion, while further
-  tuning focuses on precision rather than basic viability;
-  release/default promotion is based on fresh `memory_log` daily windows, while
-  imported legacy daily files remain archive/search/read compatibility data.
+- maintenance/extractor promotion runs from stable, versioned
+  `memory_log` block windows when enabled; imported legacy daily files remain
+  archive/search/read compatibility data;
+- extractor instructions are separated from quoted untrusted daily content to
+  reduce prompt-injection risk before candidates reach the durable write gate.
 
 The important release boundary: the durable and daily runtime path is the core
 supported value. The maintenance/extractor path is a foundation for automatic

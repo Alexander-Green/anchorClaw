@@ -67,7 +67,21 @@ describe("session capture", () => {
         return { rows: [] };
       }
       if (text.includes("INSERT INTO memory_daily_entries")) {
-        return { rows: [{ id: "daily-1", updated_at: "2026-06-02T10:12:00.000Z" }] };
+        return {
+          rows: [{
+            id: "daily-1",
+            content: "capture",
+            content_sha256: "daily-sha",
+            source_kind: "session_memory",
+            updated_at: "2026-06-02T10:12:00.000Z",
+          }],
+        };
+      }
+      if (text.includes("max(block_index)")) {
+        return { rows: [{ block_index: 0 }] };
+      }
+      if (text.includes("INSERT INTO memory_daily_blocks")) {
+        return { rows: [{ id: "block-1" }] };
       }
       if (text.includes("INSERT INTO memory_audit_log")) {
         return { rows: [] };
@@ -161,7 +175,21 @@ describe("session capture", () => {
         if (Array.isArray(args)) {
           capturedDailyArgs.push(args);
         }
-        return { rows: [{ id: "daily-1", updated_at: "2026-06-02T10:12:00.000Z" }] };
+        return {
+          rows: [{
+            id: "daily-1",
+            content: String(args?.[4] ?? ""),
+            content_sha256: "daily-sha",
+            source_kind: "session_memory",
+            updated_at: "2026-06-02T10:12:00.000Z",
+          }],
+        };
+      }
+      if (text.includes("max(block_index)")) {
+        return { rows: [{ block_index: 0 }] };
+      }
+      if (text.includes("INSERT INTO memory_daily_blocks")) {
+        return { rows: [{ id: "block-1" }] };
       }
       if (text.includes("INSERT INTO memory_audit_log")) {
         return { rows: [] };

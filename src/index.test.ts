@@ -1269,6 +1269,9 @@ describe("phase2 session delta listener", () => {
               {
                 memory_items: "memory_items",
                 memory_daily_entries: "memory_daily_entries",
+                memory_daily_blocks: "memory_daily_blocks",
+                memory_daily_block_extraction_windows:
+                  "memory_daily_block_extraction_windows",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
@@ -1335,6 +1338,9 @@ describe("phase2 session delta listener", () => {
               {
                 memory_items: "memory_items",
                 memory_daily_entries: "memory_daily_entries",
+                memory_daily_blocks: "memory_daily_blocks",
+                memory_daily_block_extraction_windows:
+                  "memory_daily_block_extraction_windows",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
@@ -1406,6 +1412,9 @@ describe("phase2 session delta listener", () => {
               {
                 memory_items: "memory_items",
                 memory_daily_entries: "memory_daily_entries",
+                memory_daily_blocks: "memory_daily_blocks",
+                memory_daily_block_extraction_windows:
+                  "memory_daily_block_extraction_windows",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",

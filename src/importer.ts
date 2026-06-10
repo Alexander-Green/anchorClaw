@@ -13,7 +13,7 @@ import {
 } from "./constants.js";
 import { isTransientDbError } from "./db-errors.js";
 import { resolveUserAndWorkspaceScope } from "./identity.js";
-import { parseLogicalDateFromDailyPath } from "./memory/daily.js";
+import { appendDailyBlockTx, parseLogicalDateFromDailyPath } from "./memory/daily.js";
 import type { PostgresPool } from "./postgres.js";
 import type { DurableCleanupState, DurableImportState, DurableOverallState, LegacyFileState } from "./plugin/types.js";
 
@@ -789,22 +789,6 @@ async function hasImportRecord(params: {
   return Boolean(existing.rows[0]?.id);
 }
 
-async function removeImportRecord(params: {
-  pool: PostgresPool;
-  userId: string;
-  workspaceId: string;
-  relPath: string;
-  sha256: string;
-}): Promise<void> {
-  await params.pool.query(
-    `
-    DELETE FROM memory_import_files
-    WHERE user_id = $1 AND workspace_id = $2 AND rel_path = $3 AND sha256 = $4
-  `,
-    [params.userId, params.workspaceId, params.relPath, params.sha256],
-  );
-}
-
 async function importDailyMemory(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
@@ -882,57 +866,58 @@ async function importDailyMemory(params: {
         continue;
       }
       if (!alreadyImported) {
-        const inserted = await params.pool.query<{ id: string }>(
-          `
-          INSERT INTO memory_daily_entries (
-            user_id,
-            workspace_id,
-            logical_date,
-            path,
-            content,
-            content_sha256,
-            source_kind,
-            source_path,
-            metadata,
-            created_by
-          )
-          VALUES ($1, $2, $3::date, $4, $5, $6, 'legacy_import', $7, $8::jsonb, $9)
-          ON CONFLICT (user_id, workspace_id, path)
-          DO UPDATE SET
-            logical_date = EXCLUDED.logical_date,
-            content = EXCLUDED.content,
-            content_sha256 = EXCLUDED.content_sha256,
-            source_kind = EXCLUDED.source_kind,
-            source_path = EXCLUDED.source_path,
-            metadata = EXCLUDED.metadata,
-            updated_at = now(),
-            created_by = EXCLUDED.created_by
-          RETURNING id
-        `,
-          [
-            scope.userId,
-            scope.workspaceId,
+        const client = await params.pool.connect();
+        try {
+          await client.query("BEGIN");
+          await appendDailyBlockTx({
+            client,
+            userId: scope.userId,
+            workspaceId: scope.workspaceId,
             logicalDate,
-            relPath,
+            path: relPath,
             content,
-            digest,
-            absPath,
-            JSON.stringify({ legacy_file: relPath, legacy_sha256: digest, absolute_path: absPath }),
-            "anchorclaw-import",
-          ],
-        );
-        if (!inserted.rows[0]?.id) {
-          throw new Error(`failed to import ${relPath} into memory_daily_entries`);
+            sourceKind: "legacy_import",
+            sourcePath: absPath,
+            metadata: {
+              legacy_file: relPath,
+              legacy_sha256: digest,
+              absolute_path: absPath,
+            },
+            actor: "anchorclaw-import",
+            conflictPolicy: "reject",
+            auditOperationInsert: "daily_legacy_import",
+          });
+          const recorded = await client.query<{ id: string }>(
+            `
+            INSERT INTO memory_import_files (
+              user_id, workspace_id, rel_path, sha256, source_type, metadata
+            )
+            VALUES ($1, $2, $3, $4, 'daily-memory', $5::jsonb)
+            ON CONFLICT (user_id, workspace_id, rel_path, sha256) DO NOTHING
+            RETURNING id
+            `,
+            [
+              scope.userId,
+              scope.workspaceId,
+              relPath,
+              digest,
+              JSON.stringify({ legacy_file: relPath, absolute_path: absPath }),
+            ],
+          );
+          if (!recorded.rows[0]?.id) {
+            throw new Error(`failed to record daily import ${relPath}`);
+          }
+          await client.query("COMMIT");
+        } catch (error) {
+          try {
+            await client.query("ROLLBACK");
+          } catch {
+            // Best-effort rollback; preserve the original import error.
+          }
+          throw error;
+        } finally {
+          client.release();
         }
-        await ensureImportRecorded({
-          pool: params.pool,
-          userId: scope.userId,
-          workspaceId: scope.workspaceId,
-          relPath,
-          sha256: digest,
-          sourceType: "daily-memory",
-          metadata: { legacy_file: relPath, absolute_path: absPath },
-        });
         importedCount += 1;
       } else {
         skippedImportedCount += 1;
@@ -949,15 +934,6 @@ async function importDailyMemory(params: {
         params.api.logger.info(`anchorclaw: archived legacy daily file ${relPath} -> ${archiveRelPath}`);
       }
     } catch (error) {
-      if (!alreadyImported) {
-        await removeImportRecord({
-          pool: params.pool,
-          userId: scope.userId,
-          workspaceId: scope.workspaceId,
-          relPath,
-          sha256: digest,
-        });
-      }
       params.api.logger.warn(
         `anchorclaw: failed to import ${relPath} into memory_daily_entries (${error instanceof Error ? error.message : String(error)})`,
       );

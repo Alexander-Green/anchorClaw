@@ -5,7 +5,7 @@ import type { Dirent } from "node:fs";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import type { PostgresPool } from "../postgres.js";
-import { resolveDailyLogicalDate } from "../memory/daily.js";
+import { appendDailyBlockTx, resolveDailyLogicalDate } from "../memory/daily.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 import {
   resolveRuntimeWorkspaceTarget,
@@ -40,45 +40,6 @@ function formatFlushInboxBlock(params: { content: string; relPath: string; impor
   ].join("\n");
 }
 
-async function recordFlushInboxImport(params: {
-  pool: PostgresPool;
-  userId: string;
-  workspaceId: string;
-  relPath: string;
-  sha256: string;
-  metadata: Record<string, unknown>;
-}): Promise<boolean> {
-  const existing = await params.pool.query<{ id: string }>(
-    `
-    SELECT id
-    FROM memory_import_files
-    WHERE user_id = $1 AND workspace_id = $2 AND rel_path = $3 AND sha256 = $4
-    LIMIT 1
-  `,
-    [params.userId, params.workspaceId, params.relPath, params.sha256],
-  );
-  if (existing.rows[0]?.id) {
-    return false;
-  }
-  const inserted = await params.pool.query<{ id: string }>(
-    `
-    INSERT INTO memory_import_files (user_id, workspace_id, rel_path, sha256, source_type, metadata)
-    VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-    ON CONFLICT (user_id, workspace_id, rel_path, sha256) DO NOTHING
-    RETURNING id
-  `,
-    [
-      params.userId,
-      params.workspaceId,
-      params.relPath,
-      params.sha256,
-      FLUSH_INBOX_SOURCE_TYPE,
-      JSON.stringify(params.metadata),
-    ],
-  );
-  return inserted.rows.length > 0;
-}
-
 async function importFlushInboxFile(params: {
   pool: PostgresPool;
   userId: string;
@@ -91,131 +52,60 @@ async function importFlushInboxFile(params: {
   importedAtIso: string;
 }): Promise<"imported" | "already_imported"> {
   const digest = sha256Hex(params.content);
-  const importRecorded = await recordFlushInboxImport({
-    pool: params.pool,
-    userId: params.userId,
-    workspaceId: params.workspaceId,
-    relPath: params.relPath,
-    sha256: digest,
-    metadata: {
-      source_kind: "compaction_flush",
-      logical_date: params.logicalDate,
-      absolute_path: params.absPath,
-      target_path: `memory/${params.logicalDate}.md`,
-    },
-  });
-  if (!importRecorded) {
-    return "already_imported";
-  }
-
   const targetPath = `memory/${params.logicalDate}.md`;
   const client = await params.pool.connect();
   try {
     await client.query("BEGIN");
-    const existing = await client.query<{
-      id: string;
-      content: string;
-      updated_at: string;
-    }>(
+    const insertedLedger = await client.query<{ id: string }>(
       `
-      SELECT id, content, updated_at
-      FROM memory_daily_entries
-      WHERE user_id = $1
-        AND workspace_id = $2
-        AND path = $3
-      LIMIT 1
-    `,
-      [params.userId, params.workspaceId, targetPath],
+      INSERT INTO memory_import_files (user_id, workspace_id, rel_path, sha256, source_type, metadata)
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+      ON CONFLICT (user_id, workspace_id, rel_path, sha256) DO NOTHING
+      RETURNING id
+      `,
+      [
+        params.userId,
+        params.workspaceId,
+        params.relPath,
+        digest,
+        FLUSH_INBOX_SOURCE_TYPE,
+        JSON.stringify({
+          source_kind: "compaction_flush",
+          logical_date: params.logicalDate,
+          absolute_path: params.absPath,
+          target_path: targetPath,
+        }),
+      ],
     );
+    if (!insertedLedger.rows[0]?.id) {
+      await client.query("COMMIT");
+      return "already_imported";
+    }
 
-    const before = existing.rows[0] ?? null;
     const block = formatFlushInboxBlock({
       content: params.content,
       relPath: params.relPath,
       importedAtIso: params.importedAtIso,
     });
-    const nextContent = before ? `${before.content.replace(/\s*$/u, "")}\n\n${block}` : block;
-    const nextSha = sha256Hex(nextContent);
-    const rowResult = await client.query<{ id: string; updated_at: string }>(
-      `
-      INSERT INTO memory_daily_entries (
-        user_id,
-        workspace_id,
-        logical_date,
-        path,
-        content,
-        content_sha256,
-        source_kind,
-        source_path,
-        metadata,
-        created_by
-      )
-      VALUES (
-        $1,
-        $2,
-        $3::date,
-        $4,
-        $5,
-        $6,
-        $7,
-        $8,
-        $9::jsonb,
-        $10
-      )
-      ON CONFLICT (user_id, workspace_id, path)
-      DO UPDATE SET
-        logical_date = EXCLUDED.logical_date,
-        content = EXCLUDED.content,
-        content_sha256 = EXCLUDED.content_sha256,
-        source_kind = EXCLUDED.source_kind,
-        source_path = EXCLUDED.source_path,
-        metadata = EXCLUDED.metadata,
-        updated_at = now()
-      RETURNING id, updated_at
-    `,
-      [
-        params.userId,
-        params.workspaceId,
-        params.logicalDate,
-        targetPath,
-        nextContent,
-        nextSha,
-        "compaction_flush",
-        params.relPath,
-        JSON.stringify({
-          flushInbox: true,
-          lastFlushInboxPath: params.relPath,
-          lastFlushInboxSha256: digest,
-          importedAt: params.importedAtIso,
-        }),
-        params.actor,
-      ],
-    );
-    const row = rowResult.rows[0];
-    if (!row) {
-      throw new Error("failed to append compaction flush into memory_daily_entries");
-    }
-
-    await client.query(
-      `
-      INSERT INTO memory_audit_log (user_id, operation, before, after, actor, created_at)
-      VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, now())
-    `,
-      [
-        params.userId,
-        before ? "daily_flush_update" : "daily_flush_insert",
-        before ? JSON.stringify(before) : null,
-        JSON.stringify({
-          id: row.id,
-          path: targetPath,
-          logical_date: params.logicalDate,
-          source_kind: "compaction_flush",
-          source_path: params.relPath,
-          content_sha256: nextSha,
-        }),
-        params.actor,
-      ],
-    );
+    await appendDailyBlockTx({
+      client,
+      userId: params.userId,
+      workspaceId: params.workspaceId,
+      logicalDate: params.logicalDate,
+      path: targetPath,
+      content: block,
+      sourceKind: "compaction_flush",
+      sourcePath: params.relPath,
+      metadata: {
+        flushInbox: true,
+        flushInboxPath: params.relPath,
+        flushInboxSha256: digest,
+        importedAt: params.importedAtIso,
+      },
+      actor: params.actor,
+      auditOperationInsert: "daily_flush_insert",
+      auditOperationUpdate: "daily_flush_update",
+    });
     await client.query("COMMIT");
     return "imported";
   } catch (error) {
@@ -224,13 +114,6 @@ async function importFlushInboxFile(params: {
     } catch {
       // Best-effort rollback; the original error below is more actionable.
     }
-    await params.pool.query(
-      `
-      DELETE FROM memory_import_files
-      WHERE user_id = $1 AND workspace_id = $2 AND rel_path = $3 AND sha256 = $4
-    `,
-      [params.userId, params.workspaceId, params.relPath, digest],
-    );
     throw error;
   } finally {
     client.release();

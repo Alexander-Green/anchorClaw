@@ -14,6 +14,44 @@ describe("applyMigrations", () => {
     expect(sql).not.toContain("concat_ws(");
   });
 
+  it("adds immutable daily blocks and block extraction receipts", () => {
+    const sql = readFileSync(new URL("../migrations/0010_daily_blocks.sql", import.meta.url), "utf8");
+
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS memory_daily_blocks");
+    expect(sql).toContain("UNIQUE (daily_entry_id, block_index)");
+    expect(sql).toContain("memory_daily_blocks rows are immutable");
+    expect(sql).toContain("BEFORE UPDATE ON memory_daily_blocks");
+    expect(sql).toContain("'migrationSnapshot'");
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS memory_daily_block_extraction_windows");
+    expect(sql).toContain("pipeline_version INTEGER NOT NULL");
+    expect(sql).toContain("CHECK (char_start >= 0 AND char_end > char_start)");
+    expect(sql).toContain("anchorclaw_migration_0010_normalize_daily_content");
+    expect(sql).toContain("anchorclaw_migration_0010_utf16_slice");
+    expect(sql).toContain("FROM memory_daily_extraction_windows receipt");
+    expect(sql).toContain("DROP TABLE memory_daily_extraction_windows");
+    expect(sql).toContain(
+      "DROP FUNCTION anchorclaw_migration_0010_utf16_slice(TEXT, INTEGER, INTEGER)",
+    );
+    expect(sql.indexOf("INSERT INTO memory_daily_block_extraction_windows")).toBeLessThan(
+      sql.indexOf("DROP TABLE memory_daily_extraction_windows"),
+    );
+    expect(sql.indexOf("DROP TABLE memory_daily_extraction_windows")).toBeLessThan(
+      sql.indexOf("DROP FUNCTION anchorclaw_migration_0010_utf16_slice"),
+    );
+  });
+
+  it("keeps the pre-block receipt table migration-only", () => {
+    const runtimeSources = [
+      new URL("./maintenance/job.ts", import.meta.url),
+      new URL("./plugin/tools/memory-status.ts", import.meta.url),
+      new URL("./scripts/setup-db.ts", import.meta.url),
+    ];
+
+    for (const source of runtimeSources) {
+      expect(readFileSync(source, "utf8")).not.toContain("memory_daily_extraction_windows");
+    }
+  });
+
   it("runs each migration inside a dedicated client transaction", async () => {
     const clientCalls: Array<{ sql: string; args: unknown[] }> = [];
     const client = {

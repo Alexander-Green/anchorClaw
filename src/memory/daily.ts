@@ -1,6 +1,7 @@
 import type { PostgresPool } from "../postgres.js";
 import type { MemorySearchHit } from "./search.js";
 import { createHash } from "node:crypto";
+import type { PoolClient } from "pg";
 
 export type MemoryDailyEntry = {
   id: string;
@@ -20,6 +21,7 @@ export type MemoryLogResult =
       ok: true;
       corpus: "daily";
       id: string;
+      blockId: string;
       path: string;
       logicalDate: string;
       updatedAt: string;
@@ -77,6 +79,260 @@ function mapDailyEntryRow(row: DailyEntryRow): MemoryDailyEntry {
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+type DailyWriteClient = Pick<PoolClient, "query">;
+
+type DailyBlockWriteParams = {
+  client: DailyWriteClient;
+  userId: string;
+  workspaceId: string;
+  logicalDate: string;
+  path: string;
+  content: string;
+  sourceKind: string;
+  sourcePath?: string | null;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+  conflictPolicy?: "append" | "reject";
+  auditOperationInsert?: string;
+  auditOperationUpdate?: string;
+};
+
+export async function appendDailyBlockTx(
+  params: DailyBlockWriteParams,
+): Promise<Extract<MemoryLogResult, { ok: true }>> {
+  if (!params.content.trim()) {
+    throw new Error("content is required");
+  }
+
+  const contentSha256 = sha256Hex(params.content);
+  const insertedEntry = await params.client.query<{
+    id: string;
+    content: string;
+    content_sha256: string;
+    source_kind: string;
+    updated_at: string;
+  }>(
+    `
+    INSERT INTO memory_daily_entries (
+      user_id,
+      workspace_id,
+      logical_date,
+      path,
+      content,
+      content_sha256,
+      source_kind,
+      source_path,
+      metadata,
+      created_by
+    )
+    VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9::jsonb, $10)
+    ON CONFLICT (user_id, workspace_id, path) DO NOTHING
+    RETURNING id, content, content_sha256, source_kind, updated_at
+    `,
+    [
+      params.userId,
+      params.workspaceId,
+      params.logicalDate,
+      params.path,
+      params.content,
+      contentSha256,
+      params.sourceKind,
+      params.sourcePath ?? null,
+      JSON.stringify(params.metadata ?? {}),
+      params.actor ?? "anchorclaw",
+    ],
+  );
+
+  let entry = insertedEntry.rows[0] ?? null;
+  const created = Boolean(entry);
+  if (!entry) {
+    if ((params.conflictPolicy ?? "append") === "reject") {
+      throw new Error(`daily path already exists: ${params.path}`);
+    }
+    const locked = await params.client.query<{
+      id: string;
+      content: string;
+      content_sha256: string;
+      source_kind: string;
+      updated_at: string;
+    }>(
+      `
+      SELECT id, content, content_sha256, source_kind, updated_at
+      FROM memory_daily_entries
+      WHERE user_id = $1
+        AND workspace_id = $2
+        AND path = $3
+      FOR UPDATE
+      `,
+      [params.userId, params.workspaceId, params.path],
+    );
+    entry = locked.rows[0] ?? null;
+    if (!entry) {
+      throw new Error(`daily path disappeared during append: ${params.path}`);
+    }
+  }
+
+  const blockIndexResult = await params.client.query<{ block_index: string | number }>(
+    `
+    SELECT coalesce(max(block_index), -1) + 1 AS block_index
+    FROM memory_daily_blocks
+    WHERE daily_entry_id = $1
+    `,
+    [entry.id],
+  );
+  const blockIndex = Number(blockIndexResult.rows[0]?.block_index ?? 0);
+  const insertedBlock = await params.client.query<{ id: string }>(
+    `
+    INSERT INTO memory_daily_blocks (
+      user_id,
+      workspace_id,
+      daily_entry_id,
+      block_index,
+      logical_date,
+      daily_path,
+      content,
+      content_sha256,
+      source_kind,
+      source_path,
+      metadata,
+      created_by
+    )
+    VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10, $11::jsonb, $12)
+    RETURNING id
+    `,
+    [
+      params.userId,
+      params.workspaceId,
+      entry.id,
+      blockIndex,
+      params.logicalDate,
+      params.path,
+      params.content,
+      contentSha256,
+      params.sourceKind,
+      params.sourcePath ?? null,
+      JSON.stringify(params.metadata ?? {}),
+      params.actor ?? "anchorclaw",
+    ],
+  );
+  const blockId = insertedBlock.rows[0]?.id;
+  if (!blockId) {
+    throw new Error("failed to append daily memory block");
+  }
+
+  let updatedAt = entry.updated_at;
+  let nextContent = entry.content;
+  let nextContentSha256 = entry.content_sha256;
+  let projectionSourceKind = entry.source_kind;
+  if (!created) {
+    nextContent = `${entry.content.replace(/\s*$/u, "")}\n\n${params.content}`;
+    nextContentSha256 = sha256Hex(nextContent);
+    projectionSourceKind =
+      entry.source_kind === params.sourceKind ? params.sourceKind : "mixed";
+    const updated = await params.client.query<{ updated_at: string }>(
+      `
+      UPDATE memory_daily_entries
+      SET
+        logical_date = $2::date,
+        content = $3,
+        content_sha256 = $4,
+        source_kind = $5,
+        source_path = $6,
+        metadata = $7::jsonb,
+        updated_at = now()
+      WHERE id = $1
+      RETURNING updated_at
+      `,
+      [
+        entry.id,
+        params.logicalDate,
+        nextContent,
+        nextContentSha256,
+        projectionSourceKind,
+        projectionSourceKind === "mixed" ? null : params.sourcePath ?? null,
+        JSON.stringify({
+          projection: true,
+          lastBlockId: blockId,
+          lastBlockIndex: blockIndex,
+          lastSourceKind: params.sourceKind,
+          lastSourcePath: params.sourcePath ?? null,
+        }),
+      ],
+    );
+    updatedAt = updated.rows[0]?.updated_at ?? updatedAt;
+  }
+
+  await params.client.query(
+    `
+    INSERT INTO memory_audit_log (user_id, operation, before, after, actor, created_at)
+    VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, now())
+    `,
+    [
+      params.userId,
+      created
+        ? params.auditOperationInsert ?? "daily_block_insert"
+        : params.auditOperationUpdate ?? "daily_block_append",
+      created
+        ? null
+        : JSON.stringify({
+            id: entry.id,
+            content_sha256: entry.content_sha256,
+            source_kind: entry.source_kind,
+            updated_at: entry.updated_at,
+          }),
+      JSON.stringify({
+        id: entry.id,
+        block_id: blockId,
+        block_index: blockIndex,
+        path: params.path,
+        logical_date: params.logicalDate,
+        source_kind: projectionSourceKind,
+        appended_source_kind: params.sourceKind,
+        source_path: params.sourcePath ?? null,
+        content_sha256: nextContentSha256,
+      }),
+      params.actor ?? "anchorclaw",
+    ],
+  );
+
+  return {
+    ok: true,
+    corpus: "daily",
+    id: entry.id,
+    blockId,
+    path: params.path,
+    logicalDate: params.logicalDate,
+    updatedAt,
+    created,
+  };
+}
+
+export async function appendDailyBlockDb(
+  params: Omit<DailyBlockWriteParams, "client"> & {
+    pool: PostgresPool;
+    logger?: { warn(message: string): void };
+  },
+): Promise<MemoryLogResult> {
+  const client = await params.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await appendDailyBlockTx({ ...params, client });
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      params.logger?.warn(
+        `anchorclaw: daily block rollback failed (${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)})`,
+      );
+    }
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    client.release();
+  }
 }
 
 function formatDateInTimezone(nowMs: number, timezone?: string): string {
@@ -397,131 +653,19 @@ export async function appendDailyEntryDb(params: {
   }
 
   const path = `memory/${params.logicalDate}.md`;
-  const client = await params.pool.connect();
-  try {
-    await client.query("BEGIN");
-    const existing = await client.query<{
-      id: string;
-      content: string;
-      updated_at: string;
-    }>(
-      `
-      SELECT id, content, updated_at
-      FROM memory_daily_entries
-      WHERE user_id = $1
-        AND workspace_id = $2
-        AND path = $3
-      LIMIT 1
-    `,
-      [params.userId, params.workspaceId, path],
-    );
-
-    const before = existing.rows[0] ?? null;
-    const nextContent = before
-      ? `${before.content.replace(/\s*$/u, "")}\n\n${trimmed}`
-      : trimmed;
-    const nextSha = sha256Hex(nextContent);
-    const rowResult = await client.query<{
-      id: string;
-      updated_at: string;
-    }>(
-      `
-      INSERT INTO memory_daily_entries (
-        user_id,
-        workspace_id,
-        logical_date,
-        path,
-        content,
-        content_sha256,
-        source_kind,
-        source_path,
-        metadata,
-        created_by
-      )
-      VALUES (
-        $1,
-        $2,
-        $3::date,
-        $4,
-        $5,
-        $6,
-        $7,
-        $8,
-        $9::jsonb,
-        $10
-      )
-      ON CONFLICT (user_id, workspace_id, path)
-      DO UPDATE SET
-        logical_date = EXCLUDED.logical_date,
-        content = EXCLUDED.content,
-        content_sha256 = EXCLUDED.content_sha256,
-        source_kind = EXCLUDED.source_kind,
-        source_path = EXCLUDED.source_path,
-        metadata = EXCLUDED.metadata,
-        updated_at = now()
-      RETURNING id, updated_at
-    `,
-      [
-        params.userId,
-        params.workspaceId,
-        params.logicalDate,
-        path,
-        nextContent,
-        nextSha,
-        params.sourceKind ?? "memory_log",
-        params.sourcePath ?? null,
-        JSON.stringify(params.metadata ?? {}),
-        params.actor ?? "anchorclaw",
-      ],
-    );
-
-    const row = rowResult.rows[0];
-    if (!row) {
-      throw new Error("failed to append daily memory entry");
-    }
-
-    await client.query(
-      `
-      INSERT INTO memory_audit_log (user_id, operation, before, after, actor, created_at)
-      VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, now())
-    `,
-      [
-        params.userId,
-        before ? "daily_append_update" : "daily_append_insert",
-        before ? JSON.stringify(before) : null,
-        JSON.stringify({
-          id: row.id,
-          path,
-          logical_date: params.logicalDate,
-          source_kind: params.sourceKind ?? "memory_log",
-          source_path: params.sourcePath ?? null,
-          metadata: params.metadata ?? {},
-          content_sha256: nextSha,
-        }),
-        params.actor ?? "anchorclaw",
-      ],
-    );
-
-    await client.query("COMMIT");
-    return {
-      ok: true,
-      corpus: "daily",
-      id: row.id,
-      path,
-      logicalDate: params.logicalDate,
-      updatedAt: row.updated_at,
-      created: !before,
-    };
-  } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (rollbackError) {
-      params.logger?.warn(
-        `anchorclaw: memory_log rollback failed (${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)})`,
-      );
-    }
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  } finally {
-    client.release();
-  }
+  return appendDailyBlockDb({
+    pool: params.pool,
+    userId: params.userId,
+    workspaceId: params.workspaceId,
+    logicalDate: params.logicalDate,
+    path,
+    content: trimmed,
+    sourceKind: params.sourceKind ?? "memory_log",
+    sourcePath: params.sourcePath,
+    metadata: params.metadata,
+    actor: params.actor,
+    logger: params.logger,
+    auditOperationInsert: "daily_append_insert",
+    auditOperationUpdate: "daily_append_update",
+  });
 }

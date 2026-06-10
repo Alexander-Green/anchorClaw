@@ -36,23 +36,21 @@ function buildCfg() {
   } as any;
 }
 
-function buildDailyRow(params: {
+function buildBlockRow(params: {
   id?: string;
+  blockIndex?: number;
   path?: string;
   logicalDate?: string;
-  contentSha?: string;
-  updatedAt?: string;
   sourceKind?: string;
   content: string;
 }) {
   return {
     id: params.id ?? "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-    path: params.path ?? "memory/2026-05-20.md",
+    block_index: params.blockIndex ?? 0,
+    daily_path: params.path ?? "memory/2026-05-20.md",
     logical_date: params.logicalDate ?? "2026-05-20",
     content: params.content,
-    content_sha256: params.contentSha ?? "sha-1",
     source_kind: params.sourceKind ?? "memory_log",
-    updated_at: params.updatedAt ?? "2026-05-20T00:00:00.000Z",
   };
 }
 
@@ -75,17 +73,17 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-1" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 content: "remember this project rule for future work and stable decisions",
               }),
             ],
             rowCount: 1,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 0 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
@@ -108,7 +106,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(result.scannedCount).toBe(1);
     expect(result.insertedCount).toBe(0);
     expect(extractMaintenanceCandidates).not.toHaveBeenCalled();
-    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(false);
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_block_extraction_windows"))).toBe(false);
   });
 
   it("does not mark processed windows when extractor is disabled", async () => {
@@ -119,17 +117,17 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-2" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 content: "remember this preference for future tasks and repeated work",
               }),
             ],
             rowCount: 1,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 0 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
@@ -153,7 +151,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(result.status).toBe("completed");
     expect(result.insertedCount).toBe(0);
     expect(extractMaintenanceCandidates).not.toHaveBeenCalled();
-    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(false);
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_block_extraction_windows"))).toBe(false);
   });
 
   it("extracts, stores, and marks processed daily windows", async () => {
@@ -185,23 +183,23 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-3" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 content: "Please remember that the favorite color for UI accents is green.",
               }),
             ],
             rowCount: 1,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 0 };
         }
         if (sql.includes("FROM memory_items")) {
           return { rows: [], rowCount: 0 };
         }
-        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+        if (sql.includes("INSERT INTO memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 1 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
@@ -223,9 +221,11 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(result.status).toBe("completed");
     expect(result.insertedCount).toBe(1);
     expect(extractMaintenanceCandidates).toHaveBeenCalledTimes(1);
-    expect(extractMaintenanceCandidates.mock.calls[0]?.[0]?.sourcePath).toBe("memory/2026-05-20.md#window=1");
+    expect(extractMaintenanceCandidates.mock.calls[0]?.[0]?.sourcePath).toBe(
+      "memory/2026-05-20.md#block=1&window=1",
+    );
     expect(memoryStoreDb).toHaveBeenCalledTimes(1);
-    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(true);
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_block_extraction_windows"))).toBe(true);
     expect(
       queries.some((sql) => sql.includes("regexp_replace(content, '\\s+', ' ', 'g')")),
     ).toBe(true);
@@ -244,10 +244,10 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-policy" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 id: "22222222-2222-2222-2222-222222222222",
                 path: "memory/2026-06-02.md",
                 sourceKind: "memory_log",
@@ -257,10 +257,10 @@ describe("runMaintenanceCycle daily maintenance", () => {
             rowCount: 2,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 0 };
         }
-        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+        if (sql.includes("INSERT INTO memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 2 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
@@ -280,7 +280,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
     });
 
     expect(result.status).toBe("completed");
-    const dailyQuery = queryCalls.find((call) => call.sql.includes("FROM memory_daily_entries"));
+    const dailyQuery = queryCalls.find((call) => call.sql.includes("FROM memory_daily_blocks"));
     expect(dailyQuery?.values?.[2]).toEqual(["memory_log"]);
     expect(extractMaintenanceCandidates).toHaveBeenCalledTimes(1);
     expect(extractMaintenanceCandidates.mock.calls[0]?.[0]?.transcript).toContain("current daily preference");
@@ -310,23 +310,23 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-confidence" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 content: "remember this durable project rule for future work and stable decisions",
               }),
             ],
             rowCount: 1,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 0 };
         }
         if (sql.includes("FROM memory_items")) {
           return { rows: [], rowCount: 0 };
         }
-        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+        if (sql.includes("INSERT INTO memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 1 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
@@ -394,17 +394,17 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-4" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 content: "Please remember my favorite color is green and avoid purple in most contexts.",
               }),
             ],
             rowCount: 1,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 0 };
         }
         if (sql.includes("FROM memory_items")) {
@@ -429,7 +429,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(result.status).toBe("failed");
     expect(result.insertedCount).toBe(1);
     expect(result.error).toContain("maintenance candidate store failed");
-    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(false);
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_block_extraction_windows"))).toBe(false);
   });
 
   it("marks only windows that fit into the transcript limit", async () => {
@@ -443,7 +443,10 @@ describe("runMaintenanceCycle daily maintenance", () => {
 
     const recordedLedgerInserts: unknown[][] = [];
     const firstParagraph =
-      "remember this project rule for future work and keep the implementation path stable for follow-up";
+      "remember this project rule for future work and keep the implementation path stable for follow-up".padEnd(
+        768,
+        "x",
+      );
     const secondParagraph =
       "remember this second rule that should remain pending because it falls outside the current transcript window";
     const pool = {
@@ -451,10 +454,10 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-5" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                 content: `${firstParagraph}\n\n${secondParagraph}`,
               }),
@@ -462,10 +465,10 @@ describe("runMaintenanceCycle daily maintenance", () => {
             rowCount: 1,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 0 };
         }
-        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+        if (sql.includes("INSERT INTO memory_daily_block_extraction_windows")) {
           recordedLedgerInserts.push(values ?? []);
           return { rows: [], rowCount: 1 };
         }
@@ -477,7 +480,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
     } as any;
 
     const cfg = buildCfg();
-    cfg.maintenance.extractor.maxCharsPerRun = 260;
+    cfg.maintenance.extractor.maxCharsPerRun = 1_000;
     const result = await runMaintenanceCycle({
       api: buildApi(),
       cfg,
@@ -493,6 +496,61 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(extractorArgs[0]?.transcript).not.toContain(secondParagraph);
     expect(recordedLedgerInserts).toHaveLength(1);
     expect(recordedLedgerInserts[0]?.[7]).toBe(0);
+  });
+
+  it("overlaps stable block windows so boundary-spanning facts remain visible", async () => {
+    extractMaintenanceCandidates.mockResolvedValue({
+      summary: "summary",
+      candidates: [],
+    });
+
+    const recordedLedgerInserts: unknown[][] = [];
+    const pool = {
+      query: vi.fn(async (sql: string, values?: unknown[]) => {
+        if (sql.includes("INSERT INTO memory_maintenance_runs")) {
+          return { rows: [{ id: "run-overlap" }], rowCount: 1 };
+        }
+        if (sql.includes("FROM memory_daily_blocks")) {
+          return {
+            rows: [
+              buildBlockRow({
+                id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                content: "x".repeat(800),
+              }),
+            ],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("INSERT INTO memory_daily_block_extraction_windows")) {
+          recordedLedgerInserts.push(values ?? []);
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes("UPDATE memory_maintenance_runs")) {
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    } as any;
+
+    const cfg = buildCfg();
+    cfg.maintenance.extractor.maxCharsPerRun = 2_000;
+    const result = await runMaintenanceCycle({
+      api: buildApi(),
+      cfg,
+      pool,
+      workspaceDir: "/workspace",
+      dryRun: false,
+      batchSize: 100,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(recordedLedgerInserts).toHaveLength(2);
+    expect(recordedLedgerInserts.map((values) => values[7])).toEqual([0, 1]);
+    expect(recordedLedgerInserts.map((values) => values[9])).toEqual([0, 640]);
+    expect(recordedLedgerInserts.map((values) => values[10])).toEqual([768, 800]);
   });
 
   it("does not mix different daily files into one extractor transcript", async () => {
@@ -514,30 +572,28 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-7" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                 path: "memory/2026-05-20.md",
                 content: firstFileRule,
               }),
-              buildDailyRow({
+              buildBlockRow({
                 id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                 path: "memory/2026-05-21.md",
                 logicalDate: "2026-05-21",
-                contentSha: "sha-2",
-                updatedAt: "2026-05-21T00:00:00.000Z",
                 content: secondFileRule,
               }),
             ],
             rowCount: 2,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 0 };
         }
-        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+        if (sql.includes("INSERT INTO memory_daily_block_extraction_windows")) {
           recordedLedgerInserts.push(values ?? []);
           return { rows: [], rowCount: 1 };
         }
@@ -562,7 +618,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(extractorArgs).toHaveLength(1);
     expect(extractorArgs[0]?.transcript).toContain(firstFileRule);
     expect(extractorArgs[0]?.transcript).not.toContain(secondFileRule);
-    expect(extractorArgs[0]?.sourcePath).toBe("memory/2026-05-20.md#window=1");
+    expect(extractorArgs[0]?.sourcePath).toBe("memory/2026-05-20.md#block=1&window=1");
     expect(recordedLedgerInserts).toHaveLength(1);
     expect(recordedLedgerInserts[0]?.[4]).toBe("memory/2026-05-20.md");
   });
@@ -583,15 +639,14 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-paging" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           const offset = Number(values?.[4] ?? 0);
           if (offset === 0) {
             return {
               rows: [
-                buildDailyRow({
+                buildBlockRow({
                   id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                   path: "memory/2026-05-20.md",
-                  contentSha: "sha-old",
                   content: "remember this old rule that has already been processed before",
                 }),
               ],
@@ -600,26 +655,24 @@ describe("runMaintenanceCycle daily maintenance", () => {
           }
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                 path: "memory/2026-05-21.md",
                 logicalDate: "2026-05-21",
-                contentSha: "sha-new",
-                updatedAt: "2026-05-21T00:00:00.000Z",
                 content: "remember this newer rule that should still be extracted now",
               }),
             ],
             rowCount: 1,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           const entryIds = values?.[2] as string[] | undefined;
           if (entryIds?.includes("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")) {
             return {
               rows: [
                 {
-                  daily_entry_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                  content_sha256: "sha-old",
+                  daily_block_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                  pipeline_version: 1,
                   window_index: 0,
                 },
               ],
@@ -628,7 +681,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
           }
           return { rows: [], rowCount: 0 };
         }
-        if (sql.includes("INSERT INTO memory_daily_extraction_windows")) {
+        if (sql.includes("INSERT INTO memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 1 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
@@ -650,9 +703,9 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(result.status).toBe("completed");
     expect(result.scannedCount).toBe(1);
     expect(extractorArgs).toHaveLength(1);
-    expect(extractorArgs[0]?.sourcePath).toBe("memory/2026-05-21.md#window=1");
+    expect(extractorArgs[0]?.sourcePath).toBe("memory/2026-05-21.md#block=1&window=1");
     expect(extractorArgs[0]?.transcript).toContain("newer rule");
-    const dailyQueries = queryCalls.filter((call) => call.sql.includes("FROM memory_daily_entries"));
+    const dailyQueries = queryCalls.filter((call) => call.sql.includes("FROM memory_daily_blocks"));
     expect(dailyQueries).toHaveLength(2);
     expect(dailyQueries[0]?.values?.[4]).toBe(0);
     expect(dailyQueries[1]?.values?.[4]).toBe(1);
@@ -666,15 +719,14 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-no-pending" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           const offset = Number(values?.[4] ?? 0);
           if (offset === 0) {
             return {
               rows: [
-                buildDailyRow({
+                buildBlockRow({
                   id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                   path: "memory/2026-05-20.md",
-                  contentSha: "sha-old-1",
                   content: "remember this already-processed rule from the first page",
                 }),
               ],
@@ -684,12 +736,10 @@ describe("runMaintenanceCycle daily maintenance", () => {
           if (offset === 1) {
             return {
               rows: [
-                buildDailyRow({
+                buildBlockRow({
                   id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                   path: "memory/2026-05-21.md",
                   logicalDate: "2026-05-21",
-                  contentSha: "sha-old-2",
-                  updatedAt: "2026-05-21T00:00:00.000Z",
                   content: "remember this already-processed rule from the second page too",
                 }),
               ],
@@ -698,12 +748,12 @@ describe("runMaintenanceCycle daily maintenance", () => {
           }
           return { rows: [], rowCount: 0 };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           const entryIds = values?.[2] as string[] | undefined;
           return {
             rows: (entryIds ?? []).map((id) => ({
-              daily_entry_id: id,
-              content_sha256: id.includes("aaaa") ? "sha-old-1" : "sha-old-2",
+              daily_block_id: id,
+              pipeline_version: 1,
               window_index: 0,
             })),
             rowCount: entryIds?.length ?? 0,
@@ -728,7 +778,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(result.status).toBe("completed");
     expect(result.scannedCount).toBe(0);
     expect(extractMaintenanceCandidates).not.toHaveBeenCalled();
-    const dailyQueries = queryCalls.filter((call) => call.sql.includes("FROM memory_daily_entries"));
+    const dailyQueries = queryCalls.filter((call) => call.sql.includes("FROM memory_daily_blocks"));
     expect(dailyQueries).toHaveLength(3);
     expect(dailyQueries[0]?.values?.[4]).toBe(0);
     expect(dailyQueries[1]?.values?.[4]).toBe(1);
@@ -745,17 +795,17 @@ describe("runMaintenanceCycle daily maintenance", () => {
         if (sql.includes("INSERT INTO memory_maintenance_runs")) {
           return { rows: [{ id: "run-6" }], rowCount: 1 };
         }
-        if (sql.includes("FROM memory_daily_entries")) {
+        if (sql.includes("FROM memory_daily_blocks")) {
           return {
             rows: [
-              buildDailyRow({
+              buildBlockRow({
                 content: "Please remember my favorite color is green for future UI work.",
               }),
             ],
             rowCount: 1,
           };
         }
-        if (sql.includes("FROM memory_daily_extraction_windows")) {
+        if (sql.includes("FROM memory_daily_block_extraction_windows")) {
           return { rows: [], rowCount: 0 };
         }
         if (sql.includes("UPDATE memory_maintenance_runs")) {
@@ -776,6 +826,6 @@ describe("runMaintenanceCycle daily maintenance", () => {
 
     expect(result.status).toBe("failed");
     expect(result.error).toContain("extractor output.candidates must be an array");
-    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_extraction_windows"))).toBe(false);
+    expect(queries.some((sql) => sql.includes("INSERT INTO memory_daily_block_extraction_windows"))).toBe(false);
   });
 });

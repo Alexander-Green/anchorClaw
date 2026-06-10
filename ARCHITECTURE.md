@@ -59,9 +59,12 @@ Durable layer:
 
 Daily layer:
 
-- `memory_daily_entries`: DB-owned daily/current context.
-- `memory_daily_extraction_windows`: processed maintenance windows for daily
-  extraction.
+- `memory_daily_entries`: canonical materialized daily documents used by
+  read/search/prompt compatibility paths.
+- `memory_daily_blocks`: immutable append-level source of truth for daily
+  writes and provenance.
+- `memory_daily_block_extraction_windows`: versioned extractor progress for
+  immutable blocks.
 
 Sessions layer:
 
@@ -72,6 +75,9 @@ Import and migration:
 
 - `memory_import_runs`: import run metadata.
 - `memory_import_files`: per-file import ledger and dedupe state.
+- migration `0010` verifies transferable pre-block extraction receipts, writes
+  them into `memory_daily_block_extraction_windows`, and drops the old receipt
+  table in the same transaction. Runtime has no legacy receipt fallback.
 
 Schema management:
 
@@ -102,17 +108,28 @@ Use durable memory for:
 
 ## Daily Memory
 
-Daily memory is stored in `memory_daily_entries`.
+Daily memory has two DB representations:
+
+- `memory_daily_blocks` is the append-only write/provenance ledger;
+- `memory_daily_entries` is the canonical materialized document exposed through
+  OpenClaw-compatible daily paths, search, and startup context.
 
 This layer is for current-day context, transient notes, session captures, and
 working information that should not immediately become durable memory.
 
 Current daily inputs:
 
-- `memory_log` writes directly into DB daily entries.
+- `memory_log` appends a block and updates the canonical daily projection in one
+  transaction.
 - Pre-compaction flush writes into a controlled inbox, then drains into DB.
 - `/new` and `/reset` session capture writes DB-backed daily entries.
 - Legacy daily files can be imported into DB daily entries.
+
+All daily writers use the same transactional append service. Existing
+canonical rows are locked before append, so concurrent writers cannot read the
+same old document and silently lose one another's content. A document with
+multiple block source kinds uses `mixed` as projection metadata; extractor
+eligibility is always decided from each immutable block's own provenance.
 
 Daily prompt injection is handled through AnchorClaw's `before_prompt_build`
 path and runs on first-turn/new-session flows, not on every prompt.
@@ -186,9 +203,13 @@ Import behavior:
 
 - `MEMORY.md` imports into durable `memory_items`.
 - `MEMORY.md` is backed up and replaced with a stub.
-- `memory/YYYY-MM-DD.md` files import into `memory_daily_entries`.
+- `memory/YYYY-MM-DD.md` files import into the daily projection and immutable
+  block ledger.
 - Imported daily files are archived outside the active `memory/` directory.
 - Import state is tracked in the DB ledger.
+- A changed legacy daily file cannot overwrite an already active canonical DB
+  path; the import fails closed and leaves the source file in place for
+  operator review.
 
 Runtime/search warning behavior is scoped to actual risk: for example, zero
 search hits plus active legacy import state.
@@ -230,21 +251,29 @@ So the intended migration model is:
 Maintenance is optional. The current release lane is validated for
 `memory_log`-only promotion.
 
-When enabled, the scheduler reads bounded windows from `memory_daily_entries`,
-runs extractor logic, deduplicates candidates, and promotes durable candidates
-into `memory_items`.
+When enabled, the scheduler reads bounded windows from
+`memory_daily_blocks`, runs extractor logic, deduplicates candidates, and
+promotes durable candidates into `memory_items`.
 
 Current policy:
 
-- extractor reads only `memory_log` daily entries;
+- extractor reads only immutable `memory_log` daily blocks;
 - imported `legacy_import` daily rows are excluded from promotion and remain
   archive/search/read compatibility data;
 - standalone `session_memory` captures and `compaction_flush` entries are
   excluded from extractor source selection;
+- oversized blocks use fixed, versioned, overlapping windows independent of
+  `maintenance.extractor.maxCharsPerRun`; that setting only packs stable
+  windows into a call;
 - backend extractor transport uses host-owned `api.runtime.llm.complete`;
+- extractor policy is sent as a system message, while daily text is explicitly
+  delimited as untrusted data that must not be followed as instructions;
 - accepted candidates must pass the high-confidence durable gate before write;
-- processed state is stored in `memory_daily_extraction_windows` only after a
-  successful extractor cycle;
+- processed state is stored in `memory_daily_block_extraction_windows` only
+  after a successful extractor cycle;
+- migration `0010` transfers only old receipts whose content hash, window hash,
+  and covered character range verify exactly, then drops the old table before
+  runtime starts on the new schema;
 - non-dry-run maintenance waits for durable startup state to become `ready`;
 - dry-run reports heuristic candidate counts only and does not run the
   extractor.

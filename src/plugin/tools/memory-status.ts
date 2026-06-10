@@ -74,17 +74,23 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
           const schemaRows = await ctx.getPool().query<{
             memory_items: string | null;
             memory_daily_entries: string | null;
+            memory_daily_blocks: string | null;
+            memory_daily_block_extraction_windows: string | null;
             session_index_files: string | null;
             session_index_chunks: string | null;
             schema_migrations: string | null;
           }>(
-            "SELECT to_regclass('memory_items') AS memory_items, to_regclass('memory_daily_entries') AS memory_daily_entries, to_regclass('session_index_files') AS session_index_files, to_regclass('session_index_chunks') AS session_index_chunks, to_regclass('schema_migrations') AS schema_migrations",
+            "SELECT to_regclass('memory_items') AS memory_items, to_regclass('memory_daily_entries') AS memory_daily_entries, to_regclass('memory_daily_blocks') AS memory_daily_blocks, to_regclass('memory_daily_block_extraction_windows') AS memory_daily_block_extraction_windows, to_regclass('session_index_files') AS session_index_files, to_regclass('session_index_chunks') AS session_index_chunks, to_regclass('schema_migrations') AS schema_migrations",
           );
           const schema = schemaRows.rows[0];
-          const dailySchemaOk = Boolean(schema?.memory_daily_entries);
+          const dailySchemaOk = Boolean(
+            schema?.memory_daily_entries &&
+              schema?.memory_daily_blocks &&
+              schema?.memory_daily_block_extraction_windows,
+          );
           const schemaOk = Boolean(
             schema?.memory_items &&
-              schema?.memory_daily_entries &&
+              dailySchemaOk &&
               schema?.session_index_files &&
               schema?.session_index_chunks &&
               schema?.schema_migrations,

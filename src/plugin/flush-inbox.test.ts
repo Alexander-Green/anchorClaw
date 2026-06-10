@@ -73,27 +73,32 @@ describe("flush inbox", () => {
     const clientQuery = vi.fn(async (sql: string) => {
       const text = String(sql);
       if (text === "BEGIN" || text === "COMMIT") return { rows: [] };
-      if (text.includes("SELECT id, content, updated_at") && text.includes("FROM memory_daily_entries")) {
-        return { rows: [] };
+      if (text.includes("INSERT INTO memory_import_files")) {
+        return { rows: [{ id: "ledger-1" }] };
       }
       if (text.includes("INSERT INTO memory_daily_entries")) {
-        return { rows: [{ id: "daily-1", updated_at: "2026-06-02T10:12:00.000Z" }] };
+        return {
+          rows: [{
+            id: "daily-1",
+            content: "Important session context",
+            content_sha256: "daily-sha",
+            source_kind: "compaction_flush",
+            updated_at: "2026-06-02T10:12:00.000Z",
+          }],
+        };
+      }
+      if (text.includes("max(block_index)")) {
+        return { rows: [{ block_index: 0 }] };
+      }
+      if (text.includes("INSERT INTO memory_daily_blocks")) {
+        return { rows: [{ id: "block-1" }] };
       }
       if (text.includes("INSERT INTO memory_audit_log")) {
         return { rows: [] };
       }
       throw new Error(`unexpected client query: ${text}`);
     });
-    const poolQuery = vi.fn(async (sql: string) => {
-      const text = String(sql);
-      if (text.includes("SELECT id") && text.includes("FROM memory_import_files")) {
-        return { rows: [] };
-      }
-      if (text.includes("INSERT INTO memory_import_files")) {
-        return { rows: [{ id: "ledger-1" }] };
-      }
-      throw new Error(`unexpected pool query: ${text}`);
-    });
+    const poolQuery = vi.fn();
     const pool = {
       query: poolQuery,
       connect: vi.fn(async () => ({
@@ -119,7 +124,7 @@ describe("flush inbox", () => {
       importedFiles: 1,
       skippedImportedFiles: 0,
     });
-    expect(poolQuery).toHaveBeenCalledWith(
+    expect(clientQuery).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO memory_import_files"),
       expect.arrayContaining([
         "user-1",
@@ -132,6 +137,17 @@ describe("flush inbox", () => {
       expect.arrayContaining([
         "user-1",
         "workspace-1",
+        "2026-06-02",
+        "memory/2026-06-02.md",
+      ]),
+    );
+    expect(clientQuery).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO memory_daily_blocks"),
+      expect.arrayContaining([
+        "user-1",
+        "workspace-1",
+        "daily-1",
+        0,
         "2026-06-02",
         "memory/2026-06-02.md",
       ]),
