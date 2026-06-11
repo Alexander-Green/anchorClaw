@@ -1,3 +1,4 @@
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
 import { resolveSessionsSearchState } from "../../config.js";
 import { scanLegacyWorkspace } from "../../importer.js";
@@ -11,7 +12,13 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-function isPromptInjectionAllowed(api: any): boolean {
+function isPromptInjectionAllowed(api: any, toolCtx: OpenClawPluginToolContext): boolean {
+  const toolConfig =
+    toolCtx.runtimeConfig ??
+    (typeof toolCtx.getRuntimeConfig === "function" ? toolCtx.getRuntimeConfig() : undefined);
+  const toolHooks = toolConfig?.plugins?.entries?.anchorclaw?.hooks;
+  if (toolHooks) return toolHooks.allowPromptInjection !== false;
+
   const currentConfig =
     typeof api?.runtime?.config?.current === "function" ? api.runtime.config.current() : undefined;
   const hooks = currentConfig?.plugins?.entries?.anchorclaw?.hooks;
@@ -20,7 +27,7 @@ function isPromptInjectionAllowed(api: any): boolean {
 
 export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
-  api.registerTool({
+  api.registerTool((toolCtx: OpenClawPluginToolContext) => ({
     name: "memory_status",
     label: "Memory Status",
     description:
@@ -43,7 +50,7 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
       if (unavailable && (!activeCheck || Boolean(ctx.disabledReason))) {
         return unavailable;
       }
-      const promptInjectionAllowed = isPromptInjectionAllowed(api);
+      const promptInjectionAllowed = isPromptInjectionAllowed(api, toolCtx);
       const base: MemoryStatusCheckResult = {
         ok: ctx.durableState?.overall === "ready",
         backend: "anchorclaw",
@@ -61,11 +68,34 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
           promptInjectionAllowed,
           startupPromptEnabled: true,
           startupPromptEffective: promptInjectionAllowed,
-          readCompatibilityPath: "db-first",
+          readCompatibilityPath: "db-only",
           importMode: "canonical_table",
         },
       };
       if (activeCheck) {
+        let workspaceTarget: {
+          workspaceDir: string;
+          agentId: string;
+          sessionKey?: string;
+          sessionId?: string;
+        } | null = null;
+        const getWorkspaceTarget = () => {
+          if (workspaceTarget) return workspaceTarget;
+          const resolved = resolveRuntimeToolWorkspace({
+            ctx,
+            runtimeConfig: toolCtx.runtimeConfig,
+            getRuntimeConfig: toolCtx.getRuntimeConfig,
+            workspaceDir: toolCtx.workspaceDir,
+            agentId: toolCtx.agentId,
+            sessionKey: toolCtx.sessionKey,
+            sessionId: toolCtx.sessionId,
+          });
+          if ("content" in resolved) {
+            throw new Error(String(resolved.details.error ?? "runtime_workspace_unavailable"));
+          }
+          workspaceTarget = resolved;
+          return workspaceTarget;
+        };
         const startedAt = Date.now();
         let dbError: string | undefined;
         try {
@@ -129,7 +159,8 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
         const sessionsVisibility = sessionsSearch.visibility;
         const sessionsEnabled = sessionsSearch.effective;
         try {
-          const agentId = String((api as any)?.runtime?.agentId ?? "main");
+          const target = getWorkspaceTarget();
+          const agentId = target.agentId;
           const agentSessionsDir = await resolveSessionsDirForAgent(agentId);
           const stateDir = path.dirname(path.dirname(path.dirname(agentSessionsDir)));
           let exists = false;
@@ -185,10 +216,7 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
           pendingMessages: pending.pendingMessages,
         };
         try {
-          const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
-          if ("content" in workspaceTarget) {
-            throw new Error(String(workspaceTarget.details.error ?? "runtime_workspace_unavailable"));
-          }
+          const workspaceTarget = getWorkspaceTarget();
           const legacyScan = await scanLegacyWorkspace({
             api,
             cfg: ctx.cfg!,
@@ -239,5 +267,5 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
         details: base,
       };
     },
-  });
+  }), { name: "memory_status" });
 }

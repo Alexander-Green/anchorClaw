@@ -2,9 +2,9 @@ import type { OpenClawPluginApi } from "../api.js";
 
 export function registerSessionDeltaLifecycle(params: {
   api: OpenClawPluginApi;
-  cleanupSessionDelta: () => void;
+  cleanupRuntime: () => Promise<void>;
 }) {
-  const { api, cleanupSessionDelta } = params;
+  const { api, cleanupRuntime } = params;
   const registerRuntimeLifecycle = (api as any)?.lifecycle?.registerRuntimeLifecycle;
   const registerRuntimeLifecycleCompat =
     typeof registerRuntimeLifecycle === "function"
@@ -30,9 +30,9 @@ export function registerSessionDeltaLifecycle(params: {
   if (registerRuntimeLifecycleCompat) {
     registerRuntimeLifecycleCompat({
       id: "anchorclaw-sessions-delta-listener",
-      description: "Cleans up transcript update listener and pending debounce timer.",
+      description: "Cleans up transcript update listener, timers, and runtime resources.",
       cleanup: async () => {
-        cleanupSessionDelta();
+        await cleanupRuntime();
       },
     });
   }

@@ -103,7 +103,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
-      workspaceDir: "/tmp/work",
+      sourceDir: "/tmp/work",
+      targetWorkspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
       cleanupMemoryMdAfterImport: true,
@@ -162,7 +163,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
-      workspaceDir: "/tmp/work",
+      sourceDir: "/tmp/work",
+      targetWorkspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
       cleanupMemoryMdAfterImport: true,
@@ -204,7 +206,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
-      workspaceDir: "/tmp/work",
+      sourceDir: "/tmp/work",
+      targetWorkspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
       cleanupMemoryMdAfterImport: true,
@@ -262,7 +265,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
-      workspaceDir: "/tmp/work",
+      sourceDir: "/tmp/work",
+      targetWorkspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
       cleanupMemoryMdAfterImport: true,
@@ -325,7 +329,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
-      workspaceDir: "/tmp/work",
+      sourceDir: "/tmp/work",
+      targetWorkspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
       cleanupMemoryMdAfterImport: true,
@@ -374,7 +379,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
-      workspaceDir: "/tmp/work",
+      sourceDir: "/tmp/work",
+      targetWorkspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
       cleanupMemoryMdAfterImport: true,
@@ -384,6 +390,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     expect(result.dailyImportedCount).toBe(0);
     expect(result.dailySkippedImportedCount).toBe(1);
     expect(result.dailyArchivedCount).toBe(1);
+    expect(result.dailyFailedCount).toBe(0);
+    expect(result.hadFailures).toBe(false);
     expect(rename).toHaveBeenCalledTimes(1);
   });
 
@@ -433,7 +441,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
-      workspaceDir: "/tmp/work",
+      sourceDir: "/tmp/work",
+      targetWorkspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
       cleanupMemoryMdAfterImport: true,
@@ -443,6 +452,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
     expect(result.dailyImportedCount).toBe(0);
     expect(result.dailySkippedImportedCount).toBe(0);
     expect(result.dailyArchivedCount).toBe(0);
+    expect(result.dailyFailedCount).toBe(1);
+    expect(result.hadFailures).toBe(true);
     expect(queryCalls.some((sql) => sql.includes("INSERT INTO memory_daily_entries"))).toBe(true);
     expect(queryCalls.some((sql) => sql.includes("INSERT INTO memory_import_files"))).toBe(false);
     expect(rename).not.toHaveBeenCalled();
@@ -477,7 +488,8 @@ describe("runOneTimeWorkspaceImport Phase 3", () => {
         postgres: { host: "localhost", database: "db", user: "user" },
       },
       pool,
-      workspaceDir: "/tmp/work",
+      sourceDir: "/tmp/work",
+      targetWorkspaceDir: "/tmp/work",
       agentId: "main",
       sessionKey: "agent:main:test",
     });

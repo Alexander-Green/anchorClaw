@@ -10,7 +10,20 @@ describe("memory_get tool", () => {
 
     registerMemoryGetTool({ ctx } as any);
 
-    const def = registerTool.mock.calls[0]?.[0];
+    const factory = registerTool.mock.calls[0]?.[0];
+    const opts = registerTool.mock.calls[0]?.[1];
+    expect(opts).toEqual({ name: "memory_get" });
+    expect(factory).toBeTypeOf("function");
+    const def = factory({
+      runtimeConfig: {
+        agents: {
+          list: [{ id: "main", default: true, workspace: "/runtime/workspace" }],
+        },
+      },
+      workspaceDir: "/runtime/workspace",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
     expect(def.description).toContain("MEMORY.md (virtual snapshot)");
     expect(def.description).toContain("memory/YYYY-MM-DD.md (DB-backed daily memory)");
     expect(def.parameters.properties.lookup.description).toContain("MEMORY.md or memory/YYYY-MM-DD.md");

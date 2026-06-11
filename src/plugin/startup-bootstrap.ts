@@ -17,6 +17,9 @@ export type StartupBootstrapRuntime = {
   kickoffStartupBootstrap: () => void;
 };
 
+const STARTUP_RETRY_BASE_DELAY_MS = 500;
+const STARTUP_RETRY_MAX_DELAY_MS = 30_000;
+
 function resolveStartupWorkspaceSelector(
   cfg: AnchorClawConfig,
 ): WorkspaceTargetSelector | undefined {
@@ -71,12 +74,13 @@ function buildStartupTargetLabel(target: ResolvedWorkspaceTarget): string {
 export function createStartupBootstrapRuntime(params: {
   api: OpenClawPluginApi;
   ctx: PluginRuntimeContext;
-  refreshPromptCache: (options?: { force?: boolean }) => Promise<void>;
   triggerMaintenanceNow: () => void;
   ensureSessionDeltaListener: () => void;
 }): StartupBootstrapRuntime {
-  const { api, ctx, refreshPromptCache, triggerMaintenanceNow, ensureSessionDeltaListener } = params;
+  const { api, ctx, triggerMaintenanceNow, ensureSessionDeltaListener } = params;
   let startupPromise: Promise<void> | null = null;
+  let retryAttempt = 0;
+  let retryNotBeforeMs = 0;
 
   const runStartupBootstrap = async () => {
     if (!ctx.cfg) {
@@ -133,19 +137,6 @@ export function createStartupBootstrapRuntime(params: {
       return;
     }
 
-    api.logger.info("anchorclaw: startup step prompt-cache-warmup started");
-    try {
-      await refreshPromptCache({ force: true });
-      if (ctx.promptCache.error) {
-        api.logger.warn(`anchorclaw: startup step prompt-cache-warmup failed (${ctx.promptCache.error})`);
-      } else {
-        api.logger.info("anchorclaw: startup step prompt-cache-warmup succeeded");
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      api.logger.warn(`anchorclaw: startup step prompt-cache-warmup failed (${message})`);
-    }
-
     api.logger.info("anchorclaw: startup step flush-inbox-recovery started");
     const startupTargets = resolveStartupBootstrapTargets({ api, cfg: importCfg });
     if (!startupTargets || startupTargets.length === 0) {
@@ -160,6 +151,7 @@ export function createStartupBootstrapRuntime(params: {
             api,
             ctx,
             workspaceDir: target.workspaceDir,
+            agentId: target.primaryAgentId,
           });
           api.logger.info(
             `anchorclaw: startup step flush-inbox-recovery succeeded (${targetLabel}, scanned=${flushStats.scannedFiles}, imported=${flushStats.importedFiles}, skipped=${flushStats.skippedImportedFiles})`,
@@ -263,8 +255,14 @@ export function createStartupBootstrapRuntime(params: {
     if (ctx.disabledReason || !ctx.cfg) {
       return;
     }
+    const retryableFailure =
+      ctx.durableState.overall === "blocked" &&
+      ctx.durableState.import === "failed_retryable";
+    if (!startupPromise && retryableFailure && Date.now() < retryNotBeforeMs) {
+      return;
+    }
     if (!startupPromise) {
-      startupPromise = runStartupBootstrap().catch((error) => {
+      const currentPromise = runStartupBootstrap().catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         api.logger.warn(`anchorclaw: startup bootstrap failed (${message})`);
         ctx.setStartupCriticalFailure(`startup_failed: ${message}`);
@@ -273,6 +271,29 @@ export function createStartupBootstrapRuntime(params: {
           reason: `startup_failed: ${message}`,
         });
       });
+      startupPromise = currentPromise;
+      await currentPromise;
+
+      if (
+        startupPromise === currentPromise &&
+        ctx.durableState.overall === "blocked" &&
+        ctx.durableState.import === "failed_retryable"
+      ) {
+        retryAttempt += 1;
+        const retryDelayMs = Math.min(
+          STARTUP_RETRY_BASE_DELAY_MS * 2 ** (retryAttempt - 1),
+          STARTUP_RETRY_MAX_DELAY_MS,
+        );
+        retryNotBeforeMs = Date.now() + retryDelayMs;
+        startupPromise = null;
+        api.logger.warn(
+          `anchorclaw: startup bootstrap retry deferred for ${retryDelayMs}ms (attempt=${retryAttempt})`,
+        );
+      } else if (ctx.durableState.overall === "ready") {
+        retryAttempt = 0;
+        retryNotBeforeMs = 0;
+      }
+      return;
     }
     await startupPromise;
   };

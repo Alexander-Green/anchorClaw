@@ -25,7 +25,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
       api: {},
       disabledReason: null,
       durableState: { overall: "ready", cleanup: "not_needed" },
-      promptCache: { lines: ["(cached memory block)"], error: null },
       sdkHealth: { degraded: false },
       cfg: {},
       ensureReady: vi.fn(async () => undefined),
@@ -34,7 +33,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     registerAnchorClawMemoryCapability({
       ctx,
-      refreshPromptCache: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
 
@@ -58,7 +56,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
       api: {},
       disabledReason: null,
       durableState: { overall: "ready", cleanup: "not_needed" },
-      promptCache: { lines: ["(cached memory block)"], error: null },
       sdkHealth: { degraded: false },
       cfg: {},
       ensureReady: vi.fn(async () => undefined),
@@ -67,7 +64,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     registerAnchorClawMemoryCapability({
       ctx,
-      refreshPromptCache: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
 
@@ -103,7 +99,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
         cleanup: "not_needed",
         reason: "workspace_import_failed: connection timeout",
       },
-      promptCache: { lines: ["(cached memory block)"], error: null },
       sdkHealth: { degraded: false },
       cfg: {},
       ensureReady: vi.fn(async () => undefined),
@@ -112,7 +107,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     registerAnchorClawMemoryCapability({
       ctx,
-      refreshPromptCache: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
 
@@ -136,7 +130,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
         cleanup: "failed",
         reason: "legacy MEMORY.md cleanup failed; duplicate prompt injection risk remains",
       },
-      promptCache: { lines: ["(cached memory block)"], error: null },
       sdkHealth: { degraded: false },
       cfg: {},
       ensureReady: vi.fn(async () => undefined),
@@ -145,7 +138,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     registerAnchorClawMemoryCapability({
       ctx,
-      refreshPromptCache: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
 
@@ -165,7 +157,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
       api: {},
       disabledReason: null,
       durableState: { overall: "ready", cleanup: "not_needed" },
-      promptCache: { lines: ["(cached memory block)"], error: null },
       sdkHealth: { degraded: false },
       cfg: { sessions: { visibility: "current" } },
       ensureReady: vi.fn(async () => undefined),
@@ -174,7 +165,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     registerAnchorClawMemoryCapability({
       ctx,
-      refreshPromptCache: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
 
@@ -193,7 +183,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
       api: {},
       disabledReason: null,
       durableState: { overall: "ready", cleanup: "not_needed" },
-      promptCache: { lines: ["(cached memory block)"], error: null },
       sdkHealth: { degraded: false },
       cfg: { sessions: { search: { enabled: true }, visibility: "current" } },
       ensureReady: vi.fn(async () => undefined),
@@ -202,7 +191,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     registerAnchorClawMemoryCapability({
       ctx,
-      refreshPromptCache: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
 
@@ -216,20 +204,11 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     expect(text).toContain('corpus="sessions" is available subject to configured visibility scope.');
   });
 
-  it("passes through cached daily memory section alongside durable memory", () => {
+  it("keeps workspace-specific memory out of the static capability prompt", () => {
     const ctx = {
       api: {},
       disabledReason: null,
       durableState: { overall: "ready", cleanup: "not_needed" },
-      promptCache: {
-        lines: [
-          "## Durable Memory (AnchorClaw/Postgres)",
-          "",
-          "## Daily Memory (AnchorClaw/Postgres)",
-          "Use these as transient recent context.",
-        ],
-        error: null,
-      },
       sdkHealth: { degraded: false },
       cfg: {},
       ensureReady: vi.fn(async () => undefined),
@@ -238,7 +217,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     registerAnchorClawMemoryCapability({
       ctx,
-      refreshPromptCache: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
 
@@ -249,8 +227,9 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     });
     const text = lines.join("\n");
 
-    expect(text).toContain("## Daily Memory (AnchorClaw/Postgres)");
-    expect(text).toContain("transient recent context");
+    expect(text).not.toContain("## Durable Memory (AnchorClaw/Postgres)");
+    expect(text).not.toContain("## Daily Memory (AnchorClaw/Postgres)");
+    expect(text).not.toContain("transient recent context");
   });
 
   it("registers a flushPlanResolver that targets the controlled flush inbox", () => {
@@ -266,7 +245,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
       },
       disabledReason: null,
       durableState: { overall: "ready", cleanup: "not_needed" },
-      promptCache: { lines: ["(cached memory block)"], error: null },
       sdkHealth: { degraded: false },
       cfg: {},
       ensureReady: vi.fn(async () => undefined),
@@ -275,7 +253,6 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
 
     registerAnchorClawMemoryCapability({
       ctx,
-      refreshPromptCache: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
 

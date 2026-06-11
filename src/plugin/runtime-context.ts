@@ -11,7 +11,6 @@ import { isTransientDbError } from "../db-errors.js";
 import { resolveAgentWorkspacePeerIds } from "../workspace-targets.js";
 import type {
   DurableMemoryState,
-  PromptCacheState,
   SdkHealthState,
   SessionDeltaRuntimeState,
   SessionsIndexState,
@@ -29,19 +28,19 @@ export type PluginRuntimeContext = {
   durableState: DurableMemoryState;
   pool: PostgresPool | undefined;
   migrationsApplied: Promise<void> | undefined;
-  promptCache: PromptCacheState;
   sessionsIndex: SessionsIndexState;
   sessionDelta: SessionDeltaRuntimeState;
   sdkHealth: SdkHealthState;
   resolveActor: () => string;
   getPool: () => PostgresPool;
+  cleanupPool: () => Promise<void>;
   ensureConnectionReady: () => Promise<void>;
   ensureReady: () => Promise<void>;
   setDurableState: (next: Partial<DurableMemoryState>) => void;
   setStartupCriticalFailure: (reason: string | undefined) => void;
   markSdkError: (operation: string, error: unknown) => void;
   markSdkSuccess: () => void;
-  listVisibleAgentIds: () => Promise<string[]>;
+  listVisibleAgentIds: (agentId?: string) => Promise<string[]>;
 };
 
 export function createPluginRuntimeContext(params: {
@@ -67,17 +66,13 @@ export function createPluginRuntimeContext(params: {
     },
     pool: undefined,
     migrationsApplied: undefined,
-    promptCache: {
-      lines: null,
-      error: null,
-      refreshPromise: null,
-    },
     sessionsIndex: {
-      bootstrapPromise: null,
-      bootstrapped: false,
+      bootstrapPromises: new Map(),
+      bootstrappedKeys: new Set(),
     },
     sessionDelta: {
-      pendingFiles: new Set<string>(),
+      pendingByPath: new Map(),
+      retryAttemptsByTarget: new Map(),
       timer: null,
       syncInFlight: null,
       unsubscribe: null,
@@ -98,6 +93,15 @@ export function createPluginRuntimeContext(params: {
       }
       ctx.pool ??= createPostgresPool({ cfg: ctx.cfg });
       return ctx.pool!;
+    },
+    cleanupPool: async () => {
+      const pool = ctx.pool;
+      ctx.pool = undefined;
+      ctx.migrationsApplied = undefined;
+      if (!pool) {
+        return;
+      }
+      await pool.end?.();
     },
     ensureConnectionReady: async () => {
       const pool = ctx.getPool();
@@ -179,8 +183,8 @@ export function createPluginRuntimeContext(params: {
       ctx.sdkHealth.lastErrorAt = undefined;
       ctx.sdkHealth.consecutiveSuccesses = 0;
     },
-    listVisibleAgentIds: async () => {
-      const currentAgentId = String((params.api as any)?.runtime?.agentId ?? "main");
+    listVisibleAgentIds: async (agentId?: string) => {
+      const currentAgentId = agentId?.trim() || String((params.api as any)?.runtime?.agentId ?? "main");
       const runtimeConfig =
         typeof (params.api as any)?.runtime?.config?.current === "function"
           ? (params.api as any).runtime.config.current()

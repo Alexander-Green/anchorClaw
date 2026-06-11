@@ -71,6 +71,7 @@ function buildRuntime(
   ],
 ) {
   return {
+    agentId: "main",
     sessionKey: "agent:main:main",
     workspaceDir: "/legacy-workspace",
     config: {
@@ -103,7 +104,6 @@ describe("createAnchorClawMemorySearchManager.sync", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -155,6 +155,34 @@ describe("createAnchorClawMemorySearchManager.sync", () => {
 });
 
 describe("createAnchorClawMemorySearchManager visibility behavior", () => {
+  it("does not reuse the global runtime session for a different manager agent", async () => {
+    vi.mocked(memorySearchDb).mockResolvedValueOnce([]);
+    const manager = createAnchorClawMemorySearchManager({
+      api: {
+        runtime: buildRuntime("/runtime/qa", [
+          { id: "main", default: true, workspace: "/runtime/main" },
+          { id: "qa", workspace: "/runtime/qa" },
+        ]),
+      } as any,
+      cfg: {
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      } as any,
+      ensureReady: async () => undefined,
+      getPool: () => ({ query: vi.fn() }) as any,
+      agentId: "qa",
+    });
+
+    await manager.search("needle", { sources: ["memory"] });
+
+    expect(resolveScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "qa",
+        workspaceDir: path.resolve("/runtime/qa"),
+        sessionKey: undefined,
+      }),
+    );
+  });
+
   it("filters sessions hits in current mode through visibility helper", async () => {
     vi.mocked(memorySearchDb).mockResolvedValueOnce([]);
     vi.mocked(memorySearchSessionsIndexDb).mockResolvedValueOnce([
@@ -175,7 +203,6 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -185,7 +212,12 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
 
     const results = await manager.search("needle", { sources: ["sessions"] });
     expect(results).toHaveLength(0);
-    expect(filterSessionHitsByVisibility).toHaveBeenCalledTimes(1);
+    expect(filterSessionHitsByVisibility).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        fallbackToRuntimeSession: false,
+      }),
+    );
   });
 
   it("filters sessions hits in visible mode through visibility helper", async () => {
@@ -208,7 +240,6 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -235,7 +266,6 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/workspace",
         sessions: { search: { enabled: true }, visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -259,7 +289,6 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -283,7 +312,6 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -324,7 +352,6 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/legacy-workspace",
         sessions: { visibility: "visible" },
       } as any,
       ensureReady: async () => undefined,
@@ -349,7 +376,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     });
   });
 
-  it("reads memory/* via DB-first compatibility path before falling back to workspace files", async () => {
+  it("reads memory/* through the DB-owned compatibility path", async () => {
     vi.mocked(memoryGetFromDb).mockResolvedValueOnce({
       ok: true,
       corpus: "memory",
@@ -365,7 +392,6 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       } as any,
       cfg: {
         postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
-        workspaceDir: "/legacy-workspace",
         sessions: { search: { enabled: true }, visibility: "current" },
       } as any,
       ensureReady: async () => undefined,
@@ -383,8 +409,10 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     expect(memoryGetFromDb).toHaveBeenCalledWith(
       expect.objectContaining({
         lookup: "memory/2026-05-20.md",
-        workspaceDir: path.resolve("/runtime/workspace"),
       }),
     );
+    const getCalls = memoryGetFromDb.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    const getParams = getCalls.at(-1)?.[0];
+    expect(getParams).not.toHaveProperty("workspaceDir");
   });
 });

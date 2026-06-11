@@ -51,7 +51,9 @@ By default, setup updates `~/.openclaw/openclaw.json` with:
 - `hooks.internal.entries["session-memory"].enabled = false`
 
 Setup preserves unrelated top-level `anchorclaw.config` keys such as
-`identity`, `sessions`, `maintenance`, and `limits`.
+`identity`, `sessions`, and `limits`. It updates the `maintenance` enablement,
+workspace scope, and extractor enablement selected during setup while
+preserving existing interval, batch, and extractor limit overrides.
 
 Setup rewrites `anchorclaw.config.postgres`; if you use SSL or custom pool
 settings, add those overrides after setup.
@@ -87,6 +89,10 @@ Markdown daily files plus DB daily entries for the same reset context.
 Setup does not auto-import existing workspace memory files. It leaves them
 untouched and lets the operator review the migration.
 
+Legacy files remain on disk until the operator applies the import, but
+AnchorClaw does not use them as a runtime fallback. `memory/*` compatibility
+reads are DB-only, so unimported files are not visible through `memory_get`.
+
 Dry-run the current workspace state:
 
 ```bash
@@ -109,6 +115,10 @@ What `--apply` does:
   (`memory_daily_blocks`);
 - archives imported daily files out of the active `memory/` directory into
   `.openclaw-repair/anchorclaw/legacy-daily/`.
+
+If one or more legacy daily files fail to import, the command reports
+`incomplete`, prints the failed daily count, and exits with an error after the
+target report instead of claiming a clean success.
 
 Daily files are archived instead of left active because legacy file-oriented
 instructions may keep treating them as active memory. That can cause duplicate
@@ -230,6 +240,9 @@ into `plugins.entries.anchorclaw.config`.
     "dryRun": false,
     "intervalMinutes": 720,
     "batchSize": 200,
+    "workspaceScope": {
+      "mode": "default-agent"
+    },
     "extractor": {
       "enabled": true,
       "maxCandidates": 10,
@@ -245,18 +258,23 @@ into `plugins.entries.anchorclaw.config`.
 ```
 
 `sessions.search.enabled` controls whether the sessions corpus is exposed.
-`sessions.visibility` controls which transcript updates can enter the sessions
-index:
+`sessions.visibility` controls which indexed transcripts an agent can search
+and read:
 
-- `current`: index only the current agent/session scope;
-- `visible`: accept visible cross-agent transcript updates;
+- `current`: expose only the requesting agent's sessions;
+- `visible`: also expose sessions of agents that share the same resolved
+  workspace, subject to OpenClaw's visibility guard;
 - `off`: disable sessions indexing/listener behavior.
 
 `sessions.sync.deltaBytes` and `sessions.sync.deltaMessages` control when
-transcript deltas trigger a targeted sessions reindex.
+transcript deltas trigger a targeted sessions reindex. Transcript events are
+always routed to the workspace resolved for their owning OpenClaw agent.
 
 `maintenance.enabled` starts the background maintenance scheduler. The
-maintenance extractor reads stable, versioned windows from immutable
+required `maintenance.workspaceScope` selects which resolved OpenClaw
+workspace or workspaces it processes. The example above uses the default agent;
+use `all-agent-workspaces` to process every unique configured workspace.
+The maintenance extractor reads stable, versioned windows from immutable
 `memory_log` daily blocks and can promote durable candidates into
 `memory_items`. `maintenance.extractor.maxCharsPerRun` controls how many stable
 windows fit into one LLM call; changing it does not make completed blocks

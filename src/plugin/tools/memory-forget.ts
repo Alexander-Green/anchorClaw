@@ -1,3 +1,4 @@
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { memoryForgetDb } from "../../memory/forget.js";
 import {
@@ -6,9 +7,9 @@ import {
   type ToolRegistrationParams,
 } from "./common.js";
 
-export function registerMemoryForgetTool({ ctx, refreshPromptCache, ensureStartupBootstrap }: ToolRegistrationParams) {
+export function registerMemoryForgetTool({ ctx, invalidatePromptMemory, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
-  api.registerTool({
+  api.registerTool((toolCtx: OpenClawPluginToolContext) => ({
     name: "memory_forget",
     label: "Memory Forget",
     description:
@@ -33,7 +34,15 @@ export function registerMemoryForgetTool({ ctx, refreshPromptCache, ensureStartu
       const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
-      const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+      const workspaceTarget = resolveRuntimeToolWorkspace({
+        ctx,
+        runtimeConfig: toolCtx.runtimeConfig,
+        getRuntimeConfig: toolCtx.getRuntimeConfig,
+        workspaceDir: toolCtx.workspaceDir,
+        agentId: toolCtx.agentId,
+        sessionKey: toolCtx.sessionKey,
+        sessionId: toolCtx.sessionId,
+      });
       if ("content" in workspaceTarget) return workspaceTarget;
       const scope = await resolveUserAndWorkspaceScope({
         api,
@@ -75,7 +84,7 @@ export function registerMemoryForgetTool({ ctx, refreshPromptCache, ensureStartu
         };
       }
 
-      await refreshPromptCache({ force: true });
+      invalidatePromptMemory({ workspaceDir: workspaceTarget.workspaceDir });
 
       const visible = {
         ok: true,
@@ -89,5 +98,5 @@ export function registerMemoryForgetTool({ ctx, refreshPromptCache, ensureStartu
         details: forgot,
       };
     },
-  });
+  }), { name: "memory_forget" });
 }

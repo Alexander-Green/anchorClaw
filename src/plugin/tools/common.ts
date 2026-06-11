@@ -1,24 +1,43 @@
 import type { PluginRuntimeContext } from "../runtime-context.js";
+import type { OpenClawConfig as OpenClawRuntimeConfig } from "openclaw/plugin-sdk/health";
 import {
-  resolveRuntimeWorkspaceTarget,
-  RUNTIME_WORKSPACE_UNAVAILABLE,
+  resolveRuntimeWorkspaceResolution,
+  type RuntimeWorkspaceResolution,
 } from "../runtime-workspace.js";
+import type { SessionIndexBootstrapTarget } from "../session-delta.js";
 
 export type ToolRegistrationParams = {
   ctx: PluginRuntimeContext;
-  refreshPromptCache: (options?: { force?: boolean }) => Promise<void>;
-  ensureSessionsIndexBootstrapped: () => Promise<void>;
+  invalidatePromptMemory: (params: { workspaceDir: string }) => void;
+  ensureSessionsIndexBootstrapped: (target?: SessionIndexBootstrapTarget) => Promise<void>;
   ensureStartupBootstrap?: () => Promise<void>;
 };
 
-function buildToolUnavailableResponse(error: string): {
+function buildToolUnavailableResponse(
+  error: string,
+  details?: Record<string, unknown>,
+): {
   content: { type: "text"; text: string }[];
-  details: { disabled: true; error: string };
+  details: { disabled: true; error: string } & Record<string, unknown>;
 } {
   return {
     content: [{ type: "text", text: `anchorclaw: tool unavailable (${error})` }],
-    details: { disabled: true, error },
+    details: { disabled: true, error, ...(details ?? {}) },
   };
+}
+
+function warnRuntimeWorkspaceResolutionFailure(
+  ctx: PluginRuntimeContext,
+  failure: Extract<RuntimeWorkspaceResolution, { ok: false }>,
+): void {
+  const pathDetails =
+    failure.contextWorkspaceDir || failure.configuredWorkspaceDir
+      ? ` (context=${failure.contextWorkspaceDir ?? "unknown"}, configured=${failure.configuredWorkspaceDir ?? "unknown"})`
+      : "";
+  const agentDetails = failure.agentId ? ` for agent ${failure.agentId}` : "";
+  ctx.api.logger.warn(
+    `anchorclaw: runtime workspace resolution failed${agentDetails} (${failure.reason}: ${failure.message})${pathDetails}`,
+  );
 }
 
 export function getToolUnavailableResponse(ctx: PluginRuntimeContext):
@@ -54,7 +73,11 @@ export async function ensureToolRuntimeReady(
   | { content: { type: "text"; text: string }[]; details: { disabled: true; error: string } }
   | null
 > {
-  if (!ctx.disabledReason && ctx.durableState?.overall === "pending" && typeof ensureStartupBootstrap === "function") {
+  const startupNeedsRun =
+    ctx.durableState?.overall === "pending" ||
+    (ctx.durableState?.overall === "blocked" &&
+      ctx.durableState?.import === "failed_retryable");
+  if (!ctx.disabledReason && startupNeedsRun && typeof ensureStartupBootstrap === "function") {
     await ensureStartupBootstrap();
   }
   return getToolUnavailableResponse(ctx);
@@ -62,12 +85,32 @@ export async function ensureToolRuntimeReady(
 
 export function resolveRuntimeToolWorkspace(params: {
   ctx: PluginRuntimeContext;
+  runtimeConfig?: OpenClawRuntimeConfig;
+  getRuntimeConfig?: () => OpenClawRuntimeConfig | undefined;
+  workspaceDir?: string;
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
 }):
-  | { workspaceDir: string; agentId: string; sessionKey?: string }
+  | { workspaceDir: string; agentId: string; sessionKey?: string; sessionId?: string }
   | { content: { type: "text"; text: string }[]; details: { disabled: true; error: string } } {
-  const target = resolveRuntimeWorkspaceTarget({ api: params.ctx.api });
-  if (!target) {
-    return buildToolUnavailableResponse(RUNTIME_WORKSPACE_UNAVAILABLE);
+  const resolution = resolveRuntimeWorkspaceResolution({
+    api: params.ctx.api,
+    runtimeConfig: params.runtimeConfig,
+    getRuntimeConfig: params.getRuntimeConfig,
+    workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  if (!resolution.ok) {
+    warnRuntimeWorkspaceResolutionFailure(params.ctx, resolution);
+    return buildToolUnavailableResponse(resolution.error, {
+      reason: resolution.reason,
+      ...(resolution.agentId ? { agentId: resolution.agentId } : {}),
+      ...(resolution.contextWorkspaceDir ? { contextWorkspaceDir: resolution.contextWorkspaceDir } : {}),
+      ...(resolution.configuredWorkspaceDir ? { configuredWorkspaceDir: resolution.configuredWorkspaceDir } : {}),
+    });
   }
-  return target;
+  return resolution.target;
 }

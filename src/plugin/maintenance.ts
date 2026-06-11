@@ -64,82 +64,133 @@ function resolveConfiguredMaintenanceTargets(params: {
 export function createMaintenanceRuntime(params: {
   api: OpenClawPluginApi;
   ctx: PluginRuntimeContext;
+  invalidatePromptMemory: (params: { workspaceDir: string }) => void;
   autostart?: boolean;
 }): MaintenanceRuntime {
-  const { api, ctx } = params;
+  const { api, ctx, invalidatePromptMemory } = params;
   let timer: ReturnType<typeof setInterval> | null = null;
   let stopped = false;
   let started = false;
   let inFlight: Promise<void> | null = null;
+  let rerunRequested = false;
+  let rerunInProgress = false;
   let waitingForDurableReady = false;
   let initialRunDeferred = false;
   let pendingImmediateTrigger = false;
 
   function cleanupMaintenance() {
     stopped = true;
+    rerunRequested = false;
+    rerunInProgress = false;
     if (timer) {
       clearInterval(timer);
       timer = null;
     }
   }
 
-  const runOnce = async (
+  const runPass = async (
     jobCfg: NonNullable<AnchorClawConfig["maintenance"]>,
     targets: readonly ResolvedWorkspaceTarget[],
+  ): Promise<boolean> => {
+    await ctx.ensureReady();
+    const dryRun = jobCfg.dryRun ?? true;
+    if (!dryRun && ctx.durableState.overall !== "ready") {
+      waitingForDurableReady = true;
+      if (warnedDurableState !== ctx.durableState.overall) {
+        warnedDurableState = ctx.durableState.overall;
+        api.logger.warn(
+          `anchorclaw: maintenance skipped until durable memory is ready (overall=${ctx.durableState.overall})`,
+        );
+      }
+      return false;
+    }
+    waitingForDurableReady = false;
+    warnedDurableState = null;
+    const currentRuntimeAgentId = String((api as any)?.runtime?.agentId ?? "");
+    const currentSessionKey = (api as any)?.runtime?.sessionKey;
+
+    for (const target of targets) {
+      const result = await runMaintenanceCycle({
+        api,
+        cfg: ctx.cfg!,
+        pool: ctx.getPool(),
+        workspaceDir: target.workspaceDir,
+        agentId: target.primaryAgentId,
+        sessionKey: target.agentIds.includes(currentRuntimeAgentId) ? currentSessionKey : undefined,
+        dryRun,
+        batchSize: jobCfg.batchSize ?? 200,
+      });
+      const labelSuffix = targets.length > 1 ? ` (${target.label})` : "";
+      if (result.status === "failed") {
+        api.logger.warn(
+          `anchorclaw: maintenance cycle failed${labelSuffix} (${result.error ?? "unknown"})`,
+        );
+        continue;
+      }
+      if (result.insertedCount > 0) {
+        invalidatePromptMemory({ workspaceDir: target.workspaceDir });
+      }
+      api.logger.info(
+        `anchorclaw: maintenance cycle completed${labelSuffix} (dryRun=${result.dryRun}, scanned=${result.scannedCount}, heuristicCandidates=${result.heuristicCandidateCount}, inserted=${result.insertedCount}, skipped=${result.skippedCount})`,
+      );
+    }
+    return true;
+  };
+
+  const runOnce = async (
+    jobCfg: NonNullable<AnchorClawConfig["maintenance"]>,
+    initialTargets?: readonly ResolvedWorkspaceTarget[],
   ) => {
-    if (stopped || inFlight) {
+    if (stopped) {
+      return;
+    }
+    if (inFlight) {
+      if (!rerunInProgress) {
+        rerunRequested = true;
+      }
       return;
     }
     inFlight = (async () => {
+      rerunRequested = false;
+      rerunInProgress = false;
+      const passTargets =
+        initialTargets ?? resolveConfiguredMaintenanceTargets({ api, cfg: ctx.cfg! });
+      if (!passTargets || passTargets.length === 0) {
+        return;
+      }
+      let canRerun = true;
       try {
-        await ctx.ensureReady();
-        const dryRun = jobCfg.dryRun ?? true;
-        if (!dryRun && ctx.durableState.overall !== "ready") {
-          waitingForDurableReady = true;
-          if (warnedDurableState !== ctx.durableState.overall) {
-            warnedDurableState = ctx.durableState.overall;
-            api.logger.warn(
-              `anchorclaw: maintenance skipped until durable memory is ready (overall=${ctx.durableState.overall})`,
-            );
-          }
-          return;
-        }
-        waitingForDurableReady = false;
-        warnedDurableState = null;
-        const currentRuntimeAgentId = String((api as any)?.runtime?.agentId ?? "");
-        const currentSessionKey = (api as any)?.runtime?.sessionKey;
-
-        for (const target of targets) {
-          const result = await runMaintenanceCycle({
-            api,
-            cfg: ctx.cfg!,
-            pool: ctx.getPool(),
-            workspaceDir: target.workspaceDir,
-            agentId: target.primaryAgentId,
-            sessionKey: target.agentIds.includes(currentRuntimeAgentId) ? currentSessionKey : undefined,
-            dryRun,
-            batchSize: jobCfg.batchSize ?? 200,
-          });
-          const labelSuffix = targets.length > 1 ? ` (${target.label})` : "";
-          if (result.status === "failed") {
-            api.logger.warn(
-              `anchorclaw: maintenance cycle failed${labelSuffix} (${result.error ?? "unknown"})`,
-            );
-            continue;
-          }
-          api.logger.info(
-            `anchorclaw: maintenance cycle completed${labelSuffix} (dryRun=${result.dryRun}, scanned=${result.scannedCount}, heuristicCandidates=${result.heuristicCandidateCount}, inserted=${result.insertedCount}, skipped=${result.skippedCount})`,
-          );
-        }
+        canRerun = await runPass(jobCfg, passTargets);
       } catch (error) {
         api.logger.warn(
           `anchorclaw: maintenance scheduler error (${error instanceof Error ? error.message : String(error)})`,
         );
-      } finally {
-        inFlight = null;
+      }
+      if (!canRerun || stopped || !rerunRequested) {
+        return;
+      }
+
+      rerunRequested = false;
+      rerunInProgress = true;
+      const rerunTargets = resolveConfiguredMaintenanceTargets({ api, cfg: ctx.cfg! });
+      if (!rerunTargets || rerunTargets.length === 0) {
+        return;
+      }
+      try {
+        await runPass(jobCfg, rerunTargets);
+      } catch (error) {
+        api.logger.warn(
+          `anchorclaw: maintenance scheduler rerun error (${error instanceof Error ? error.message : String(error)})`,
+        );
       }
     })();
-    await inFlight;
+    try {
+      await inFlight;
+    } finally {
+      rerunRequested = false;
+      rerunInProgress = false;
+      inFlight = null;
+    }
   };
 
   let warnedDurableState: string | null = null;
@@ -161,7 +212,7 @@ export function createMaintenanceRuntime(params: {
       void runOnce(jobCfg, targets);
     }
     timer = setInterval(() => {
-      void runOnce(jobCfg, targets);
+      void runOnce(jobCfg);
     }, intervalMs);
     timer.unref?.();
     api.logger.info(

@@ -14,10 +14,13 @@ import {
   resolveRuntimeWorkspaceTarget,
   RUNTIME_WORKSPACE_UNAVAILABLE,
 } from "./runtime-workspace.js";
+import type { PendingSessionDelta } from "./types.js";
 import { sessionPathForFile } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import fs from "node:fs/promises";
 
 const SESSION_DELTA_DEBOUNCE_MS = 5_000;
+const SESSION_DELTA_RETRY_BASE_DELAY_MS = 2_000;
+const SESSION_DELTA_RETRY_MAX_DELAY_MS = 30_000;
 
 function resolveSessionAgentId(lookup: string): string | null {
   const parts = lookup.split("/").filter(Boolean);
@@ -28,9 +31,16 @@ function resolveSessionAgentId(lookup: string): string | null {
 }
 
 export type SessionDeltaRuntime = {
-  ensureSessionsIndexBootstrapped: () => Promise<void>;
+  ensureSessionsIndexBootstrapped: (target?: SessionIndexBootstrapTarget) => Promise<void>;
   ensureSessionDeltaListener: () => void;
   cleanupSessionDelta: () => void;
+};
+
+export type SessionIndexBootstrapTarget = {
+  workspaceDir: string;
+  agentId: string;
+  sessionKey?: string;
+  sessionId?: string;
 };
 
 export function createSessionDeltaRuntime(params: {
@@ -39,27 +49,75 @@ export function createSessionDeltaRuntime(params: {
 }): SessionDeltaRuntime {
   const { api, ctx } = params;
 
-  const ensureSessionsIndexBootstrapped = async () => {
+  const buildTargetKey = (target: Pick<PendingSessionDelta, "workspaceDir" | "agentId">): string =>
+    `${target.workspaceDir}\u0000${target.agentId}`;
+
+  const computeRetryDelayMs = (attempt: number): number =>
+    Math.min(
+      SESSION_DELTA_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1),
+      SESSION_DELTA_RETRY_MAX_DELAY_MS,
+    );
+
+  const scheduleFlush = (delayMs = SESSION_DELTA_DEBOUNCE_MS) => {
+    if (ctx.sessionDelta.timer || ctx.sessionDelta.closed) {
+      return;
+    }
+    ctx.sessionDelta.timer = setTimeout(() => {
+      ctx.sessionDelta.timer = null;
+      void flushSessionDeltaSync();
+    }, delayMs);
+    ctx.sessionDelta.timer.unref?.();
+  };
+
+  const requeueTargetUpdates = (updates: PendingSessionDelta[]): number => {
+    if (updates.length === 0) {
+      return 0;
+    }
+    const targetKey = buildTargetKey(updates[0]!);
+    const nextAttempt = (ctx.sessionDelta.retryAttemptsByTarget.get(targetKey) ?? 0) + 1;
+    ctx.sessionDelta.retryAttemptsByTarget.set(targetKey, nextAttempt);
+    for (const update of updates) {
+      ctx.sessionDelta.pendingByPath.set(update.sessionFile, update);
+    }
+    return computeRetryDelayMs(nextAttempt);
+  };
+
+  const ensureSessionsIndexBootstrapped = async (target?: SessionIndexBootstrapTarget) => {
     if (!ctx.cfg) {
       return;
     }
     if (!resolveSessionsSearchState(ctx.cfg).effective) {
       return;
     }
-    if (ctx.sessionsIndex.bootstrapped) {
+    const workspaceTarget = resolveRuntimeWorkspaceTarget({
+      api,
+      ...(target ?? {}),
+    });
+    if (!workspaceTarget) {
+      api.logger.warn(`anchorclaw: sessions index bootstrap skipped (${RUNTIME_WORKSPACE_UNAVAILABLE})`);
       return;
     }
-    if (ctx.sessionsIndex.bootstrapPromise) {
-      await ctx.sessionsIndex.bootstrapPromise;
+    const visibility = ctx.cfg.sessions?.visibility ?? "current";
+    const visibleAgentIds =
+      visibility === "visible"
+        ? await ctx.listVisibleAgentIds(workspaceTarget.agentId)
+        : [workspaceTarget.agentId];
+    const bootstrapKey = [
+      visibility,
+      workspaceTarget.workspaceDir,
+      ...visibleAgentIds.slice().sort(),
+    ].join("\u0000");
+    if (ctx.sessionsIndex.bootstrappedKeys.has(bootstrapKey)) {
       return;
     }
-    ctx.sessionsIndex.bootstrapPromise = (async () => {
+    const activeBootstrap = ctx.sessionsIndex.bootstrapPromises.get(bootstrapKey);
+    if (activeBootstrap) {
+      await activeBootstrap;
+      return;
+    }
+    const bootstrapPromise = (async () => {
       try {
         await ctx.ensureReady();
-        const workspaceTarget = resolveRuntimeWorkspaceTarget({ api });
-        if (!workspaceTarget) {
-          throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
-        }
         const scope = await resolveUserAndWorkspaceScope({
           api,
           pool: ctx.getPool(),
@@ -68,63 +126,63 @@ export function createSessionDeltaRuntime(params: {
           sessionKey: workspaceTarget.sessionKey,
           configuredExternalId: ctx.cfg?.identity?.externalId,
         });
-        const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
-        if ((ctx.cfg?.sessions?.visibility ?? "current") === "visible") {
-          const visibleAgentIds = await ctx.listVisibleAgentIds();
+        if (visibility === "visible") {
           await syncVisibleSessionsIndexDb({
             pool: ctx.getPool(),
             userId: scope.userId,
             workspaceId: scope.workspaceId,
-            agentId: currentAgentId,
-            otherAgentIds: visibleAgentIds.filter((agentId) => agentId !== currentAgentId),
+            agentId: workspaceTarget.agentId,
+            otherAgentIds: visibleAgentIds.filter((agentId) => agentId !== workspaceTarget.agentId),
           });
         } else {
           await syncSessionsIndexDb({
             pool: ctx.getPool(),
             userId: scope.userId,
             workspaceId: scope.workspaceId,
-            agentId: currentAgentId,
+            agentId: workspaceTarget.agentId,
           });
         }
-        ctx.sessionsIndex.bootstrapped = true;
+        ctx.sessionsIndex.bootstrappedKeys.add(bootstrapKey);
       } catch (error) {
         api.logger.warn(
-          `anchorclaw: sessions index bootstrap failed (${error instanceof Error ? error.message : String(error)})`,
+          `anchorclaw: sessions index bootstrap failed (agent=${workspaceTarget.agentId}, workspace=${workspaceTarget.workspaceDir}: ${error instanceof Error ? error.message : String(error)})`,
         );
       } finally {
-        ctx.sessionsIndex.bootstrapPromise = null;
+        ctx.sessionsIndex.bootstrapPromises.delete(bootstrapKey);
       }
     })();
-    await ctx.sessionsIndex.bootstrapPromise;
+    ctx.sessionsIndex.bootstrapPromises.set(bootstrapKey, bootstrapPromise);
+    await bootstrapPromise;
   };
 
   const flushSessionDeltaSync = async () => {
     if (ctx.sessionDelta.closed) {
-      ctx.sessionDelta.pendingFiles.clear();
+      ctx.sessionDelta.pendingByPath.clear();
       return;
     }
     if (!ctx.cfg) {
-      ctx.sessionDelta.pendingFiles.clear();
+      ctx.sessionDelta.pendingByPath.clear();
       return;
     }
     if (!resolveSessionsSearchState(ctx.cfg).effective) {
-      ctx.sessionDelta.pendingFiles.clear();
+      ctx.sessionDelta.pendingByPath.clear();
       return;
     }
-    if (ctx.sessionDelta.pendingFiles.size === 0) {
+    if (ctx.sessionDelta.pendingByPath.size === 0) {
       return;
     }
     if (ctx.sessionDelta.syncInFlight) {
       return;
     }
 
-    const batch = Array.from(ctx.sessionDelta.pendingFiles);
+    const batch = Array.from(ctx.sessionDelta.pendingByPath.values());
     const sessionDeltaThresholds = resolveSessionDeltaThresholds(ctx.cfg);
-    ctx.sessionDelta.pendingFiles.clear();
-    const dirtyFiles: string[] = [];
-    for (const sessionFile of batch) {
+    ctx.sessionDelta.pendingByPath.clear();
+    const dirtyUpdates: PendingSessionDelta[] = [];
+    for (const update of batch) {
+      const sessionFile = update.sessionFile;
       if (isSessionArchiveArtifactPath(sessionFile)) {
-        dirtyFiles.push(sessionFile);
+        dirtyUpdates.push(update);
         continue;
       }
       let statSize: number | null = null;
@@ -133,7 +191,7 @@ export function createSessionDeltaRuntime(params: {
         statSize = typeof stat.size === "number" ? stat.size : null;
       } catch {
         // If stat is unavailable, keep previous behavior and allow targeted sync.
-        dirtyFiles.push(sessionFile);
+        dirtyUpdates.push(update);
       }
       if (statSize === null) {
         continue;
@@ -171,70 +229,92 @@ export function createSessionDeltaRuntime(params: {
         sessionDeltaThresholds.deltaMessages > 0 &&
         pendingMessages >= sessionDeltaThresholds.deltaMessages;
       if (bytesHit || messagesHit) {
-        dirtyFiles.push(sessionFile);
+        dirtyUpdates.push(update);
       }
     }
-    if (dirtyFiles.length === 0) {
+    if (dirtyUpdates.length === 0) {
       return;
     }
 
     ctx.sessionDelta.syncInFlight = (async () => {
+      let retryDelayMs = 0;
+      const updatesByTarget = new Map<string, PendingSessionDelta[]>();
       try {
         api.logger.info(
-          `anchorclaw: sessions delta flush start (batch=${batch.length}, dirty=${dirtyFiles.length}, visibility=${ctx.cfg?.sessions?.visibility ?? "current"})`,
+          `anchorclaw: sessions delta flush start (batch=${batch.length}, dirty=${dirtyUpdates.length}, visibility=${ctx.cfg?.sessions?.visibility ?? "current"})`,
         );
-        await ctx.ensureReady();
-        const workspaceTarget = resolveRuntimeWorkspaceTarget({ api });
-        if (!workspaceTarget) {
-          throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
+        for (const update of dirtyUpdates) {
+          const key = buildTargetKey(update);
+          const existing = updatesByTarget.get(key);
+          if (existing) {
+            existing.push(update);
+          } else {
+            updatesByTarget.set(key, [update]);
+          }
         }
-        const scope = await resolveUserAndWorkspaceScope({
-          api,
-          pool: ctx.getPool(),
-          workspaceDir: workspaceTarget.workspaceDir,
-          agentId: workspaceTarget.agentId,
-          sessionKey: workspaceTarget.sessionKey,
-          configuredExternalId: ctx.cfg?.identity?.externalId,
-        });
-        const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
-        await syncSessionsIndexDb({
-          pool: ctx.getPool(),
-          userId: scope.userId,
-          workspaceId: scope.workspaceId,
-          agentId: currentAgentId,
-          sessionFiles: dirtyFiles,
-        });
-        for (const sessionFile of dirtyFiles) {
-          const state = ctx.sessionDelta.stateByPath.get(sessionFile);
-          if (!state) {
+        await ctx.ensureReady();
+
+        let syncedTargets = 0;
+        for (const [targetKey, updates] of updatesByTarget.entries()) {
+          const target = updates[0]!;
+          try {
+            const scope = await resolveUserAndWorkspaceScope({
+              api,
+              pool: ctx.getPool(),
+              workspaceDir: target.workspaceDir,
+              agentId: target.agentId,
+              sessionKey: target.sessionKey,
+              configuredExternalId: ctx.cfg?.identity?.externalId,
+            });
+            await syncSessionsIndexDb({
+              pool: ctx.getPool(),
+              userId: scope.userId,
+              workspaceId: scope.workspaceId,
+              agentId: target.agentId,
+              sessionFiles: updates.map((update) => update.sessionFile),
+            });
+            syncedTargets += 1;
+            ctx.sessionDelta.retryAttemptsByTarget.delete(targetKey);
+          } catch (error) {
+            const targetRetryDelayMs = requeueTargetUpdates(updates);
+            retryDelayMs = Math.max(retryDelayMs, targetRetryDelayMs);
+            api.logger.warn(
+              `anchorclaw: sessions delta target sync failed (agent=${target.agentId}, workspace=${target.workspaceDir}: ${error instanceof Error ? error.message : String(error)}; retry in ${targetRetryDelayMs}ms)`,
+            );
             continue;
           }
-          ctx.sessionDelta.stateByPath.set(sessionFile, {
-            lastSize: state.lastSize,
-            pendingBytes:
-              sessionDeltaThresholds.deltaBytes > 0
-                ? Math.max(0, state.pendingBytes - sessionDeltaThresholds.deltaBytes)
-                : 0,
-            pendingMessages:
-              sessionDeltaThresholds.deltaMessages > 0
-                ? Math.max(0, state.pendingMessages - sessionDeltaThresholds.deltaMessages)
-                : 0,
-          });
+          for (const update of updates) {
+            const state = ctx.sessionDelta.stateByPath.get(update.sessionFile);
+            if (!state) {
+              continue;
+            }
+            ctx.sessionDelta.stateByPath.set(update.sessionFile, {
+              lastSize: state.lastSize,
+              pendingBytes:
+                sessionDeltaThresholds.deltaBytes > 0
+                  ? Math.max(0, state.pendingBytes - sessionDeltaThresholds.deltaBytes)
+                  : 0,
+              pendingMessages:
+                sessionDeltaThresholds.deltaMessages > 0
+                  ? Math.max(0, state.pendingMessages - sessionDeltaThresholds.deltaMessages)
+                  : 0,
+            });
+          }
         }
         api.logger.info(
-          `anchorclaw: sessions delta flush done (batch=${batch.length}, dirty=${dirtyFiles.length}, agent=${currentAgentId})`,
+          `anchorclaw: sessions delta flush done (batch=${batch.length}, dirty=${dirtyUpdates.length}, targets=${syncedTargets})`,
         );
       } catch (error) {
+        for (const updates of updatesByTarget.values()) {
+          retryDelayMs = Math.max(retryDelayMs, requeueTargetUpdates(updates));
+        }
         api.logger.warn(
-          `anchorclaw: sessions delta sync failed (${error instanceof Error ? error.message : String(error)})`,
+          `anchorclaw: sessions delta sync failed (${error instanceof Error ? error.message : String(error)}${retryDelayMs > 0 ? `; retry in ${retryDelayMs}ms` : ""})`,
         );
       } finally {
         ctx.sessionDelta.syncInFlight = null;
-        if (ctx.sessionDelta.pendingFiles.size > 0 && !ctx.sessionDelta.closed && !ctx.sessionDelta.timer) {
-          ctx.sessionDelta.timer = setTimeout(() => {
-            ctx.sessionDelta.timer = null;
-            void flushSessionDeltaSync();
-          }, SESSION_DELTA_DEBOUNCE_MS);
+        if (ctx.sessionDelta.pendingByPath.size > 0 && !ctx.sessionDelta.closed && !ctx.sessionDelta.timer) {
+          scheduleFlush(retryDelayMs > 0 ? retryDelayMs : SESSION_DELTA_DEBOUNCE_MS);
         }
       }
     })();
@@ -242,19 +322,16 @@ export function createSessionDeltaRuntime(params: {
     await ctx.sessionDelta.syncInFlight;
   };
 
-  const scheduleSessionDeltaSync = (sessionFile: string) => {
-    const filePath = sessionFile.trim();
+  const scheduleSessionDeltaSync = (update: PendingSessionDelta) => {
+    const filePath = update.sessionFile.trim();
     if (!filePath || ctx.sessionDelta.closed) {
       return;
     }
-    ctx.sessionDelta.pendingFiles.add(filePath);
-    if (ctx.sessionDelta.timer) {
-      return;
-    }
-    ctx.sessionDelta.timer = setTimeout(() => {
-      ctx.sessionDelta.timer = null;
-      void flushSessionDeltaSync();
-    }, SESSION_DELTA_DEBOUNCE_MS);
+    ctx.sessionDelta.pendingByPath.set(filePath, {
+      ...update,
+      sessionFile: filePath,
+    });
+    scheduleFlush();
   };
 
   const ensureSessionDeltaListener = () => {
@@ -269,78 +346,77 @@ export function createSessionDeltaRuntime(params: {
       api.logger.warn("anchorclaw: runtime.events.onSessionTranscriptUpdate unavailable; sessions delta sync disabled");
       return;
     }
-    const currentAgentId = String((api as any)?.runtime?.agentId ?? "main");
-    const isRelevantSessionDeltaPath = async (sessionFile: string): Promise<boolean> => {
-      if ((ctx.cfg?.sessions?.visibility ?? "current") === "visible") {
-        const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
-        const transcriptAgentId = lookup ? resolveSessionAgentId(lookup) : null;
-        if (!lookup || !transcriptAgentId) {
-          const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
-          ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
-          if (next === 1 || next === 5 || next % 20 === 0) {
-            api.logger.warn(
-              `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
-            );
-          }
-          return false;
-        }
-        const visibleAgentIds = await ctx.listVisibleAgentIds();
-        if (!visibleAgentIds.includes(transcriptAgentId)) {
-          const next = (ctx.sessionDelta.ignoredPathCounts.get(lookup) ?? 0) + 1;
-          ctx.sessionDelta.ignoredPathCounts.set(lookup, next);
-          if (next === 1 || next === 5 || next % 20 === 0) {
-            api.logger.warn(
-              `anchorclaw: ignored session delta update outside current workspace scope (${lookup}) [count=${next}]`,
-            );
-          }
-          return false;
-        }
-        const inAgentDir = await isSessionFileForAgent({
-          sessionFile,
-          agentId: transcriptAgentId,
-        });
-        if (inAgentDir) {
-          return true;
-        }
-        const next = (ctx.sessionDelta.ignoredPathCounts.get(lookup) ?? 0) + 1;
-        ctx.sessionDelta.ignoredPathCounts.set(lookup, next);
-        if (next === 1 || next === 5 || next % 20 === 0) {
-          api.logger.warn(
-            `anchorclaw: ignored session delta update due to unrecognized path (${lookup}) [count=${next}]`,
-          );
-        }
-        return false;
+    const warnIgnoredUpdate = (key: string, reason: string) => {
+      const next = (ctx.sessionDelta.ignoredPathCounts.get(key) ?? 0) + 1;
+      ctx.sessionDelta.ignoredPathCounts.set(key, next);
+      if (next === 1 || next === 5 || next % 20 === 0) {
+        api.logger.warn(`anchorclaw: ignored session delta update ${reason} (${key}) [count=${next}]`);
       }
-      const inCurrentAgentDir = await isSessionFileForAgent({
-        sessionFile,
-        agentId: currentAgentId,
-      });
-      if (!inCurrentAgentDir) {
-        const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
-        const logKey = lookup || sessionFile;
-        const next = (ctx.sessionDelta.ignoredPathCounts.get(logKey) ?? 0) + 1;
-        ctx.sessionDelta.ignoredPathCounts.set(logKey, next);
-        if (next === 1 || next === 5 || next % 20 === 0) {
-          api.logger.warn(
-            `anchorclaw: ignored session delta update outside current visibility (${logKey}) [count=${next}]`,
-          );
-        }
-        return false;
+    };
+    const resolveSessionDeltaTarget = async (update: {
+      sessionFile?: unknown;
+      sessionKey?: unknown;
+      agentId?: unknown;
+    }): Promise<PendingSessionDelta | null> => {
+      const sessionFile = typeof update.sessionFile === "string" ? update.sessionFile.trim() : "";
+      if (!sessionFile) {
+        return null;
       }
       const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
-      if (!lookup) {
-        const next = (ctx.sessionDelta.ignoredPathCounts.get(sessionFile) ?? 0) + 1;
-        ctx.sessionDelta.ignoredPathCounts.set(sessionFile, next);
-        if (next === 1 || next === 5 || next % 20 === 0) {
-          api.logger.warn(
-            `anchorclaw: ignored session delta update due to unrecognized path (${sessionFile}) [count=${next}]`,
-          );
-        }
-        return false;
+      const pathAgentId = lookup ? resolveSessionAgentId(lookup) : null;
+      const eventAgentId =
+        typeof update.agentId === "string" && update.agentId.trim() ? update.agentId.trim() : null;
+      if (!lookup || !pathAgentId) {
+        warnIgnoredUpdate(sessionFile, "due to unrecognized path");
+        return null;
       }
-      return true;
+      if (eventAgentId && eventAgentId !== pathAgentId) {
+        warnIgnoredUpdate(
+          lookup,
+          `due to agent/path mismatch (event=${eventAgentId}, path=${pathAgentId})`,
+        );
+        return null;
+      }
+      const agentId = eventAgentId ?? pathAgentId;
+      const inAgentDir = await isSessionFileForAgent({
+        sessionFile,
+        agentId,
+      });
+      if (!inAgentDir) {
+        warnIgnoredUpdate(lookup, "due to unrecognized path");
+        return null;
+      }
+      const sessionKey =
+        typeof update.sessionKey === "string" && update.sessionKey.trim()
+          ? update.sessionKey.trim()
+          : undefined;
+      const runtimeAgentId = String((api as any)?.runtime?.agentId ?? "").trim();
+      const runtimeWorkspaceDir =
+        agentId === runtimeAgentId && typeof (api as any)?.runtime?.workspaceDir === "string"
+          ? (api as any).runtime.workspaceDir
+          : undefined;
+      const workspaceTarget = resolveRuntimeWorkspaceTarget({
+        api,
+        agentId,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
+      });
+      if (!workspaceTarget) {
+        warnIgnoredUpdate(lookup, `because workspace is unavailable for agent ${agentId}`);
+        return null;
+      }
+      return {
+        sessionFile,
+        workspaceDir: workspaceTarget.workspaceDir,
+        agentId: workspaceTarget.agentId,
+        ...(workspaceTarget.sessionKey ? { sessionKey: workspaceTarget.sessionKey } : {}),
+      };
     };
-    ctx.sessionDelta.unsubscribe = subscribe((update: { sessionFile?: unknown }) => {
+    ctx.sessionDelta.unsubscribe = subscribe((update: {
+      sessionFile?: unknown;
+      sessionKey?: unknown;
+      agentId?: unknown;
+    }) => {
       if (ctx.sessionDelta.closed) {
         return;
       }
@@ -350,11 +426,14 @@ export function createSessionDeltaRuntime(params: {
       }
       api.logger.info(`anchorclaw: transcript update event received (${sessionFile})`);
       void (async () => {
-        if (!(await isRelevantSessionDeltaPath(sessionFile))) {
+        const target = await resolveSessionDeltaTarget(update);
+        if (!target) {
           return;
         }
-        api.logger.info(`anchorclaw: transcript update accepted for delta sync (${sessionFile})`);
-        scheduleSessionDeltaSync(sessionFile);
+        api.logger.info(
+          `anchorclaw: transcript update accepted for delta sync (${sessionFile}, agent=${target.agentId}, workspace=${target.workspaceDir})`,
+        );
+        scheduleSessionDeltaSync(target);
       })();
     });
   };
@@ -365,7 +444,8 @@ export function createSessionDeltaRuntime(params: {
       clearTimeout(ctx.sessionDelta.timer);
       ctx.sessionDelta.timer = null;
     }
-    ctx.sessionDelta.pendingFiles.clear();
+    ctx.sessionDelta.pendingByPath.clear();
+    ctx.sessionDelta.retryAttemptsByTarget.clear();
     ctx.sessionDelta.stateByPath.clear();
     if (ctx.sessionDelta.unsubscribe) {
       try {

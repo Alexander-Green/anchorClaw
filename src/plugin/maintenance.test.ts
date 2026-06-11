@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMaintenanceRuntime } from "./maintenance.js";
 
 const runMaintenanceCycle = vi.hoisted(() => vi.fn());
+const invalidatePromptMemory = vi.fn();
 
 vi.mock("../maintenance/job.js", () => ({
   runMaintenanceCycle,
@@ -57,25 +58,36 @@ function buildCtx(
   } as any;
 }
 
+async function flushPromises(iterations = 12) {
+  for (let index = 0; index < iterations; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+function completedMaintenanceResult() {
+  return {
+    status: "completed",
+    runId: "run-1",
+    scannedCount: 0,
+    heuristicCandidateCount: 0,
+    insertedCount: 0,
+    skippedCount: 0,
+    dryRun: false,
+  };
+}
+
 describe("createMaintenanceRuntime", () => {
   beforeEach(() => {
     runMaintenanceCycle.mockReset();
-    runMaintenanceCycle.mockResolvedValue({
-      status: "completed",
-      runId: "run-1",
-      scannedCount: 0,
-      heuristicCandidateCount: 0,
-      insertedCount: 0,
-      skippedCount: 0,
-      dryRun: false,
-    });
+    invalidatePromptMemory.mockReset();
+    runMaintenanceCycle.mockResolvedValue(completedMaintenanceResult());
   });
 
   it("defers the first non-dry-run maintenance cycle until startup triggers it", async () => {
     const api = buildApi();
     const ctx = buildCtx("pending");
 
-    const runtime = createMaintenanceRuntime({ api, ctx });
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
     await Promise.resolve();
     await Promise.resolve();
     runtime.cleanupMaintenance();
@@ -98,7 +110,7 @@ describe("createMaintenanceRuntime", () => {
       const api = buildApi();
       const ctx = buildCtx("pending");
 
-      const runtime = createMaintenanceRuntime({ api, ctx });
+      const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
       runtime.cleanupMaintenance();
 
       expect(unref).toHaveBeenCalledTimes(1);
@@ -113,7 +125,7 @@ describe("createMaintenanceRuntime", () => {
     const api = buildApi();
     const ctx = buildCtx("pending");
 
-    const runtime = createMaintenanceRuntime({ api, ctx });
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
     await Promise.resolve();
     await Promise.resolve();
 
@@ -132,7 +144,7 @@ describe("createMaintenanceRuntime", () => {
     const api = buildApi();
     const ctx = buildCtx("pending");
 
-    const runtime = createMaintenanceRuntime({ api, ctx });
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
     await Promise.resolve();
     await Promise.resolve();
 
@@ -153,7 +165,7 @@ describe("createMaintenanceRuntime", () => {
     const api = buildApi();
     const ctx = buildCtx("ready");
 
-    const runtime = createMaintenanceRuntime({ api, ctx });
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
     await Promise.resolve();
     await Promise.resolve();
     runtime.triggerMaintenanceNow();
@@ -164,6 +176,31 @@ describe("createMaintenanceRuntime", () => {
     runtime.cleanupMaintenance();
 
     expect(runMaintenanceCycle).toHaveBeenCalledTimes(1);
+    expect(invalidatePromptMemory).not.toHaveBeenCalled();
+  });
+
+  it("invalidates only the workspace where maintenance inserted durable memory", async () => {
+    runMaintenanceCycle.mockResolvedValueOnce({
+      status: "completed",
+      runId: "run-1",
+      scannedCount: 2,
+      heuristicCandidateCount: 1,
+      insertedCount: 1,
+      skippedCount: 0,
+      dryRun: false,
+    });
+    const api = buildApi();
+    const ctx = buildCtx("ready");
+
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.triggerMaintenanceNow();
+    await Promise.resolve();
+    await Promise.resolve();
+    runtime.cleanupMaintenance();
+
+    expect(invalidatePromptMemory).toHaveBeenCalledWith({ workspaceDir: "/workspace" });
   });
 
   it("does not arm the scheduler until startMaintenance when autostart is disabled", async () => {
@@ -178,7 +215,7 @@ describe("createMaintenanceRuntime", () => {
       const api = buildApi();
       const ctx = buildCtx("ready");
 
-      const runtime = createMaintenanceRuntime({ api, ctx, autostart: false });
+      const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory, autostart: false });
       expect(globalThis.setInterval).not.toHaveBeenCalled();
 
       runtime.startMaintenance();
@@ -195,7 +232,7 @@ describe("createMaintenanceRuntime", () => {
     const api = buildApi();
     const ctx = buildCtx("ready");
 
-    const runtime = createMaintenanceRuntime({ api, ctx, autostart: false });
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory, autostart: false });
     runtime.triggerMaintenanceNow();
     await Promise.resolve();
     await Promise.resolve();
@@ -220,7 +257,7 @@ describe("createMaintenanceRuntime", () => {
       const api = buildApi();
       const ctx = buildCtx("ready", { workspaceScope: undefined });
 
-      const runtime = createMaintenanceRuntime({ api, ctx });
+      const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
       runtime.cleanupMaintenance();
 
       expect(globalThis.setInterval).not.toHaveBeenCalled();
@@ -234,7 +271,7 @@ describe("createMaintenanceRuntime", () => {
     }
   });
 
-  it("uses the resolved default-agent workspace instead of cfg.workspaceDir", async () => {
+  it("uses the resolved default-agent workspace without any global workspace fallback", async () => {
     const api = buildApi();
     (api as any).runtime.config.current = () => ({
       agents: {
@@ -243,7 +280,7 @@ describe("createMaintenanceRuntime", () => {
     });
     const ctx = buildCtx("ready");
 
-    const runtime = createMaintenanceRuntime({ api, ctx });
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
     await Promise.resolve();
     await Promise.resolve();
     runtime.triggerMaintenanceNow();
@@ -276,7 +313,7 @@ describe("createMaintenanceRuntime", () => {
       workspaceScope: { mode: "all-agent-workspaces" },
     });
 
-    const runtime = createMaintenanceRuntime({ api, ctx });
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
     await Promise.resolve();
     await Promise.resolve();
     runtime.triggerMaintenanceNow();
@@ -318,7 +355,7 @@ describe("createMaintenanceRuntime", () => {
       workspaceScope: { mode: "agents", agents: ["ops", "main", "qa"] },
     });
 
-    const runtime = createMaintenanceRuntime({ api, ctx });
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
     await Promise.resolve();
     await Promise.resolve();
     runtime.triggerMaintenanceNow();
@@ -380,7 +417,7 @@ describe("createMaintenanceRuntime", () => {
       workspaceScope: { mode: "all-agent-workspaces" },
     });
 
-    const runtime = createMaintenanceRuntime({ api, ctx });
+    const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
     await Promise.resolve();
     await Promise.resolve();
     runtime.triggerMaintenanceNow();
@@ -400,5 +437,148 @@ describe("createMaintenanceRuntime", () => {
     expect(api.logger.warn).toHaveBeenCalledWith(
       "anchorclaw: maintenance cycle failed (agent main) (first workspace boom)",
     );
+  });
+
+  it("coalesces overlapping scheduler ticks into one rerun with freshly resolved targets", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    const unref = vi.fn();
+    const interval = { unref };
+    let intervalCallback: (() => void) | undefined;
+    (globalThis as any).setInterval = vi.fn((callback: () => void) => {
+      intervalCallback = callback;
+      return interval;
+    });
+    (globalThis as any).clearInterval = vi.fn();
+
+    let releaseFirst: ((result: ReturnType<typeof completedMaintenanceResult>) => void) | undefined;
+    let releaseRerun: ((result: ReturnType<typeof completedMaintenanceResult>) => void) | undefined;
+    let invocation = 0;
+    runMaintenanceCycle.mockImplementation(() => {
+      invocation += 1;
+      if (invocation === 1) {
+        return new Promise((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      if (invocation === 3) {
+        return new Promise((resolve) => {
+          releaseRerun = resolve;
+        });
+      }
+      return Promise.resolve(completedMaintenanceResult());
+    });
+
+    try {
+      const api = buildApi();
+      let runtimeConfig = {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/agents/a" },
+            { id: "ops", workspace: "/agents/b" },
+          ],
+        },
+      };
+      (api as any).runtime.config.current = () => runtimeConfig;
+      const ctx = buildCtx("ready", {
+        workspaceScope: { mode: "all-agent-workspaces" },
+      });
+
+      const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
+      runtime.triggerMaintenanceNow();
+      await flushPromises();
+
+      expect(runMaintenanceCycle).toHaveBeenCalledTimes(1);
+      expect(intervalCallback).toBeTypeOf("function");
+
+      intervalCallback?.();
+      intervalCallback?.();
+      intervalCallback?.();
+      runtimeConfig = {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/agents/a" },
+            { id: "qa", workspace: "/agents/c" },
+          ],
+        },
+      };
+
+      releaseFirst?.(completedMaintenanceResult());
+      await flushPromises(16);
+      expect(runMaintenanceCycle).toHaveBeenCalledTimes(3);
+
+      intervalCallback?.();
+      intervalCallback?.();
+      releaseRerun?.(completedMaintenanceResult());
+      await flushPromises(24);
+      runtime.cleanupMaintenance();
+
+      expect(runMaintenanceCycle).toHaveBeenCalledTimes(4);
+      expect(runMaintenanceCycle.mock.calls.map(([call]) => call.workspaceDir)).toEqual([
+        "/agents/a",
+        "/agents/b",
+        "/agents/a",
+        "/agents/c",
+      ]);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  it("does not start a queued rerun after maintenance cleanup", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    const unref = vi.fn();
+    const interval = { unref };
+    let intervalCallback: (() => void) | undefined;
+    (globalThis as any).setInterval = vi.fn((callback: () => void) => {
+      intervalCallback = callback;
+      return interval;
+    });
+    (globalThis as any).clearInterval = vi.fn();
+
+    let releaseFirst: ((result: ReturnType<typeof completedMaintenanceResult>) => void) | undefined;
+    runMaintenanceCycle
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseFirst = resolve;
+          }),
+      )
+      .mockResolvedValue(completedMaintenanceResult());
+
+    try {
+      const api = buildApi();
+      (api as any).runtime.config.current = () => ({
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/agents/a" },
+            { id: "ops", workspace: "/agents/b" },
+          ],
+        },
+      });
+      const ctx = buildCtx("ready", {
+        workspaceScope: { mode: "all-agent-workspaces" },
+      });
+
+      const runtime = createMaintenanceRuntime({ api, ctx, invalidatePromptMemory });
+      runtime.triggerMaintenanceNow();
+      await flushPromises();
+
+      intervalCallback?.();
+      runtime.cleanupMaintenance();
+      releaseFirst?.(completedMaintenanceResult());
+      await flushPromises(24);
+
+      expect(runMaintenanceCycle).toHaveBeenCalledTimes(2);
+      expect(runMaintenanceCycle.mock.calls.map(([call]) => call.workspaceDir)).toEqual([
+        "/agents/a",
+        "/agents/b",
+      ]);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
   });
 });

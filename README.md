@@ -65,8 +65,10 @@ auditability, or deterministic updates.
 AnchorClaw starts lower in the stack:
 
 - PostgreSQL is the single source of truth.
-- Markdown files become compatibility, import, export, and snapshot surfaces.
-- OpenClaw tools keep working through a DB-backed compatibility layer.
+- Markdown files become explicit import, export, and snapshot surfaces, not a
+  runtime fallback.
+- OpenClaw file-shaped compatibility paths keep working through a DB-backed
+  compatibility layer.
 - Semantic retrieval can be added later without making vectors the source of
   truth.
 
@@ -91,7 +93,8 @@ AnchorClaw starts lower in the stack:
   imports target explicitly selected agents, and maintenance follows an
   explicit default, selected-agent, or all-workspaces scope.
 - **Path-based workspace deduplication** so several agents pointing to the same
-  physical workspace do not create duplicate maintenance or import targets.
+  resolved workspace path do not create duplicate maintenance or import
+  targets.
 - **Workspace and identity isolation** for cleaner multi-user and
   multi-workspace operation.
 - **A future-proof base** for semantic recall, persona context, episodes, and

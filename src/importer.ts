@@ -103,7 +103,6 @@ export type LegacyDailyFileScan = {
 export type LegacyWorkspaceScanResult = {
   sourceDir: string;
   targetWorkspaceDir: string;
-  workspaceDir: string;
   memoryMd: LegacyMemoryMdScan;
   dailyFiles: LegacyDailyFileScan[];
   activeLegacyCount: number;
@@ -120,20 +119,21 @@ export type LegacyWorkspaceImportSummary = {
   dailyArchivedCount: number;
   dailySkippedImportedCount: number;
   dailyUnsupportedCount: number;
+  dailyFailedCount: number;
+  hadFailures: boolean;
 };
 
 type LegacyWorkspaceBinding = {
   sourceDir?: string;
   targetWorkspaceDir?: string;
-  workspaceDir?: string;
 };
 
 function resolveLegacySourceDir(params: LegacyWorkspaceBinding): string {
-  return path.resolve(params.sourceDir ?? params.workspaceDir ?? params.targetWorkspaceDir ?? ".");
+  return path.resolve(params.sourceDir ?? params.targetWorkspaceDir ?? ".");
 }
 
 function resolveLegacyTargetWorkspaceDir(params: LegacyWorkspaceBinding): string {
-  return path.resolve(params.targetWorkspaceDir ?? params.workspaceDir ?? params.sourceDir ?? ".");
+  return path.resolve(params.targetWorkspaceDir ?? params.sourceDir ?? ".");
 }
 
 function parseMemoryMdToItems(params: { content: string; relPath: string }): MemoryMdItem[] {
@@ -579,7 +579,6 @@ async function importMemoryMd(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir?: string;
   sourceDir?: string;
   targetWorkspaceDir?: string;
   agentId?: string;
@@ -793,7 +792,6 @@ async function importDailyMemory(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir?: string;
   sourceDir?: string;
   targetWorkspaceDir?: string;
   agentId?: string;
@@ -804,6 +802,7 @@ async function importDailyMemory(params: {
   archivedCount: number;
   skippedImportedCount: number;
   unsupportedCount: number;
+  failedCount: number;
 }> {
   const sourceDir = resolveLegacySourceDir(params);
   const targetWorkspaceDir = resolveLegacyTargetWorkspaceDir(params);
@@ -817,6 +816,7 @@ async function importDailyMemory(params: {
       archivedCount: 0,
       skippedImportedCount: 0,
       unsupportedCount: 0,
+      failedCount: 0,
     };
   }
 
@@ -833,6 +833,7 @@ async function importDailyMemory(params: {
   let archivedCount = 0;
   let skippedImportedCount = 0;
   let unsupportedCount = 0;
+  let failedCount = 0;
 
   for (const entry of dirents) {
     if (!entry.isFile()) {
@@ -934,6 +935,7 @@ async function importDailyMemory(params: {
         params.api.logger.info(`anchorclaw: archived legacy daily file ${relPath} -> ${archiveRelPath}`);
       }
     } catch (error) {
+      failedCount += 1;
       params.api.logger.warn(
         `anchorclaw: failed to import ${relPath} into memory_daily_entries (${error instanceof Error ? error.message : String(error)})`,
       );
@@ -945,6 +947,7 @@ async function importDailyMemory(params: {
     archivedCount,
     skippedImportedCount,
     unsupportedCount,
+    failedCount,
   };
 }
 
@@ -952,7 +955,6 @@ export async function scanLegacyWorkspace(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir?: string;
   sourceDir?: string;
   targetWorkspaceDir?: string;
   agentId?: string;
@@ -1083,7 +1085,6 @@ export async function scanLegacyWorkspace(params: {
   return {
     sourceDir,
     targetWorkspaceDir,
-    workspaceDir: sourceDir,
     memoryMd,
     dailyFiles,
     activeLegacyCount,
@@ -1098,7 +1099,6 @@ export async function runLegacyWorkspaceImport(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir?: string;
   sourceDir?: string;
   targetWorkspaceDir?: string;
   agentId?: string;
@@ -1122,6 +1122,8 @@ export async function runLegacyWorkspaceImport(params: {
     dailyArchivedCount: dailyResult.archivedCount,
     dailySkippedImportedCount: dailyResult.skippedImportedCount,
     dailyUnsupportedCount: dailyResult.unsupportedCount,
+    dailyFailedCount: dailyResult.failedCount,
+    hadFailures: memoryMdResult.overall !== "ready" || dailyResult.failedCount > 0,
   };
 }
 
@@ -1129,7 +1131,6 @@ export async function runOneTimeWorkspaceImport(params: {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   pool: PostgresPool;
-  workspaceDir?: string;
   sourceDir?: string;
   targetWorkspaceDir?: string;
   agentId?: string;

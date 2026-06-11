@@ -111,7 +111,7 @@ describe("flush inbox", () => {
       api: { runtime: { agentId: "main", sessionKey: "agent:main:main" } } as any,
       ctx: {
         disabledReason: undefined,
-        cfg: { workspaceDir: "/tmp/work", identity: { externalId: "ext-1" } },
+        cfg: { identity: { externalId: "ext-1" } },
         ensureReady: vi.fn(async () => undefined),
         getPool: () => pool,
         resolveActor: () => "anchorclaw-test",
@@ -124,6 +124,13 @@ describe("flush inbox", () => {
       importedFiles: 1,
       skippedImportedFiles: 0,
     });
+    expect(resolveScopeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/work",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
     expect(clientQuery).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO memory_import_files"),
       expect.arrayContaining([
@@ -160,6 +167,90 @@ describe("flush inbox", () => {
         "2026-06-02",
         "flush-2026-06-02T10-11-12-345Z.md",
       ),
+    );
+  });
+
+  it("does not attach global runtime session key when startup drains another agent workspace", async () => {
+    readdirMock
+      .mockResolvedValueOnce([dirDirent("2026-06-02")])
+      .mockResolvedValueOnce([fileDirent("flush-qa.md")]);
+    readFileMock.mockResolvedValueOnce("QA session context");
+    unlinkMock.mockResolvedValueOnce(undefined);
+    resolveScopeMock.mockResolvedValueOnce({
+      userId: "user-1",
+      workspaceId: "workspace-qa",
+    });
+
+    const clientQuery = vi.fn(async (sql: string) => {
+      const text = String(sql);
+      if (text === "BEGIN" || text === "COMMIT") return { rows: [] };
+      if (text.includes("INSERT INTO memory_import_files")) {
+        return { rows: [{ id: "ledger-qa" }] };
+      }
+      if (text.includes("INSERT INTO memory_daily_entries")) {
+        return {
+          rows: [{
+            id: "daily-qa",
+            content: "QA session context",
+            content_sha256: "daily-sha",
+            source_kind: "compaction_flush",
+            updated_at: "2026-06-02T10:12:00.000Z",
+          }],
+        };
+      }
+      if (text.includes("max(block_index)")) {
+        return { rows: [{ block_index: 0 }] };
+      }
+      if (text.includes("INSERT INTO memory_daily_blocks")) {
+        return { rows: [{ id: "block-qa" }] };
+      }
+      if (text.includes("INSERT INTO memory_audit_log")) {
+        return { rows: [] };
+      }
+      throw new Error(`unexpected client query: ${text}`);
+    });
+    const pool = {
+      query: vi.fn(),
+      connect: vi.fn(async () => ({
+        query: clientQuery,
+        release: vi.fn(),
+      })),
+    };
+
+    await drainFlushInbox({
+      api: {
+        runtime: {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          config: {
+            current: () => ({
+              agents: {
+                list: [
+                  { id: "main", default: true, workspace: "/agents/main" },
+                  { id: "qa", workspace: "/agents/qa" },
+                ],
+              },
+            }),
+          },
+        },
+      } as any,
+      ctx: {
+        disabledReason: undefined,
+        cfg: { identity: { externalId: "ext-1" } },
+        ensureReady: vi.fn(async () => undefined),
+        getPool: () => pool,
+        resolveActor: () => "anchorclaw-test",
+      } as any,
+      workspaceDir: "/agents/qa",
+      agentId: "qa",
+    });
+
+    expect(resolveScopeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: path.resolve("/agents/qa"),
+        agentId: "qa",
+        sessionKey: undefined,
+      }),
     );
   });
 });

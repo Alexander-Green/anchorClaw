@@ -46,7 +46,7 @@ export function createPostgresPool(params: { cfg: AnchorClawConfig }): pg.Pool {
   });
   const schema = postgres.schema ? assertSafeIdentifier(postgres.schema, "postgres.schema") : undefined;
   const poolMax = postgres.pool?.max ?? 10;
-  const connectionTimeoutMillis = postgres.pool?.connectionTimeoutMs ?? 10_000;
+  const connectionTimeoutMillis = postgres.pool?.connectionTimeoutMs ?? 5_000;
   const idleTimeoutMillis = postgres.pool?.idleTimeoutMs ?? 30_000;
   const port = postgres.port ?? 5432;
   return new pg.Pool({

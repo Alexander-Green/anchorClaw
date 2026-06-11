@@ -61,7 +61,7 @@ export type MemoryStatusCheckResult = {
     promptInjectionAllowed: boolean;
     startupPromptEnabled: boolean;
     startupPromptEffective: boolean;
-    readCompatibilityPath: "db-first";
+    readCompatibilityPath: "db-only";
     importMode: "canonical_table";
   };
   legacyImport?: {
@@ -91,19 +91,21 @@ export type MemoryStatusCheckResult = {
   };
 };
 
-export type PromptCacheState = {
-  lines: string[] | null;
-  error: string | null;
-  refreshPromise: Promise<void> | null;
+export type SessionsIndexState = {
+  bootstrapPromises: Map<string, Promise<void>>;
+  bootstrappedKeys: Set<string>;
 };
 
-export type SessionsIndexState = {
-  bootstrapPromise: Promise<void> | null;
-  bootstrapped: boolean;
+export type PendingSessionDelta = {
+  sessionFile: string;
+  workspaceDir: string;
+  agentId: string;
+  sessionKey?: string;
 };
 
 export type SessionDeltaRuntimeState = {
-  pendingFiles: Set<string>;
+  pendingByPath: Map<string, PendingSessionDelta>;
+  retryAttemptsByTarget: Map<string, number>;
   timer: ReturnType<typeof setTimeout> | null;
   syncInFlight: Promise<void> | null;
   unsubscribe: (() => void) | null;

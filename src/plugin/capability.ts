@@ -6,14 +6,13 @@ import {
 import { resolveSessionsSearchState } from "../config.js";
 import { createFlushInboxPlanResolver } from "./flush-inbox.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
+import type { SessionIndexBootstrapTarget } from "./session-delta.js";
 
 export function registerAnchorClawMemoryCapability(params: {
   ctx: PluginRuntimeContext;
-  refreshPromptCache: (options?: { force?: boolean }) => Promise<void>;
-  ensureSessionsIndexBootstrapped: () => Promise<void>;
-  ensureStartupBootstrap?: () => Promise<void>;
+  ensureSessionsIndexBootstrapped: (target?: SessionIndexBootstrapTarget) => Promise<void>;
 }) {
-  const { ctx, refreshPromptCache, ensureSessionsIndexBootstrapped, ensureStartupBootstrap } = params;
+  const { ctx, ensureSessionsIndexBootstrapped } = params;
   const api = ctx.api;
   const timezone =
     typeof api?.runtime?.config?.current === "function"
@@ -35,17 +34,6 @@ export function registerAnchorClawMemoryCapability(params: {
         reason: null,
       };
 
-      if (durableState.overall === "pending" && typeof ensureStartupBootstrap === "function") {
-        void ensureStartupBootstrap();
-      } else if (!ctx.promptCache.lines && !ctx.promptCache.error) {
-        void refreshPromptCache();
-      }
-      const cached = ctx.promptCache.lines ?? [];
-      const cacheNotice = ctx.promptCache.error
-        ? [`[AnchorClaw durable memory cache unavailable: ${ctx.promptCache.error}]`, ""]
-        : cached.length === 0
-          ? ["[AnchorClaw durable memory cache is warming up...]", ""]
-          : [];
       const sdkNotice = ctx.sdkHealth.degraded
         ? [
             `[AnchorClaw sessions SDK is degraded: ${ctx.sdkHealth.reason ?? "unknown error"}; operation=${ctx.sdkHealth.affectedOperation ?? "unknown"}]`,
@@ -107,9 +95,7 @@ export function registerAnchorClawMemoryCapability(params: {
         "Use canonicalKey only for updateable durable facts, preferences, schedules, or settings.",
         "",
         ...(sessionsCorpusNote ? ["## Sessions", sessionsCorpusNote, ""] : []),
-        ...cacheNotice,
         ...sdkNotice,
-        ...cached,
       ];
     },
     runtime: {

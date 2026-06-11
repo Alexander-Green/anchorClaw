@@ -34,6 +34,7 @@ const {
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   runCliImport,
+  poolEnd,
 } = vi.hoisted(() => ({
   registerMemoryCapability: vi.fn(),
   definePluginEntry: vi.fn((entry: unknown) => entry),
@@ -107,6 +108,7 @@ const {
     /\.jsonl($|\.reset\.|\.deleted\.)/i.test(fileName),
   ),
   runCliImport: vi.fn(async () => undefined),
+  poolEnd: vi.fn(async () => undefined),
 }));
 
 vi.mock("./api.js", () => ({
@@ -242,8 +244,14 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
 
 import plugin from "./index.js";
 
+type TranscriptUpdate = {
+  sessionFile?: unknown;
+  sessionKey?: unknown;
+  agentId?: unknown;
+};
+
 function buildApi() {
-  let transcriptListener: ((update: { sessionFile?: unknown }) => void) | null = null;
+  let transcriptListener: ((update: TranscriptUpdate) => void) | null = null;
   const lifecycleCleanups: Array<() => Promise<void> | void> = [];
   const serviceStarts: Array<() => Promise<void> | void> = [];
   const serviceStops: Array<() => Promise<void> | void> = [];
@@ -267,7 +275,7 @@ function buildApi() {
         }),
       },
       events: {
-        onSessionTranscriptUpdate: vi.fn((listener: (update: { sessionFile?: unknown }) => void) => {
+        onSessionTranscriptUpdate: vi.fn((listener: (update: TranscriptUpdate) => void) => {
           transcriptListener = listener;
           return unsub;
         }),
@@ -318,8 +326,51 @@ function buildApi() {
   };
 }
 
+function buildToolContext(api: any) {
+  const runtimeConfig = api.runtime?.config?.current?.();
+  return {
+    runtimeConfig,
+    getRuntimeConfig: api.runtime?.config?.current,
+    workspaceDir: api.runtime?.workspaceDir,
+    agentId: api.runtime?.agentId,
+    sessionKey: api.runtime?.sessionKey,
+  };
+}
+
+function registeredToolNames(api: any): string[] {
+  const names: string[] = [];
+  for (const [registration, opts] of (api.registerTool as any).mock.calls) {
+    if (registration?.name && typeof registration.name === "string") {
+      names.push(registration.name);
+    }
+    if (opts?.name && typeof opts.name === "string") {
+      names.push(opts.name);
+    }
+    if (Array.isArray(opts?.names)) {
+      names.push(...opts.names.filter((name: unknown): name is string => typeof name === "string"));
+    }
+  }
+  return names;
+}
+
+function findRegisteredTool(api: any, name: string): any {
+  for (const [registration, opts] of (api.registerTool as any).mock.calls) {
+    if (registration?.name === name) {
+      return registration;
+    }
+    const optsNames = [
+      ...(typeof opts?.name === "string" ? [opts.name] : []),
+      ...(Array.isArray(opts?.names) ? opts.names : []),
+    ];
+    if (typeof registration === "function" && optsNames.includes(name)) {
+      return registration(buildToolContext(api));
+    }
+  }
+  return undefined;
+}
+
 function buildApiLegacyLifecycle() {
-  let transcriptListener: ((update: { sessionFile?: unknown }) => void) | null = null;
+  let transcriptListener: ((update: TranscriptUpdate) => void) | null = null;
   const lifecycleCleanups: Array<() => Promise<void> | void> = [];
   const serviceStarts: Array<() => Promise<void> | void> = [];
   const serviceStops: Array<() => Promise<void> | void> = [];
@@ -343,7 +394,7 @@ function buildApiLegacyLifecycle() {
         }),
       },
       events: {
-        onSessionTranscriptUpdate: vi.fn((listener: (update: { sessionFile?: unknown }) => void) => {
+        onSessionTranscriptUpdate: vi.fn((listener: (update: TranscriptUpdate) => void) => {
           transcriptListener = listener;
           return unsub;
         }),
@@ -426,6 +477,7 @@ beforeEach(() => {
       query: vi.fn(async () => ({ rows: [] })),
       release: vi.fn(),
     })),
+    end: poolEnd,
   };
   createPool.mockReturnValue(pool);
   resolveScope.mockResolvedValue({ userId: "u1", workspaceId: "w1" });
@@ -456,13 +508,11 @@ describe("tool registration", () => {
 
     (plugin as any).register(api);
 
-    const toolNames = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0]?.name)
-      .filter((name: unknown) => typeof name === "string");
+    const toolNames = registeredToolNames(api);
     expect(toolNames).not.toContain("memory_recall");
   });
 
-  it("registers before_prompt_build hook for first-turn daily injection", () => {
+  it("registers durable and first-turn daily before_prompt_build hooks", () => {
     const { api } = buildApi();
 
     (plugin as any).register(api);
@@ -475,6 +525,13 @@ describe("tool registration", () => {
         typeof call[1] === "function" &&
         call[2]?.name === "anchorclaw-daily-startup-injection",
     );
+    const hasDurableHook = calls.some(
+      (call: any[]) =>
+        call[0] === "before_prompt_build" &&
+        typeof call[1] === "function" &&
+        call[2]?.name === "anchorclaw-durable-injection",
+    );
+    expect(hasDurableHook).toBe(true);
     expect(hasDailyHook).toBe(true);
   });
 
@@ -665,20 +722,93 @@ describe("phase2 session delta listener", () => {
     );
   });
 
-  it("filters out non-current-agent transcript updates in current visibility", async () => {
-    isSessionFileForAgent.mockResolvedValue(false);
+  it("uses before_prompt_build hook context workspace and agent for daily injection", async () => {
+    queryPromptDailyEntries.mockResolvedValueOnce([
+      {
+        id: "daily-ops-1",
+        path: "memory/2026-06-02.md",
+        logicalDate: "2026-06-02",
+        content: "ops context",
+        sourceKind: "memory_log",
+        createdAt: "2026-06-02T10:00:00.000Z",
+        updatedAt: "2026-06-02T10:00:00.000Z",
+      },
+    ] as any);
+    buildPromptDailySection.mockReturnValueOnce(["ops daily context"]);
+    const { api, runServiceStart } = buildApi();
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/work" },
+          { id: "ops", workspace: "/agents/ops" },
+        ],
+      },
+    });
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const call = (api.on as any).mock.calls.find(
+      (row: any[]) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-daily-startup-injection",
+    );
+    const hook = call?.[1];
+    expect(hook).toBeTypeOf("function");
+
+    const result = await hook(
+      { prompt: "fresh ops turn", messages: [] },
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        workspaceDir: "/agents/ops",
+      },
+    );
+
+    expect(result).toEqual({ prependContext: "ops daily context" });
+    expect(resolveScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: path.resolve("/agents/ops"),
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+      }),
+    );
+  });
+
+  it("routes another agent transcript to its configured workspace in current visibility", async () => {
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockRejectedValue(new Error("ENOENT"));
     const { api, getTranscriptListener, runServiceStart } = buildApi();
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/work" },
+          { id: "other", workspace: "/tmp/other" },
+        ],
+      },
+    });
     await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
     expect(listener).toBeTypeOf("function");
-    listener?.({ sessionFile: "/tmp/agents/other/sessions/a.jsonl" });
+    listener?.({
+      sessionFile: "/tmp/agents/other/sessions/a.jsonl",
+      agentId: "other",
+      sessionKey: "agent:other:main",
+    });
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
-    expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("ignored session delta update outside current visibility"),
+    expect(resolveScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: path.resolve("/tmp/other"),
+        agentId: "other",
+        sessionKey: "agent:other:main",
+      }),
+    );
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "other",
+        sessionFiles: ["/tmp/agents/other/sessions/a.jsonl"],
+      }),
     );
   });
 
@@ -705,6 +835,62 @@ describe("phase2 session delta listener", () => {
     );
   });
 
+  it("partitions one transcript debounce batch by owning agent workspace", async () => {
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockRejectedValue(new Error("ENOENT"));
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/work" },
+          { id: "ops", workspace: "/tmp/ops" },
+        ],
+      },
+    });
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const listener = getTranscriptListener();
+    listener?.({
+      sessionFile: "/tmp/agents/main/sessions/a.jsonl",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+    listener?.({
+      sessionFile: "/tmp/agents/ops/sessions/b.jsonl",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(resolveScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: path.resolve("/tmp/work"),
+        agentId: "main",
+      }),
+    );
+    expect(resolveScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: path.resolve("/tmp/ops"),
+        agentId: "ops",
+      }),
+    );
+    expect(syncSessionsIndexDb).toHaveBeenCalledTimes(2);
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionFiles: ["/tmp/agents/main/sessions/a.jsonl"],
+      }),
+    );
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        sessionFiles: ["/tmp/agents/ops/sessions/b.jsonl"],
+      }),
+    );
+  });
+
   it("unsubscribes and cancels pending debounce on lifecycle cleanup", async () => {
     isSessionFileForAgent.mockResolvedValue(true);
     const { api, getTranscriptListener, runCleanup, runServiceStart, unsub } = buildApi();
@@ -718,6 +904,16 @@ describe("phase2 session delta listener", () => {
 
     expect(unsub).toHaveBeenCalledTimes(1);
     expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+  });
+
+  it("closes the runtime postgres pool during cleanup only once", async () => {
+    isSessionFileForAgent.mockResolvedValue(true);
+    const { api, runCleanup, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    await runCleanup();
+
+    expect(poolEnd).toHaveBeenCalledTimes(1);
   });
 
   it("accepts cross-agent transcript updates in visible visibility for a shared workspace", async () => {
@@ -758,12 +954,14 @@ describe("phase2 session delta listener", () => {
     );
   });
 
-  it("rejects cross-agent transcript updates from another workspace in visible visibility", async () => {
+  it("routes visible transcript updates to the owning separate workspace", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
       sessions: { search: { enabled: true }, visibility: "visible" },
       identity: { externalId: "test" },
     });
+    isSessionFileForAgent.mockResolvedValue(true);
+    statFs.mockRejectedValue(new Error("ENOENT"));
     const { api, getTranscriptListener, runServiceStart } = buildApi();
     (api.runtime as any).config.current = () => ({
       plugins: { slots: { memory: "anchorclaw" } },
@@ -777,13 +975,42 @@ describe("phase2 session delta listener", () => {
     await registerAndWaitStartup({ api, runServiceStart });
 
     const listener = getTranscriptListener();
-    listener?.({ sessionFile: "/tmp/agents/other/sessions/a.jsonl" });
+    listener?.({
+      sessionFile: "/tmp/agents/other/sessions/a.jsonl",
+      agentId: "other",
+      sessionKey: "agent:other:main",
+    });
     await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(resolveScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: path.resolve("/tmp/other"),
+        agentId: "other",
+      }),
+    );
+    expect(syncSessionsIndexDb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "other",
+        sessionFiles: ["/tmp/agents/other/sessions/a.jsonl"],
+      }),
+    );
+  });
+
+  it("rejects transcript updates when event agent and path agent disagree", async () => {
+    const { api, getTranscriptListener, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const listener = getTranscriptListener();
+    listener?.({
+      sessionFile: "/tmp/agents/other/sessions/a.jsonl",
+      agentId: "main",
+    });
+    await vi.runAllTimersAsync();
 
     expect(isSessionFileForAgent).not.toHaveBeenCalled();
     expect(syncSessionsIndexDb).not.toHaveBeenCalled();
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("outside current workspace scope"),
+      expect.stringContaining("agent/path mismatch"),
     );
   });
 
@@ -1036,9 +1263,7 @@ describe("phase2 session delta listener", () => {
     const { api, runServiceStart } = buildApi();
     await registerAndWaitStartup({ api, runServiceStart });
 
-    const getRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_get");
+    const getRegistration = findRegisteredTool(api, "memory_get");
     expect(getRegistration).toBeDefined();
 
     const result = await getRegistration.execute("toolcall-1", {
@@ -1062,9 +1287,7 @@ describe("phase2 session delta listener", () => {
     const { api, runServiceStart } = buildApi();
     await registerAndWaitStartup({ api, runServiceStart });
 
-    const getRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_get");
+    const getRegistration = findRegisteredTool(api, "memory_get");
     expect(getRegistration).toBeDefined();
 
     const result = await getRegistration.execute("toolcall-2", {
@@ -1094,6 +1317,7 @@ describe("phase2 session delta listener", () => {
     await vi.runAllTimersAsync();
 
     expect(unsub).toHaveBeenCalledTimes(1);
+    expect(poolEnd).toHaveBeenCalledTimes(1);
     expect(syncSessionsIndexDb).not.toHaveBeenCalled();
   });
 
@@ -1130,9 +1354,7 @@ describe("phase2 session delta listener", () => {
     const { api, runServiceStart } = buildApi();
     await registerAndWaitStartup({ api, runServiceStart });
 
-    const searchRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_search");
+    const searchRegistration = findRegisteredTool(api, "memory_search");
     expect(searchRegistration).toBeDefined();
 
     const result = await searchRegistration.execute("toolcall-search-1", {
@@ -1170,12 +1392,8 @@ describe("phase2 session delta listener", () => {
     const { api, runServiceStart } = buildApi();
     await registerAndWaitStartup({ api, runServiceStart });
 
-    const searchRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_search");
-    const getRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_get");
+    const searchRegistration = findRegisteredTool(api, "memory_search");
+    const getRegistration = findRegisteredTool(api, "memory_get");
     expect(searchRegistration).toBeDefined();
     expect(getRegistration).toBeDefined();
 
@@ -1223,15 +1441,9 @@ describe("phase2 session delta listener", () => {
     const { api, runServiceStart } = buildApi();
     await registerAndWaitStartup({ api, runServiceStart });
 
-    const searchRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_search");
-    const getRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_get");
-    const statusRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_status");
+    const searchRegistration = findRegisteredTool(api, "memory_search");
+    const getRegistration = findRegisteredTool(api, "memory_get");
+    const statusRegistration = findRegisteredTool(api, "memory_status");
     expect(searchRegistration).toBeDefined();
     expect(getRegistration).toBeDefined();
     expect(statusRegistration).toBeDefined();
@@ -1248,7 +1460,7 @@ describe("phase2 session delta listener", () => {
       promptInjectionAllowed: true,
       startupPromptEnabled: true,
       startupPromptEffective: true,
-      readCompatibilityPath: "db-first",
+      readCompatibilityPath: "db-only",
       importMode: "canonical_table",
     });
 
@@ -1294,9 +1506,7 @@ describe("phase2 session delta listener", () => {
 
     const { api, runServiceStart } = buildApi();
     await registerAndWaitStartup({ api, runServiceStart });
-    const statusRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_status");
+    const statusRegistration = findRegisteredTool(api, "memory_status");
     expect(statusRegistration).toBeDefined();
 
     const result = await statusRegistration.execute("toolcall-status-active-1", { check: true });
@@ -1315,7 +1525,7 @@ describe("phase2 session delta listener", () => {
         promptInjectionAllowed: true,
         startupPromptEnabled: true,
         startupPromptEffective: true,
-        readCompatibilityPath: "db-first",
+        readCompatibilityPath: "db-only",
         importMode: "canonical_table",
       },
       sessions: {
@@ -1364,9 +1574,7 @@ describe("phase2 session delta listener", () => {
 
     const { api, runServiceStart } = buildApi();
     await registerAndWaitStartup({ api, runServiceStart });
-    const statusRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_status");
+    const statusRegistration = findRegisteredTool(api, "memory_status");
     expect(statusRegistration).toBeDefined();
 
     const result = await statusRegistration.execute("toolcall-status-active-2", { check: true });
@@ -1383,9 +1591,7 @@ describe("phase2 session delta listener", () => {
 
     const { api, runServiceStart } = buildApi();
     await registerAndWaitStartup({ api, runServiceStart });
-    const statusRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_status");
+    const statusRegistration = findRegisteredTool(api, "memory_status");
     expect(statusRegistration).toBeDefined();
 
     const result = await statusRegistration.execute("toolcall-status-active-migrations-1", { check: true });
@@ -1442,6 +1648,7 @@ describe("phase2 session delta listener", () => {
       workspaceDir: "/cfg/workspace",
     });
     const { api, runServiceStart } = buildApi();
+    (api.runtime as any).workspaceDir = "/runtime/workspace";
     (api.runtime as any).config.current = () => ({
       plugins: { slots: { memory: "anchorclaw" } },
       agents: {
@@ -1450,9 +1657,7 @@ describe("phase2 session delta listener", () => {
     });
 
     await registerAndWaitStartup({ api, runServiceStart });
-    const statusRegistration = (api.registerTool as any).mock.calls
-      .map((call: any[]) => call[0])
-      .find((tool: any) => tool?.name === "memory_status");
+    const statusRegistration = findRegisteredTool(api, "memory_status");
     expect(statusRegistration).toBeDefined();
 
     await statusRegistration.execute("toolcall-status-active-runtime-workspace-1", { check: true });

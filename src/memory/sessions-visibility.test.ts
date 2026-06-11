@@ -93,6 +93,33 @@ describe("filterSessionHitsByVisibility", () => {
     expect(filtered).toHaveLength(0);
   });
 
+  it("does not reuse the global session when runtime fallback is disabled", async () => {
+    const api = buildApi();
+    const hits = [{ corpus: "sessions", path: "sessions/main/s1.jsonl", score: 0.5 }];
+    const filtered = await filterSessionHitsByVisibility({
+      api,
+      fallbackToRuntimeSession: false,
+      hits,
+    });
+    expect(filtered).toHaveLength(0);
+    expect(createGuard).not.toHaveBeenCalled();
+  });
+
+  it("prefers explicit requester session key over global runtime session key", async () => {
+    const api = buildApi();
+    const hits = [{ corpus: "sessions", path: "sessions/ops/s1.jsonl", score: 0.5 }];
+    await filterSessionHitsByVisibility({
+      api,
+      sessionKey: "agent:ops:main",
+      hits,
+    });
+    expect(createGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:ops:main",
+      }),
+    );
+  });
+
   it("drops sessions hits when transcript identity cannot be extracted", async () => {
     const api = buildApi();
     extractIdentity.mockReturnValueOnce(null);

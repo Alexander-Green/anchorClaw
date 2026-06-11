@@ -18,6 +18,16 @@
       "help": "Sessions corpus indexing and visibility settings",
       "advanced": true
     },
+    "sessions.search": {
+      "label": "Sessions Search",
+      "help": "Opt in to the Postgres-backed sessions search corpus.",
+      "advanced": true
+    },
+    "sessions.search.enabled": {
+      "label": "Sessions Search Enabled",
+      "help": "Expose and maintain the sessions corpus. Disabled by default.",
+      "advanced": true
+    },
     "sessions.visibility": {
       "label": "Sessions Visibility",
       "placeholder": "current",
@@ -201,6 +211,16 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "search": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
           "visibility": {
             "type": "string",
             "enum": ["current", "off", "visible"],
@@ -276,7 +296,7 @@
               },
               "maxCandidates": {
                 "type": "number",
-                "default": 20,
+                "default": 10,
                 "minimum": 1,
                 "maximum": 100
               },

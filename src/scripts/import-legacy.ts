@@ -196,6 +196,8 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
   try {
     let hasActiveLegacy = false;
     let unreadableCount = 0;
+    let failedTargetCount = 0;
+    let failedDailyCount = 0;
 
     for (const target of targets) {
       const scan = await scanLegacyWorkspace({
@@ -224,7 +226,7 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
           archiveImportedFiles: !effectiveOpts.keepFiles,
         });
 
-        console.log(`\nAnchorClaw legacy import complete (${target.label})`);
+        console.log(`\nAnchorClaw legacy import ${result.hadFailures ? "incomplete" : "complete"} (${target.label})`);
         console.log(`- MEMORY.md import overall: ${result.memoryMdResult.overall}`);
         console.log(`- MEMORY.md import state: ${result.memoryMdResult.import}`);
         console.log(`- MEMORY.md cleanup state: ${result.memoryMdResult.cleanup}`);
@@ -232,8 +234,18 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
         console.log(`- daily files already imported: ${result.dailySkippedImportedCount}`);
         console.log(`- daily files archived: ${result.dailyArchivedCount}`);
         console.log(`- unsupported daily files: ${result.dailyUnsupportedCount}`);
+        console.log(`- failed daily files: ${result.dailyFailedCount}`);
+        if (result.hadFailures) {
+          failedTargetCount += 1;
+        }
+        failedDailyCount += result.dailyFailedCount;
         if (result.memoryMdResult.reason) {
           console.warn(`Warning (${target.label}): ${result.memoryMdResult.reason}`);
+        }
+        if (result.dailyFailedCount > 0) {
+          console.warn(
+            `Warning (${target.label}): ${result.dailyFailedCount} legacy daily file(s) failed to import; review the warnings above and rerun after fixing them.`,
+          );
         }
       }
     }
@@ -254,6 +266,11 @@ export async function runAnchorClawImport(api: OpenClawPluginApi, opts: AnchorCl
 
     if (effectiveOpts.keepFiles) {
       console.warn("Warning: --keep-files leaves legacy files active and can reintroduce duplicate prompt injection risk.");
+    }
+    if (failedTargetCount > 0) {
+      throw new Error(
+        `AnchorClaw legacy import finished with failures (${failedTargetCount} target(s), ${failedDailyCount} failed daily file(s)).`,
+      );
     }
   } finally {
     await pool.end();

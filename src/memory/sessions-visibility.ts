@@ -15,14 +15,39 @@ type HitLike = {
   source?: string;
 };
 
-function readRequesterSessionKey(api: unknown): string | undefined {
+type VisibilityRuntimeContext = {
+  api: unknown;
+  runtimeConfig?: Record<string, unknown>;
+  getRuntimeConfig?: () => Record<string, unknown> | undefined;
+  sessionKey?: string;
+  fallbackToRuntimeSession?: boolean;
+  sandboxed?: boolean;
+};
+
+function readRequesterSessionKey(params: VisibilityRuntimeContext): string | undefined {
+  if (typeof params.sessionKey === "string" && params.sessionKey.trim()) {
+    return params.sessionKey.trim();
+  }
+  if (params.fallbackToRuntimeSession === false) {
+    return undefined;
+  }
+  const api = params.api;
   const runtime = (api as any)?.runtime;
   const value = runtime?.sessionKey;
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function readRuntimeConfig(api: unknown): Record<string, unknown> {
-  const current = (api as any)?.runtime?.config?.current;
+function readRuntimeConfig(params: VisibilityRuntimeContext): Record<string, unknown> {
+  if (params.runtimeConfig && typeof params.runtimeConfig === "object") {
+    return params.runtimeConfig;
+  }
+  if (typeof params.getRuntimeConfig === "function") {
+    const cfg = params.getRuntimeConfig();
+    if (cfg && typeof cfg === "object") {
+      return cfg;
+    }
+  }
+  const current = (params.api as any)?.runtime?.config?.current;
   if (typeof current === "function") {
     const cfg = current();
     if (cfg && typeof cfg === "object") {
@@ -32,8 +57,11 @@ function readRuntimeConfig(api: unknown): Record<string, unknown> {
   return {};
 }
 
-function readRuntimeSandboxed(api: unknown): boolean {
-  return (api as any)?.runtime?.sandboxed === true;
+function readRuntimeSandboxed(params: VisibilityRuntimeContext): boolean {
+  if (typeof params.sandboxed === "boolean") {
+    return params.sandboxed;
+  }
+  return (params.api as any)?.runtime?.sandboxed === true;
 }
 
 function isSessionsHit(hit: HitLike): boolean {
@@ -46,14 +74,14 @@ function isSessionsHit(hit: HitLike): boolean {
   return typeof hit.path === "string" && hit.path.startsWith("sessions/");
 }
 
-async function createVisibilityGuard(api: unknown): Promise<{
+async function createVisibilityGuard(params: VisibilityRuntimeContext): Promise<{
   requesterSessionKey?: string;
   guard?: { check: (targetSessionKey: string) => { allowed: boolean; error?: string } };
   combinedStore: Record<string, unknown>;
 }> {
-  const cfg = readRuntimeConfig(api);
-  const requesterSessionKey = readRequesterSessionKey(api);
-  const sandboxed = readRuntimeSandboxed(api);
+  const cfg = readRuntimeConfig(params);
+  const requesterSessionKey = readRequesterSessionKey(params);
+  const sandboxed = readRuntimeSandboxed(params);
   const visibility = resolveEffectiveSessionToolsVisibility({
     cfg: cfg as any,
     sandboxed,
@@ -90,9 +118,14 @@ function sessionKeysForHit(params: {
 
 export async function filterSessionHitsByVisibility<T extends HitLike>(params: {
   api: unknown;
+  runtimeConfig?: Record<string, unknown>;
+  getRuntimeConfig?: () => Record<string, unknown> | undefined;
+  sessionKey?: string;
+  fallbackToRuntimeSession?: boolean;
+  sandboxed?: boolean;
   hits: T[];
 }): Promise<T[]> {
-  const { requesterSessionKey, guard, combinedStore } = await createVisibilityGuard(params.api);
+  const { requesterSessionKey, guard, combinedStore } = await createVisibilityGuard(params);
   const next: T[] = [];
   for (const hit of params.hits) {
     if (!isSessionsHit(hit)) {
@@ -119,9 +152,14 @@ export async function filterSessionHitsByVisibility<T extends HitLike>(params: {
 
 export async function canAccessSessionPathByVisibility(params: {
   api: unknown;
+  runtimeConfig?: Record<string, unknown>;
+  getRuntimeConfig?: () => Record<string, unknown> | undefined;
+  sessionKey?: string;
+  fallbackToRuntimeSession?: boolean;
+  sandboxed?: boolean;
   path: string;
 }): Promise<{ allowed: boolean; reason?: string }> {
-  const { requesterSessionKey, guard, combinedStore } = await createVisibilityGuard(params.api);
+  const { requesterSessionKey, guard, combinedStore } = await createVisibilityGuard(params);
   if (!requesterSessionKey || !guard) {
     return { allowed: false, reason: "session visibility guard unavailable for current requester" };
   }

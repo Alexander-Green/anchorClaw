@@ -21,6 +21,7 @@ function buildApi() {
             defaults: {
               userTimezone: "Asia/Almaty",
             },
+            list: [{ id: "main", default: true, workspace: "/tmp/work" }],
           },
         }),
       },
@@ -214,6 +215,8 @@ describe("session capture", () => {
       nowMs: Date.parse("2026-06-02T10:11:12.345Z"),
       hookContext: {
         workspaceDir: "/tmp/work",
+        agentId: "main",
+        sessionKey: "agent:main:main",
         sessionId: "session-15",
       },
       event: {
@@ -253,6 +256,8 @@ describe("session capture", () => {
       nowMs: Date.parse("2026-06-02T10:11:12.345Z"),
       hookContext: {
         workspaceDir: "/tmp/work",
+        agentId: "main",
+        sessionKey: "agent:main:main",
         sessionId: "session-1",
       },
       event: {
@@ -288,5 +293,63 @@ describe("session capture", () => {
 
     expect(result).toEqual({ status: "empty" });
     expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects sparse hook context instead of mixing it with global runtime identity", async () => {
+    const pool = {
+      connect: vi.fn(),
+    };
+
+    await expect(
+      captureBeforeResetSessionMemory({
+        api: buildApi(),
+        ctx: buildCtx(pool),
+        hookContext: {
+          workspaceDir: "/agents/ops",
+          sessionId: "ops-session",
+        },
+        event: {
+          reason: "reset",
+          messages: [{ role: "user", content: "ops memory must not be attributed to main" }],
+        },
+      }),
+    ).rejects.toThrow("runtime_workspace_unavailable: agent_unavailable");
+    expect(resolveScopeMock).not.toHaveBeenCalled();
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it("uses the complete global runtime scope only when hook context is absent", async () => {
+    const clientQuery = vi.fn(async (sql: string) => {
+      const text = String(sql);
+      if (text === "BEGIN" || text === "COMMIT") return { rows: [] };
+      if (text.includes("INSERT INTO memory_import_files")) {
+        return { rows: [] };
+      }
+      throw new Error(`unexpected query after ledger conflict: ${text}`);
+    });
+    const pool = {
+      connect: vi.fn(async () => ({
+        query: clientQuery,
+        release: vi.fn(),
+      })),
+    };
+
+    const result = await captureBeforeResetSessionMemory({
+      api: buildApi(),
+      ctx: buildCtx(pool),
+      event: {
+        reason: "reset",
+        messages: [{ role: "user", content: "legacy runtime capture" }],
+      },
+    });
+
+    expect(result.status).toBe("already_captured");
+    expect(resolveScopeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/work",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
   });
 });

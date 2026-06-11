@@ -1,3 +1,4 @@
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { appendDailyEntryDb, resolveDailyLogicalDate } from "../../memory/daily.js";
 import {
@@ -6,7 +7,13 @@ import {
   type ToolRegistrationParams,
 } from "./common.js";
 
-function resolveRuntimeTimezone(api: any): string | undefined {
+function resolveRuntimeTimezone(api: any, toolCtx: OpenClawPluginToolContext): string | undefined {
+  const toolConfig =
+    toolCtx.runtimeConfig ??
+    (typeof toolCtx.getRuntimeConfig === "function" ? toolCtx.getRuntimeConfig() : undefined);
+  const toolRaw = toolConfig?.agents?.defaults?.userTimezone;
+  if (typeof toolRaw === "string" && toolRaw.trim()) return toolRaw.trim();
+
   const currentConfig =
     typeof api?.runtime?.config?.current === "function" ? api.runtime.config.current() : undefined;
   const raw = currentConfig?.agents?.defaults?.userTimezone;
@@ -15,7 +22,7 @@ function resolveRuntimeTimezone(api: any): string | undefined {
 
 export function registerMemoryLogTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
-  api.registerTool({
+  api.registerTool((toolCtx: OpenClawPluginToolContext) => ({
     name: "memory_log",
     label: "Memory Log",
     description:
@@ -43,7 +50,15 @@ export function registerMemoryLogTool({ ctx, ensureStartupBootstrap }: ToolRegis
       const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
-      const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+      const workspaceTarget = resolveRuntimeToolWorkspace({
+        ctx,
+        runtimeConfig: toolCtx.runtimeConfig,
+        getRuntimeConfig: toolCtx.getRuntimeConfig,
+        workspaceDir: toolCtx.workspaceDir,
+        agentId: toolCtx.agentId,
+        sessionKey: toolCtx.sessionKey,
+        sessionId: toolCtx.sessionId,
+      });
       if ("content" in workspaceTarget) return workspaceTarget;
 
       const record = (params ?? {}) as Record<string, unknown>;
@@ -82,7 +97,7 @@ export function registerMemoryLogTool({ ctx, ensureStartupBootstrap }: ToolRegis
       try {
         logicalDate = resolveDailyLogicalDate({
           explicitDate,
-          timezone: resolveRuntimeTimezone(api),
+          timezone: resolveRuntimeTimezone(api, toolCtx),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -128,5 +143,5 @@ export function registerMemoryLogTool({ ctx, ensureStartupBootstrap }: ToolRegis
         details: stored,
       };
     },
-  });
+  }), { name: "memory_log" });
 }

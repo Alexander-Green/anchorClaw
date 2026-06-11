@@ -8,8 +8,9 @@ import {
   createPluginRuntimeContext,
   type PluginRuntimeContext,
 } from "./plugin/runtime-context.js";
-import { createPromptCacheRuntime } from "./plugin/prompt-cache.js";
+import { createPromptMemoryRuntime } from "./plugin/prompt-cache.js";
 import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
+import { registerDurablePromptHook } from "./plugin/durable-prompt.js";
 import { registerDailyPromptHook } from "./plugin/daily-prompt.js";
 import { registerAnchorClawFlushInboxHook } from "./plugin/flush-inbox.js";
 import { registerAnchorClawGatewayService } from "./plugin/gateway-service.js";
@@ -136,18 +137,23 @@ export default definePluginEntry({
       cfg,
       disabledReason,
     });
-    const { refreshPromptCache } = createPromptCacheRuntime({ api, ctx });
+    const { getPromptMemoryLines, invalidatePromptMemory } = createPromptMemoryRuntime({ api, ctx });
     const { ensureSessionsIndexBootstrapped, ensureSessionDeltaListener, cleanupSessionDelta } =
       createSessionDeltaRuntime({ api, ctx });
     const { cleanupMaintenance, startMaintenance, triggerMaintenanceNow } = createMaintenanceRuntime({
       api,
       ctx,
+      invalidatePromptMemory,
       autostart: false,
     });
+    const cleanupRuntime = async () => {
+      cleanupMaintenance();
+      cleanupSessionDelta();
+      await ctx.cleanupPool();
+    };
     const { ensureStartupBootstrap, kickoffStartupBootstrap } = createStartupBootstrapRuntime({
       api,
       ctx,
-      refreshPromptCache,
       triggerMaintenanceNow,
       ensureSessionDeltaListener,
     });
@@ -155,7 +161,7 @@ export default definePluginEntry({
       api,
       kickoffStartupBootstrap,
       startMaintenance,
-      cleanupMaintenance,
+      cleanupRuntime,
     });
     if (!maintenanceServiceRegistered) {
       api.logger.warn(
@@ -171,19 +177,18 @@ export default definePluginEntry({
         ? `anchorclaw: plugin registered (db: ${ctx.cfg.postgres.host}, lazy init)`
         : "anchorclaw: plugin registered (disabled until configured)",
     );
-    registerSessionDeltaLifecycle({ api, cleanupSessionDelta });
+    registerSessionDeltaLifecycle({ api, cleanupRuntime });
     registerAnchorClawMemoryCapability({
       ctx,
-      refreshPromptCache,
       ensureSessionsIndexBootstrapped,
-      ensureStartupBootstrap,
     });
+    registerDurablePromptHook({ api, ctx, getPromptMemoryLines, ensureStartupBootstrap });
     registerDailyPromptHook({ api, ctx, ensureStartupBootstrap });
     registerAnchorClawFlushInboxHook({ api, ctx });
     registerAnchorClawSessionCaptureHook({ api, ctx });
     registerAnchorClawTools({
       ctx,
-      refreshPromptCache,
+      invalidatePromptMemory,
       ensureSessionsIndexBootstrapped,
       ensureStartupBootstrap,
     });

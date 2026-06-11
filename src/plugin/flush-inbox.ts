@@ -141,17 +141,29 @@ async function walkFlushInboxFiles(absDir: string, relDir: string): Promise<Arra
 export async function drainFlushInbox(params: {
   api: OpenClawPluginApi;
   ctx: PluginRuntimeContext;
+  runtimeConfig?: any;
+  getRuntimeConfig?: () => any;
   workspaceDir?: string;
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
 }): Promise<FlushInboxDrainStats> {
   if (params.ctx.disabledReason || !params.ctx.cfg) {
     return { scannedFiles: 0, importedFiles: 0, skippedImportedFiles: 0 };
   }
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveRuntimeWorkspaceTarget({ api: params.api })?.workspaceDir;
-  if (!workspaceDir) {
+  const workspaceTarget = resolveRuntimeWorkspaceTarget({
+    api: params.api,
+    runtimeConfig: params.runtimeConfig,
+    getRuntimeConfig: params.getRuntimeConfig,
+    workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  if (!workspaceTarget) {
     throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
   }
+  const workspaceDir = workspaceTarget.workspaceDir;
   const inboxRootAbs = path.join(workspaceDir, ...FLUSH_INBOX_ROOT.split("/"));
   let files: Array<{ absPath: string; relPath: string }> = [];
   try {
@@ -173,8 +185,8 @@ export async function drainFlushInbox(params: {
     api: params.api,
     pool,
     workspaceDir,
-    agentId: (params.api as any)?.runtime?.agentId,
-    sessionKey: (params.api as any)?.runtime?.sessionKey,
+    agentId: workspaceTarget.agentId,
+    sessionKey: workspaceTarget.sessionKey,
     configuredExternalId: params.ctx.cfg.identity?.externalId,
   });
 
@@ -220,12 +232,21 @@ export function registerAnchorClawFlushInboxHook(params: {
   ctx: PluginRuntimeContext;
 }) {
   const { api, ctx } = params;
-  const handler = async () => {
+  const handler = async (_event?: unknown, hookContext?: any) => {
     if (ctx.disabledReason || !ctx.cfg) {
       return undefined;
     }
     try {
-      const stats = await drainFlushInbox({ api, ctx });
+      const stats = await drainFlushInbox({
+        api,
+        ctx,
+        runtimeConfig: hookContext?.runtimeConfig,
+        getRuntimeConfig: hookContext?.getRuntimeConfig,
+        workspaceDir: hookContext?.workspaceDir,
+        agentId: hookContext?.agentId,
+        sessionKey: hookContext?.sessionKey,
+        sessionId: hookContext?.sessionId,
+      });
       if (stats.scannedFiles > 0) {
         api.logger.info(
           `anchorclaw: flush inbox drain completed (scanned=${stats.scannedFiles}, imported=${stats.importedFiles}, skipped=${stats.skippedImportedFiles})`,

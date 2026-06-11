@@ -7,8 +7,6 @@ import { memoryGetSessionFile } from "./sessions.js";
 import { memoryGetSessionFromIndexDb, normalizeSessionLookupPath } from "./sessions-index.js";
 import { syncSessionsIndexDb } from "./sessions-index-sync.js";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 export type MemoryGetParams = {
   lookup: string;
@@ -42,7 +40,6 @@ export async function memoryGetFromDb(params: {
   limits: MemoryLimits;
   lookup: string;
   agentId?: string;
-  workspaceDir?: string;
   sessionsVisibility?: "off" | "current" | "visible";
   fromLine?: number;
   lineCount?: number;
@@ -75,8 +72,7 @@ export async function memoryGetFromDb(params: {
       return { ok: false, disabled: true, error: "unsupported lookup path" };
     }
 
-    // DB-first compatibility: if this legacy daily file was already imported,
-    // read the canonical DB copy instead of the workspace file.
+    // memory/* is a compatibility path backed exclusively by the canonical DB row.
     const importedRow = await getDailyEntryByPath({
       pool: params.pool,
       userId: params.userId,
@@ -109,45 +105,7 @@ export async function memoryGetFromDb(params: {
         updatedAt: importedRow.updatedAt,
       };
     }
-
-    // Legacy fallback for workspaces that still have file-based daily memory
-    // but have not imported or migrated that file into DB yet.
-    const workspaceDir = params.workspaceDir ? path.resolve(params.workspaceDir) : null;
-    if (!workspaceDir) {
-      return { ok: false, disabled: true, error: "workspaceDir unavailable for memory/* reads" };
-    }
-
-    const absPath = path.resolve(workspaceDir, normalized);
-    const relative = path.relative(workspaceDir, absPath);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      return { ok: false, disabled: true, error: "unsupported lookup path" };
-    }
-
-    const fromLine = params.fromLine ?? 1;
-    const lineCount = params.lineCount ?? params.limits.getDefaultLines;
-    let content: string;
-    try {
-      content = await fs.readFile(absPath, "utf8");
-    } catch {
-      return { ok: false, error: "not found" };
-    }
-    const read = buildMemoryReadResult({
-      content,
-      relPath: normalized,
-      from: fromLine,
-      lines: lineCount,
-      defaultLines: params.limits.getDefaultLines,
-      maxChars: params.limits.getMaxChars,
-    });
-    return {
-      ok: true,
-      corpus: "memory",
-      path: normalized,
-      kind: "daily-note",
-      content: read.text,
-      fromLine: read.from,
-      lineCount: read.lines,
-    };
+    return { ok: false, error: "not found" };
   }
 
   if (rawLookup.startsWith("sessions/")) {

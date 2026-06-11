@@ -36,11 +36,33 @@ function buildCtx() {
       disabledReason: null,
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
-      cfg: { workspaceDir: "/legacy-workspace" },
+      cfg: {},
       resolveActor: vi.fn(() => "tester"),
     } as any,
     registerTool,
   };
+}
+
+function buildToolContext(overrides?: Record<string, unknown>) {
+  return {
+    runtimeConfig: {
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/runtime/workspace" }],
+      },
+    },
+    workspaceDir: "/runtime/workspace",
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    ...overrides,
+  };
+}
+
+function materializeRegisteredTool(registerTool: ReturnType<typeof vi.fn>, overrides?: Record<string, unknown>) {
+  const factory = registerTool.mock.calls[0]?.[0];
+  const opts = registerTool.mock.calls[0]?.[1];
+  expect(opts).toEqual({ name: "memory_store" });
+  expect(factory).toBeTypeOf("function");
+  return factory(buildToolContext(overrides));
 }
 
 describe("memory_store visible output", () => {
@@ -57,12 +79,12 @@ describe("memory_store visible output", () => {
       type: "fact",
     });
     const { ctx, registerTool } = buildCtx();
-    const refreshPromptCache = vi.fn(async () => undefined);
+    const invalidatePromptMemory = vi.fn();
     registerMemoryStoreTool({
       ctx,
-      refreshPromptCache,
+      invalidatePromptMemory,
     } as any);
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
     expect(def.description).toContain("recurring schedules");
     expect(def.description).toContain("DB-backed implementation for curated MEMORY.md writes");
     expect(def.description).toContain("Use for save requests about stable facts");
@@ -84,7 +106,7 @@ describe("memory_store visible output", () => {
       canonicalKey: "preferred_language",
       type: "fact",
     });
-    expect(refreshPromptCache).toHaveBeenCalledWith({ force: true });
+    expect(invalidatePromptMemory).toHaveBeenCalledWith({ workspaceDir: "/runtime/workspace" });
     expect(resolveScopeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/runtime/workspace",
@@ -109,10 +131,10 @@ describe("memory_store visible output", () => {
     });
     registerMemoryStoreTool({
       ctx,
-      refreshPromptCache: vi.fn(async () => undefined),
+      invalidatePromptMemory: vi.fn(),
       ensureStartupBootstrap,
     } as any);
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-pending-1", {
       content: "Pending startup should bootstrap lazily.",
@@ -120,6 +142,47 @@ describe("memory_store visible output", () => {
 
     expect(ensureStartupBootstrap).toHaveBeenCalledTimes(1);
     expect(result.details.ok).toBe(true);
+    expect(memoryStoreDbMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses tool context workspace and agent instead of global runtime agent", async () => {
+    (memoryStoreDbMock as any).mockResolvedValueOnce({
+      ok: true,
+      id: "33333333-3333-3333-3333-333333333333",
+      path: "db-memory/items/33333333-3333-3333-3333-333333333333.md",
+      canonicalKey: null,
+      type: "note",
+    });
+    const { ctx, registerTool } = buildCtx();
+    registerMemoryStoreTool({
+      ctx,
+      invalidatePromptMemory: vi.fn(),
+    } as any);
+    const def = materializeRegisteredTool(registerTool, {
+      runtimeConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/runtime/workspace" },
+            { id: "ops", workspace: "/runtime/ops" },
+          ],
+        },
+      },
+      workspaceDir: "/runtime/ops",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+    });
+
+    await def.execute("toolcall-ops-1", {
+      content: "Ops durable note.",
+    });
+
+    expect(resolveScopeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/runtime/ops",
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+      }),
+    );
     expect(memoryStoreDbMock).toHaveBeenCalledTimes(1);
   });
 });

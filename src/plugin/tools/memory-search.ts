@@ -1,3 +1,4 @@
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { scanLegacyWorkspace } from "../../importer.js";
 import { resolveSessionsSearchState } from "../../config.js";
@@ -118,7 +119,7 @@ export function registerMemorySearchTool({
   ensureStartupBootstrap,
 }: ToolRegistrationParams) {
   const api = ctx.api;
-  api.registerTool({
+  api.registerTool((toolCtx: OpenClawPluginToolContext) => ({
     name: "memory_search",
     label: "Memory Search",
     description:
@@ -138,7 +139,12 @@ export function registerMemorySearchTool({
       },
     },
     async execute(_toolCallId: string, params: unknown) {
-      if (ctx.durableState?.overall === "pending" && typeof ensureStartupBootstrap === "function") {
+      if (
+        (ctx.durableState?.overall === "pending" ||
+          (ctx.durableState?.overall === "blocked" &&
+            ctx.durableState?.import === "failed_retryable")) &&
+        typeof ensureStartupBootstrap === "function"
+      ) {
         await ensureStartupBootstrap();
       }
       const blockedReason = ctx.durableState?.reason ?? ctx.startupCriticalFailure ?? null;
@@ -209,7 +215,15 @@ export function registerMemorySearchTool({
         };
       }
       try {
-        const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+        const workspaceTarget = resolveRuntimeToolWorkspace({
+          ctx,
+          runtimeConfig: toolCtx.runtimeConfig,
+          getRuntimeConfig: toolCtx.getRuntimeConfig,
+          workspaceDir: toolCtx.workspaceDir,
+          agentId: toolCtx.agentId,
+          sessionKey: toolCtx.sessionKey,
+          sessionId: toolCtx.sessionId,
+        });
         if ("content" in workspaceTarget) return workspaceTarget;
         const scope = await resolveUserAndWorkspaceScope({
           api,
@@ -265,7 +279,7 @@ export function registerMemorySearchTool({
               },
             };
           }
-          await ensureSessionsIndexBootstrapped();
+          await ensureSessionsIndexBootstrapped(workspaceTarget);
           const indexedHits = await memorySearchSessionsIndexDb({
             pool: ctx.getPool(),
             userId: scope.userId,
@@ -273,7 +287,7 @@ export function registerMemorySearchTool({
             limits,
             query,
             maxResults: effectiveMax,
-            ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
+            ...(sessionsVisibility === "current" ? { currentAgentId: workspaceTarget.agentId } : {}),
           });
           if (indexedHits.length > 0) {
             hits = indexedHits;
@@ -283,19 +297,26 @@ export function registerMemorySearchTool({
               pool: ctx.getPool(),
               userId: scope.userId,
               workspaceId: scope.workspaceId,
-              ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
+              ...(sessionsVisibility === "current" ? { currentAgentId: workspaceTarget.agentId } : {}),
             });
             hits = hasIndex
               ? []
               : await memorySearchSessions({
                   query,
                   maxResults: effectiveMax,
-                  agentId: (api as any)?.runtime?.agentId,
+                  agentId: workspaceTarget.agentId,
                   limits,
                 });
             retrievalMode = hasIndex ? "sessions_index" : "sessions_fallback";
           }
-          hits = await filterSessionHitsByVisibility({ api, hits });
+          hits = await filterSessionHitsByVisibility({
+            api,
+            runtimeConfig: toolCtx.runtimeConfig,
+            getRuntimeConfig: toolCtx.getRuntimeConfig,
+            sessionKey: toolCtx.sessionKey,
+            sandboxed: (toolCtx as any).sandboxed,
+            hits,
+          });
         } else if (trimmedCorpus === "memory") {
           hits = await memorySearchDb({
             pool: ctx.getPool(),
@@ -318,7 +339,7 @@ export function registerMemorySearchTool({
           retrievalMode = "fts_daily";
         } else if (trimmedCorpus === "all") {
           if (sessionsEnabled) {
-            await ensureSessionsIndexBootstrapped();
+            await ensureSessionsIndexBootstrapped(workspaceTarget);
           }
           const merged = [
             ...(await memorySearchDb({
@@ -337,7 +358,7 @@ export function registerMemorySearchTool({
                   limits,
                   query,
                   maxResults: effectiveMax,
-                  ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
+                  ...(sessionsVisibility === "current" ? { currentAgentId: workspaceTarget.agentId } : {}),
                 })
               : []),
           ];
@@ -348,14 +369,14 @@ export function registerMemorySearchTool({
                 pool: ctx.getPool(),
                 userId: scope.userId,
                 workspaceId: scope.workspaceId,
-                ...(sessionsVisibility === "current" ? { currentAgentId: String((api as any)?.runtime?.agentId ?? "main") } : {}),
+                ...(sessionsVisibility === "current" ? { currentAgentId: workspaceTarget.agentId } : {}),
               });
               if (!hasIndex) {
                 merged.push(
                   ...(await memorySearchSessions({
                     query,
                     maxResults: effectiveMax,
-                    agentId: (api as any)?.runtime?.agentId,
+                    agentId: workspaceTarget.agentId,
                     limits,
                   })),
                 );
@@ -363,7 +384,14 @@ export function registerMemorySearchTool({
             }
           }
           const mergedForOutput = sessionsEnabled
-            ? await filterSessionHitsByVisibility({ api, hits: merged })
+            ? await filterSessionHitsByVisibility({
+                api,
+                runtimeConfig: toolCtx.runtimeConfig,
+                getRuntimeConfig: toolCtx.getRuntimeConfig,
+                sessionKey: toolCtx.sessionKey,
+                sandboxed: (toolCtx as any).sandboxed,
+                hits: merged,
+              })
             : merged;
           mergedForOutput.sort((left: any, right: any) => {
             const ls = typeof left?.score === "number" ? left.score : 0;
@@ -460,7 +488,15 @@ export function registerMemorySearchTool({
       const legacyImportWarning =
         hits.length === 0
           ? await (async () => {
-              const legacyWorkspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+              const legacyWorkspaceTarget = resolveRuntimeToolWorkspace({
+                ctx,
+                runtimeConfig: toolCtx.runtimeConfig,
+                getRuntimeConfig: toolCtx.getRuntimeConfig,
+                workspaceDir: toolCtx.workspaceDir,
+                agentId: toolCtx.agentId,
+                sessionKey: toolCtx.sessionKey,
+                sessionId: toolCtx.sessionId,
+              });
               if ("content" in legacyWorkspaceTarget) {
                 return null;
               }
@@ -507,5 +543,5 @@ export function registerMemorySearchTool({
         },
       };
     },
-  });
+  }), { name: "memory_search" });
 }

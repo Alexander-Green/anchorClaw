@@ -66,7 +66,6 @@ describe("runAnchorClawImport", () => {
     scanLegacyWorkspaceMock.mockResolvedValue({
       sourceDir: "/runtime/default",
       targetWorkspaceDir: "/runtime/default",
-      workspaceDir: "/runtime/default",
       memoryMd: { path: "MEMORY.md", state: "pending", sha256: "sha-memory", importedSameSha: false },
       dailyFiles: [
         {
@@ -99,6 +98,8 @@ describe("runAnchorClawImport", () => {
       dailyArchivedCount: 1,
       dailySkippedImportedCount: 0,
       dailyUnsupportedCount: 0,
+      dailyFailedCount: 0,
+      hadFailures: false,
     });
   });
 
@@ -156,7 +157,47 @@ describe("runAnchorClawImport", () => {
     );
     expect(consoleLogSpy).toHaveBeenCalledWith("\nAnchorClaw legacy import complete (default agent main)");
     expect(consoleLogSpy).toHaveBeenCalledWith("- daily files archived: 1");
+    expect(consoleLogSpy).toHaveBeenCalledWith("- failed daily files: 0");
     expect(consoleWarnSpy).not.toHaveBeenCalled();
+    expect(poolEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks apply output incomplete and fails after reporting partial daily import errors", async () => {
+    runLegacyWorkspaceImportMock.mockResolvedValueOnce({
+      scan: {},
+      memoryMdResult: {
+        overall: "ready",
+        import: "ready",
+        cleanup: "completed",
+        reason: null,
+        lastImportRunId: "run-1",
+        lastSourceSha256: "sha-memory",
+      },
+      dailyImportedCount: 0,
+      dailyArchivedCount: 0,
+      dailySkippedImportedCount: 0,
+      dailyUnsupportedCount: 0,
+      dailyFailedCount: 1,
+      hadFailures: true,
+    });
+    const api = {
+      pluginConfig: {},
+      runtime: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+        config: { current: () => runtimeConfig },
+      },
+    } as any;
+
+    await expect(
+      runAnchorClawImport(api, { defaultAgent: true, apply: true }),
+    ).rejects.toThrow(/finished with failures/);
+
+    expect(consoleLogSpy).toHaveBeenCalledWith("\nAnchorClaw legacy import incomplete (default agent main)");
+    expect(consoleLogSpy).toHaveBeenCalledWith("- failed daily files: 1");
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      "Warning (default agent main): 1 legacy daily file(s) failed to import; review the warnings above and rerun after fixing them.",
+    );
     expect(poolEnd).toHaveBeenCalledTimes(1);
   });
 
@@ -195,7 +236,6 @@ describe("runAnchorClawImport", () => {
     scanLegacyWorkspaceMock.mockResolvedValueOnce({
       sourceDir: "/runtime/default",
       targetWorkspaceDir: "/runtime/default",
-      workspaceDir: "/runtime/default",
       memoryMd: { path: "MEMORY.md", state: "absent", sha256: null, importedSameSha: false },
       dailyFiles: [
         {

@@ -1,3 +1,4 @@
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { memoryRecallDb } from "../../memory/recall.js";
@@ -76,7 +77,7 @@ function markerBoostForHit(hit: any): number {
 
 export function registerMemoryRecallTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
-  api.registerTool({
+  api.registerTool((toolCtx: OpenClawPluginToolContext) => ({
     name: "memory_recall",
     label: "Memory Recall",
     description:
@@ -97,7 +98,15 @@ export function registerMemoryRecallTool({ ctx, ensureStartupBootstrap }: ToolRe
       const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
-      const workspaceTarget = resolveRuntimeToolWorkspace({ ctx });
+      const workspaceTarget = resolveRuntimeToolWorkspace({
+        ctx,
+        runtimeConfig: toolCtx.runtimeConfig,
+        getRuntimeConfig: toolCtx.getRuntimeConfig,
+        workspaceDir: toolCtx.workspaceDir,
+        agentId: toolCtx.agentId,
+        sessionKey: toolCtx.sessionKey,
+        sessionId: toolCtx.sessionId,
+      });
       if ("content" in workspaceTarget) return workspaceTarget;
       const scope = await resolveUserAndWorkspaceScope({
         api,
@@ -199,5 +208,5 @@ export function registerMemoryRecallTool({ ctx, ensureStartupBootstrap }: ToolRe
         },
       };
     },
-  });
+  }), { name: "memory_recall" });
 }

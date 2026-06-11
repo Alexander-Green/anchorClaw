@@ -4,9 +4,9 @@ export function registerAnchorClawGatewayService(params: {
   api: OpenClawPluginApi;
   kickoffStartupBootstrap: () => void;
   startMaintenance: () => void;
-  cleanupMaintenance: () => void;
+  cleanupRuntime: () => Promise<void>;
 }): boolean {
-  const { api, kickoffStartupBootstrap, startMaintenance, cleanupMaintenance } = params;
+  const { api, kickoffStartupBootstrap, startMaintenance, cleanupRuntime } = params;
   const registerService = (api as any)?.registerService;
   if (typeof registerService !== "function") {
     return false;
@@ -19,7 +19,7 @@ export function registerAnchorClawGatewayService(params: {
       startMaintenance();
     },
     stop: async () => {
-      cleanupMaintenance();
+      await cleanupRuntime();
     },
   });
   return true;

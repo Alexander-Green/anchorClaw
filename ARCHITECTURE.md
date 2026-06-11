@@ -46,7 +46,7 @@ Read behavior:
 
 - `memory_get("MEMORY.md")` returns a virtual snapshot generated from
   Postgres.
-- `memory_get("memory/YYYY-MM-DD.md")` resolves DB-first.
+- `memory_get("memory/YYYY-MM-DD.md")` resolves from Postgres only.
 - `memory_get("sessions/<agentId>/<file>")` is DB-first when sessions search is
   enabled, with file fallback only on `index_miss`.
 
@@ -171,10 +171,16 @@ Implemented behavior:
 
 Visibility modes:
 
-- `current`: index only the current agent/session scope; cross-agent delta
-  updates are ignored.
-- `visible`: accept visible cross-agent transcript updates.
+- `current`: each agent can search and read only its own indexed sessions.
+- `visible`: an agent can also search indexed sessions of agents that resolve
+  to the same workspace, subject to OpenClaw's visibility guard.
 - `off`: disable sessions indexing/listener behavior.
+
+The transcript listener is a global OpenClaw event fan-out. Each update is
+routed by its event/path agent identity to that agent's resolved workspace.
+Bootstrap completion is keyed by workspace scope. Live transcript deltas are
+routed and grouped by workspace/agent target, then processed by one
+process-local flush loop with per-target error isolation.
 
 State/session path resolution follows OpenClaw-compatible order:
 
@@ -344,7 +350,7 @@ The intended matrix is:
 | explicit `--agent ops` import | resolved workspace of `ops` |
 | background maintenance with `workspaceScope=default-agent` | resolved workspace of the default agent |
 | background maintenance with `workspaceScope=all-agent-workspaces` | every unique resolved workspace, deduped by path |
-| multiple agents sharing one physical workspace | one DB workspace scope for that shared path |
+| multiple agents sharing one resolved workspace path | one DB workspace scope for that shared path |
 | external backup/legacy source import | read from external `sourceDir`, write into explicit target workspace |
 
 ### Practical Consequences
@@ -425,7 +431,7 @@ Implemented and runtime-oriented:
 - durable memory in Postgres;
 - DB-owned daily memory;
 - virtual `MEMORY.md`;
-- DB-first daily memory paths;
+- DB-only daily memory paths;
 - explicit legacy import CLI;
 - sessions search as opt-in lexical corpus;
 - setup path that does not patch workspace `AGENTS.md`;

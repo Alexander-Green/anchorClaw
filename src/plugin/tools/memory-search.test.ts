@@ -23,7 +23,6 @@ const {
   scanLegacyWorkspaceMock: vi.fn(async () => ({
     sourceDir: "/workspace",
     targetWorkspaceDir: "/workspace",
-    workspaceDir: "/workspace",
     memoryMd: { path: "MEMORY.md", state: "absent", sha256: null, importedSameSha: false },
     dailyFiles: [],
     activeLegacyCount: 0,
@@ -83,7 +82,7 @@ function buildCtx() {
         },
       },
       disabledReason: null,
-      cfg: { workspaceDir: "/legacy-workspace", sessions: { search: { enabled: true }, visibility: "current" } },
+      cfg: { sessions: { search: { enabled: true }, visibility: "current" } },
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
       durableState: { overall: "ready", migrations: "ready", reason: null },
@@ -95,6 +94,28 @@ function buildCtx() {
     } as any,
     registerTool,
   };
+}
+
+function buildToolContext(overrides?: Record<string, unknown>) {
+  return {
+    runtimeConfig: {
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/runtime/workspace" }],
+      },
+    },
+    workspaceDir: "/runtime/workspace",
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    ...overrides,
+  };
+}
+
+function materializeRegisteredTool(registerTool: ReturnType<typeof vi.fn>, overrides?: Record<string, unknown>) {
+  const factory = registerTool.mock.calls[0]?.[0];
+  const opts = registerTool.mock.calls[0]?.[1];
+  expect(opts).toEqual({ name: "memory_search" });
+  expect(factory).toBeTypeOf("function");
+  return factory(buildToolContext(overrides));
 }
 
 describe("memory_search tool exactTop1 metadata", () => {
@@ -117,10 +138,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     const { ctx, registerTool } = buildCtx();
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-1", {
       query: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
@@ -143,6 +164,38 @@ describe("memory_search tool exactTop1 metadata", () => {
     });
   });
 
+  it("uses tool context workspace and agent instead of global runtime agent", async () => {
+    const { ctx, registerTool } = buildCtx();
+    registerMemorySearchTool({
+      ctx,
+      invalidatePromptMemory: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = materializeRegisteredTool(registerTool, {
+      runtimeConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/runtime/workspace" },
+            { id: "ops", workspace: "/runtime/ops" },
+          ],
+        },
+      },
+      workspaceDir: "/runtime/ops",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+    });
+
+    await def.execute("toolcall-toolctx-1", { query: "ops", corpus: "memory" });
+
+    expect(resolveScopeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/runtime/ops",
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+      }),
+    );
+  });
+
   it("does not emit exactTop1 metadata for non-literal top-1", async () => {
     (memorySearchDbMock as any).mockResolvedValueOnce([
       {
@@ -158,10 +211,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     const { ctx, registerTool } = buildCtx();
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-2", { query: "smoke", corpus: "memory" });
     const visible = result.details.visible;
@@ -181,10 +234,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     const { ctx, registerTool } = buildCtx();
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-3", { query: "nothing-here", corpus: "memory" });
     const visible = result.details.visible;
@@ -205,7 +258,6 @@ describe("memory_search tool exactTop1 metadata", () => {
     scanLegacyWorkspaceMock.mockResolvedValueOnce({
       sourceDir: "/workspace",
       targetWorkspaceDir: "/workspace",
-      workspaceDir: "/workspace",
       memoryMd: { path: "MEMORY.md", state: "pending", sha256: "sha-memory", importedSameSha: false },
       dailyFiles: [],
       activeLegacyCount: 1,
@@ -217,10 +269,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     const { ctx, registerTool } = buildCtx();
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-3b", { query: "favorite pizza", corpus: "memory" });
 
@@ -253,10 +305,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     const { ctx, registerTool } = buildCtx();
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-4", {
       query: "What exact marker did I save?",
@@ -284,10 +336,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     const { ctx, registerTool } = buildCtx();
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-5", {
       query: "What marker/id/key values do we have around tests? Summarize briefly.",
@@ -305,10 +357,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     const ensureSessionsIndexBootstrapped = vi.fn(async () => undefined);
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped,
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-6", { query: "needle", corpus: "sessions" });
     const visible = result.details.visible;
@@ -343,10 +395,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     const ensureSessionsIndexBootstrapped = vi.fn(async () => undefined);
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped,
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-7", { query: "saved", corpus: "all" });
     const visible = result.details.visible;
@@ -379,10 +431,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     const { ctx, registerTool } = buildCtx();
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-8", { query: "daily ownership", corpus: "daily" });
     const visible = result.details.visible;
@@ -405,10 +457,10 @@ describe("memory_search tool exactTop1 metadata", () => {
     });
     registerMemorySearchTool({
       ctx,
-      refreshPromptCache: vi.fn(),
+      invalidatePromptMemory: vi.fn(),
       ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
     });
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-schema-1", {
       query: "favorite color",

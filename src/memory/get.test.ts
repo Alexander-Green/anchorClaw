@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import fs from "node:fs/promises";
 
 import { memoryGetFromDb } from "./get.js";
 
@@ -13,13 +12,6 @@ vi.mock("./sessions-index-sync.js", () => ({
 
 import { memoryGetSessionFile } from "./sessions.js";
 import { syncSessionsIndexDb } from "./sessions-index-sync.js";
-
-vi.mock("node:fs/promises", () => ({
-  default: {
-    readFile: vi.fn(),
-  },
-  readFile: vi.fn(),
-}));
 
 const limits = {
   maxResults: 10,
@@ -202,8 +194,8 @@ describe("memoryGetFromDb sessions visibility", () => {
   });
 });
 
-describe("memoryGetFromDb daily memory compatibility", () => {
-  it("prefers imported DB daily content for memory/* lookups", async () => {
+describe("memoryGetFromDb DB-owned daily memory", () => {
+  it("reads imported DB daily content through memory/* compatibility paths", async () => {
     const pool = createPool([
       [
         {
@@ -224,7 +216,6 @@ describe("memoryGetFromDb daily memory compatibility", () => {
       pool,
       userId: "u1",
       workspaceId: "w1",
-      workspaceDir: "/workspace",
       limits,
       lookup: "memory/2026-05-20.md",
     });
@@ -235,7 +226,6 @@ describe("memoryGetFromDb daily memory compatibility", () => {
     expect(got.path).toBe("memory/2026-05-20.md");
     expect(got.kind).toBe("daily-note");
     expect(got.content).toContain("DB daily content");
-    expect(vi.mocked(fs.readFile)).not.toHaveBeenCalled();
   });
 
   it("hides internal-only session-capture rows from memory/* lookups", async () => {
@@ -259,7 +249,6 @@ describe("memoryGetFromDb daily memory compatibility", () => {
       pool,
       userId: "u1",
       workspaceId: "w1",
-      workspaceDir: "/workspace",
       limits,
       lookup: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
     });
@@ -268,7 +257,6 @@ describe("memoryGetFromDb daily memory compatibility", () => {
       throw new Error("expected failed result");
     }
     expect(got.error).toBe("not found");
-    expect(vi.mocked(fs.readFile)).not.toHaveBeenCalled();
   });
 
   it("reads db-memory/daily/<uuid>.md directly from canonical daily table", async () => {
@@ -292,7 +280,6 @@ describe("memoryGetFromDb daily memory compatibility", () => {
       pool,
       userId: "u1",
       workspaceId: "w1",
-      workspaceDir: "/workspace",
       limits,
       lookup: "db-memory/daily/11111111-1111-1111-1111-111111111111.md",
     });
@@ -327,7 +314,6 @@ describe("memoryGetFromDb daily memory compatibility", () => {
       pool,
       userId: "u1",
       workspaceId: "w1",
-      workspaceDir: "/workspace",
       limits,
       lookup: "db-memory/daily/33333333-3333-3333-3333-333333333333.md",
     });
@@ -338,23 +324,19 @@ describe("memoryGetFromDb daily memory compatibility", () => {
     expect(got.error).toBe("not found");
   });
 
-  it("falls back to workspace file when imported DB daily row is absent", async () => {
+  it("returns not found when a memory/* path has no canonical DB row", async () => {
     const pool = createPool([[]]);
-    vi.mocked(fs.readFile).mockResolvedValueOnce("legacy daily file");
     const got = await memoryGetFromDb({
       pool,
       userId: "u1",
       workspaceId: "w1",
-      workspaceDir: "/workspace",
       limits,
       lookup: "memory/2026-05-20.md",
     });
-    expect(got.ok).toBe(true);
-    if (!got.ok) {
-      throw new Error("expected successful result");
+    expect(got.ok).toBe(false);
+    if (got.ok) {
+      throw new Error("expected failed result");
     }
-    expect(got.path).toBe("memory/2026-05-20.md");
-    expect(got.content).toContain("legacy daily file");
-    expect(vi.mocked(fs.readFile)).toHaveBeenCalledTimes(1);
+    expect(got.error).toBe("not found");
   });
 });

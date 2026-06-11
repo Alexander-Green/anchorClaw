@@ -20,11 +20,14 @@ const DAILY_STARTUP_MAX_DAILY_ENTRIES = 4;
 const DAILY_STARTUP_MAX_SESSION_CAPTURES = 4;
 const PROMPT_DEBUG_PREVIEW_MAX_CHARS = 1_500;
 
-function resolveRuntimeTimezone(api: OpenClawPluginApi): string | undefined {
+function resolveRuntimeTimezone(api: OpenClawPluginApi, hookContext?: any): string | undefined {
   const currentConfig =
-    typeof (api as any)?.runtime?.config?.current === "function"
-      ? (api as any).runtime.config.current()
-      : undefined;
+    hookContext?.runtimeConfig ??
+    (typeof hookContext?.getRuntimeConfig === "function"
+      ? hookContext.getRuntimeConfig()
+      : typeof (api as any)?.runtime?.config?.current === "function"
+        ? (api as any).runtime.config.current()
+        : undefined);
   const raw = (currentConfig as any)?.agents?.defaults?.userTimezone;
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
@@ -36,7 +39,7 @@ export function registerDailyPromptHook(params: {
 }) {
   const { api, ctx, ensureStartupBootstrap } = params;
   const debugPromptLogEnabled = ctx.cfg?.debug?.promptLogEnabled === true;
-  const handler = async (event: any) => {
+  const handler = async (event: any, hookContext?: any) => {
     if (ctx.disabledReason || !ctx.cfg) {
       return undefined;
     }
@@ -56,12 +59,28 @@ export function registerDailyPromptHook(params: {
     }
 
     try {
-      if (ctx.durableState?.overall === "pending" && typeof ensureStartupBootstrap === "function") {
+      if (
+        (ctx.durableState?.overall === "pending" ||
+          (ctx.durableState?.overall === "blocked" &&
+            ctx.durableState?.import === "failed_retryable")) &&
+        typeof ensureStartupBootstrap === "function"
+      ) {
         await ensureStartupBootstrap();
+        if (String(ctx.durableState.overall) !== "ready") {
+          return undefined;
+        }
       } else {
         await ctx.ensureReady();
       }
-      const workspaceTarget = resolveRuntimeWorkspaceTarget({ api });
+      const workspaceTarget = resolveRuntimeWorkspaceTarget({
+        api,
+        runtimeConfig: hookContext?.runtimeConfig,
+        getRuntimeConfig: hookContext?.getRuntimeConfig,
+        workspaceDir: hookContext?.workspaceDir,
+        agentId: hookContext?.agentId,
+        sessionKey: hookContext?.sessionKey,
+        sessionId: hookContext?.sessionId,
+      });
       if (!workspaceTarget) {
         throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
       }
@@ -78,7 +97,7 @@ export function registerDailyPromptHook(params: {
         userId: scope.userId,
         workspaceId: scope.workspaceId,
         logicalDates: buildStartupMemoryDateStamps({
-          timezone: resolveRuntimeTimezone(api),
+          timezone: resolveRuntimeTimezone(api, hookContext),
           dailyMemoryDays: STARTUP_DAILY_MEMORY_DAYS,
         }),
         maxSluggedPerDay: STARTUP_MAX_SLUGGED_FILES_PER_DAY,

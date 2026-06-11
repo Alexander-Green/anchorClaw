@@ -38,12 +38,34 @@ function buildCtx() {
         },
       },
       disabledReason: null,
-      cfg: { workspaceDir: "/legacy-workspace" },
+      cfg: {},
       ensureReady: vi.fn(async () => undefined),
       getPool: vi.fn(() => ({ query: vi.fn() })),
     } as any,
     registerTool,
   };
+}
+
+function buildToolContext(overrides?: Record<string, unknown>) {
+  return {
+    runtimeConfig: {
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/runtime/workspace" }],
+      },
+    },
+    workspaceDir: "/runtime/workspace",
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    ...overrides,
+  };
+}
+
+function materializeRegisteredTool(registerTool: ReturnType<typeof vi.fn>, overrides?: Record<string, unknown>) {
+  const factory = registerTool.mock.calls[0]?.[0];
+  const opts = registerTool.mock.calls[0]?.[1];
+  expect(opts).toEqual({ name: "memory_recall" });
+  expect(factory).toBeTypeOf("function");
+  return factory(buildToolContext(overrides));
 }
 
 describe("memory_recall tool exactTop1 metadata", () => {
@@ -71,7 +93,7 @@ describe("memory_recall tool exactTop1 metadata", () => {
     });
     const { ctx, registerTool } = buildCtx();
     registerMemoryRecallTool({ ctx } as any);
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-1", {
       query: "ANCHORCLAW_ACTIVE_MEMORY_MARKER_20260515",
@@ -110,7 +132,7 @@ describe("memory_recall tool exactTop1 metadata", () => {
     });
     const { ctx, registerTool } = buildCtx();
     registerMemoryRecallTool({ ctx } as any);
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-2", {});
     const visible = result.details.visible;
@@ -138,7 +160,7 @@ describe("memory_recall tool exactTop1 metadata", () => {
     });
     const { ctx, registerTool } = buildCtx();
     registerMemoryRecallTool({ ctx } as any);
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-3", { query: "nothing-here" });
     const visible = result.details.visible;
@@ -183,7 +205,7 @@ describe("memory_recall tool exactTop1 metadata", () => {
 
     const { ctx, registerTool } = buildCtx();
     registerMemoryRecallTool({ ctx } as any);
-    const def = registerTool.mock.calls[0]?.[0];
+    const def = materializeRegisteredTool(registerTool);
 
     const result = await def.execute("toolcall-4", {
       query: "What exact marker did I save?",

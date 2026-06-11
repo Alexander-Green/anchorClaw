@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveSessionsSearchState, type AnchorClawConfig } from "../config.js";
 import type { PostgresPool } from "../postgres.js";
+import type { SessionIndexBootstrapTarget } from "../plugin/session-delta.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { resolveMemoryLimits } from "./limits.js";
 import { memoryGetFromDb } from "./get.js";
@@ -12,13 +13,10 @@ import {
 } from "./sessions-index.js";
 import { syncSessionsIndexDb, syncVisibleSessionsIndexDb } from "./sessions-index-sync.js";
 import { canAccessSessionPathByVisibility, filterSessionHitsByVisibility } from "./sessions-visibility.js";
-import { buildMemoryReadResult } from "./read-file-shared.js";
 import {
   resolveAgentWorkspacePeerIds,
   resolveWorkspaceTargets,
 } from "../workspace-targets.js";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 type MemorySource = "memory" | "sessions";
 
@@ -107,7 +105,7 @@ export type AnchorClawMemorySearchManagerOptions = {
   api: OpenClawPluginApi;
   cfg: AnchorClawConfig;
   ensureReady: () => Promise<void>;
-  ensureSessionsIndexBootstrapped?: () => Promise<void>;
+  ensureSessionsIndexBootstrapped?: (target?: SessionIndexBootstrapTarget) => Promise<void>;
   getPool: () => PostgresPool;
   agentId: string;
   purpose?: "default" | "status" | "cli";
@@ -173,22 +171,22 @@ export function createAnchorClawMemorySearchManager(
   const warnWorkspaceUnavailable = (operation: "search" | "readFile" | "sync") => {
     api.logger?.warn?.(`anchorclaw: manager ${operation} skipped (${RUNTIME_WORKSPACE_UNAVAILABLE})`);
   };
-
-  const resolveWorkspaceRelativePath = (relPath: string): string | null => {
-    const trimmed = relPath.trim().replaceAll("\\", "/");
-    if (!trimmed) {
-      return null;
+  const resolveManagerSessionKey = (explicitSessionKey?: string): string | undefined => {
+    const normalizedExplicit =
+      typeof explicitSessionKey === "string" && explicitSessionKey.trim()
+        ? explicitSessionKey.trim()
+        : undefined;
+    if (normalizedExplicit) {
+      return normalizedExplicit;
     }
-    if (trimmed.startsWith("/") || trimmed.includes("..")) {
-      return null;
+    const runtimeAgentId = String((api as any)?.runtime?.agentId ?? "").trim();
+    if (!runtimeAgentId || runtimeAgentId !== params.agentId) {
+      return undefined;
     }
-    if (trimmed === "MEMORY.md") {
-      return trimmed;
-    }
-    if (trimmed.startsWith("memory/")) {
-      return trimmed;
-    }
-    return null;
+    const runtimeSessionKey = (api as any)?.runtime?.sessionKey;
+    return typeof runtimeSessionKey === "string" && runtimeSessionKey.trim()
+      ? runtimeSessionKey.trim()
+      : undefined;
   };
 
   const listVisibleAgentIds = async (): Promise<string[]> => {
@@ -219,12 +217,13 @@ export function createAnchorClawMemorySearchManager(
         return [];
       }
       await params.ensureReady();
+      const sessionKey = resolveManagerSessionKey(opts?.sessionKey);
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: params.getPool(),
         workspaceDir,
         agentId: params.agentId,
-        sessionKey: opts?.sessionKey ?? (api as any)?.runtime?.sessionKey,
+        sessionKey,
         configuredExternalId: cfg.identity?.externalId,
       });
       const limits = resolveMemoryLimits(cfg);
@@ -252,7 +251,11 @@ export function createAnchorClawMemorySearchManager(
 
       if (effectiveSources.includes("sessions")) {
         if (typeof params.ensureSessionsIndexBootstrapped === "function") {
-          await params.ensureSessionsIndexBootstrapped();
+          await params.ensureSessionsIndexBootstrapped({
+            workspaceDir,
+            agentId: params.agentId,
+            ...(sessionKey ? { sessionKey } : {}),
+          });
         }
         const indexedSessionHits = await memorySearchSessionsIndexDb({
           pool: params.getPool(),
@@ -283,6 +286,8 @@ export function createAnchorClawMemorySearchManager(
         const mappedSessionHits = sessionHits.map(mapHitToManagerResult);
         const filteredSessionHits = await filterSessionHitsByVisibility({
           api,
+          sessionKey,
+          fallbackToRuntimeSession: false,
           hits: mappedSessionHits,
         });
         results.push(...filteredSessionHits);
@@ -307,12 +312,13 @@ export function createAnchorClawMemorySearchManager(
       }
       await params.ensureReady();
       const relPath = readParams.relPath.trim();
+      const sessionKey = resolveManagerSessionKey();
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: params.getPool(),
         workspaceDir,
         agentId: params.agentId,
-        sessionKey: (api as any)?.runtime?.sessionKey,
+        sessionKey,
         configuredExternalId: cfg.identity?.externalId,
       });
       const limits = resolveMemoryLimits(cfg);
@@ -325,6 +331,8 @@ export function createAnchorClawMemorySearchManager(
         }
         const verdict = await canAccessSessionPathByVisibility({
           api,
+          sessionKey,
+          fallbackToRuntimeSession: false,
           path: relPath,
         });
         if (!verdict.allowed) {
@@ -381,7 +389,6 @@ export function createAnchorClawMemorySearchManager(
           userId: scope.userId,
           workspaceId: scope.workspaceId,
           agentId: params.agentId,
-          workspaceDir,
           sessionsVisibility,
           limits,
           lookup: relPath,
@@ -397,36 +404,6 @@ export function createAnchorClawMemorySearchManager(
           from: got.fromLine,
           lines: got.lineCount,
         };
-      }
-
-      const workspaceRelative = resolveWorkspaceRelativePath(relPath);
-      if (workspaceRelative) {
-        const absPath = path.resolve(workspaceDir, workspaceRelative);
-        const relative = path.relative(workspaceDir, absPath);
-        if (relative.startsWith("..") || path.isAbsolute(relative)) {
-          return { text: "", path: relPath };
-        }
-        try {
-          const content = await fs.readFile(absPath, "utf8");
-          const read = buildMemoryReadResult({
-            content,
-            relPath: workspaceRelative,
-            from: fromLine,
-            lines: lineCount,
-            defaultLines: limits.getDefaultLines,
-            maxChars: limits.getMaxChars,
-          });
-          return {
-            text: read.text,
-            path: read.path,
-            ...(read.truncated ? { truncated: true } : {}),
-            ...(typeof read.from === "number" ? { from: read.from } : {}),
-            ...(typeof read.lines === "number" ? { lines: read.lines } : {}),
-            ...(typeof read.nextFrom === "number" ? { nextFrom: read.nextFrom } : {}),
-          };
-        } catch {
-          return { text: "", path: relPath };
-        }
       }
 
       const got = await memoryGetFromDb({
@@ -491,12 +468,13 @@ export function createAnchorClawMemorySearchManager(
         return;
       }
       await params.ensureReady();
+      const sessionKey = resolveManagerSessionKey();
       const scope = await resolveUserAndWorkspaceScope({
         api,
         pool: params.getPool(),
         workspaceDir,
         agentId: params.agentId,
-        sessionKey: (api as any)?.runtime?.sessionKey,
+        sessionKey,
         configuredExternalId: cfg.identity?.externalId,
       });
       if (typeof syncParams?.progress === "function") {

@@ -6,8 +6,9 @@ import { appendDailyBlockTx, resolveDailyLogicalDate } from "../memory/daily.js"
 import type { PostgresPool } from "../postgres.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 import {
-  resolveRuntimeWorkspaceTarget,
-  RUNTIME_WORKSPACE_UNAVAILABLE,
+  resolveRuntimeWorkspaceResolution,
+  resolveRuntimeWorkspaceResolutionFromScope,
+  type RuntimeWorkspaceTarget,
 } from "./runtime-workspace.js";
 
 const SESSION_CAPTURE_SOURCE_TYPE = "session-capture";
@@ -160,23 +161,31 @@ function resolveRuntimeTimezone(api: OpenClawPluginApi): string | undefined {
   return nonEmptyString((currentConfig as any)?.agents?.defaults?.userTimezone);
 }
 
-function resolveHookWorkspaceDir(params: {
+function resolveSessionCaptureTarget(params: {
   api: OpenClawPluginApi;
   hookContext?: BeforeResetHookContext;
-}): string {
-  const hookWorkspaceDir = nonEmptyString(params.hookContext?.workspaceDir);
-  if (hookWorkspaceDir) {
-    return hookWorkspaceDir;
+}): RuntimeWorkspaceTarget {
+  const workspaceDir = nonEmptyString(params.hookContext?.workspaceDir);
+  const agentId = nonEmptyString(params.hookContext?.agentId);
+  const sessionKey = nonEmptyString(params.hookContext?.sessionKey);
+  const sessionId = nonEmptyString(params.hookContext?.sessionId);
+  const hasHookScope = Boolean(workspaceDir || agentId || sessionKey || sessionId);
+  const resolution = hasHookScope
+    ? resolveRuntimeWorkspaceResolutionFromScope({
+        runtimeConfig:
+          typeof (params.api as any)?.runtime?.config?.current === "function"
+            ? (params.api as any).runtime.config.current()
+            : undefined,
+        workspaceDir,
+        agentId,
+        sessionKey,
+        sessionId,
+      })
+    : resolveRuntimeWorkspaceResolution({ api: params.api });
+  if (!resolution.ok) {
+    throw new Error(`${resolution.error}: ${resolution.reason}`);
   }
-  const runtimeTarget = resolveRuntimeWorkspaceTarget({
-    api: params.api,
-    agentId: nonEmptyString(params.hookContext?.agentId),
-    sessionKey: nonEmptyString(params.hookContext?.sessionKey),
-  });
-  if (!runtimeTarget) {
-    throw new Error(RUNTIME_WORKSPACE_UNAVAILABLE);
-  }
-  return runtimeTarget.workspaceDir;
+  return resolution.target;
 }
 
 function buildSessionSourceId(params: {
@@ -339,15 +348,12 @@ export async function captureBeforeResetSessionMemory(params: {
 
   await params.ctx.ensureReady();
 
-  const workspaceDir = resolveHookWorkspaceDir({
+  const workspaceTarget = resolveSessionCaptureTarget({
     api: params.api,
     hookContext: params.hookContext,
   });
   const pool = params.ctx.getPool();
-  const agentId = nonEmptyString(params.hookContext?.agentId) ?? nonEmptyString((params.api as any)?.runtime?.agentId);
-  const sessionKey =
-    nonEmptyString(params.hookContext?.sessionKey) ?? nonEmptyString((params.api as any)?.runtime?.sessionKey);
-  const sessionId = nonEmptyString(params.hookContext?.sessionId);
+  const { workspaceDir, agentId, sessionKey, sessionId } = workspaceTarget;
   const sessionFile = nonEmptyString(params.event?.sessionFile);
   const reason = nonEmptyString(params.event?.reason) ?? "unknown";
   const runtimeTimezone = resolveRuntimeTimezone(params.api);
