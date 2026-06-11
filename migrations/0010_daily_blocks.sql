@@ -301,28 +301,28 @@ verified_legacy_receipts AS (
 ),
 covered_windows AS (
   SELECT DISTINCT ON (
-    window.user_id,
-    window.workspace_id,
-    window.daily_block_id,
-    window.window_index
+    covered.user_id,
+    covered.workspace_id,
+    covered.daily_block_id,
+    covered.window_index
   )
-    window.*,
+    covered.*,
     receipt.maintenance_run_id,
     receipt.created_at,
     receipt.id AS legacy_receipt_id
-  FROM fixed_windows window
+  FROM fixed_windows covered
   JOIN verified_legacy_receipts receipt
-    ON receipt.user_id = window.user_id
-   AND receipt.workspace_id = window.workspace_id
-   AND receipt.daily_entry_id = window.daily_entry_id
-   AND receipt.char_start <= window.char_start
-   AND receipt.char_end >= window.char_end
-  WHERE window.window_content IS NOT NULL
+    ON receipt.user_id = covered.user_id
+   AND receipt.workspace_id = covered.workspace_id
+   AND receipt.daily_entry_id = covered.daily_entry_id
+   AND receipt.char_start <= covered.char_start
+   AND receipt.char_end >= covered.char_end
+  WHERE covered.window_content IS NOT NULL
   ORDER BY
-    window.user_id,
-    window.workspace_id,
-    window.daily_block_id,
-    window.window_index,
+    covered.user_id,
+    covered.workspace_id,
+    covered.daily_block_id,
+    covered.window_index,
     receipt.created_at DESC,
     receipt.id DESC
 )
@@ -341,19 +341,19 @@ INSERT INTO memory_daily_block_extraction_windows (
   created_at
 )
 SELECT
-  window.user_id,
-  window.workspace_id,
-  window.daily_block_id,
-  window.maintenance_run_id,
-  window.daily_path,
-  window.logical_date,
+  covered.user_id,
+  covered.workspace_id,
+  covered.daily_block_id,
+  covered.maintenance_run_id,
+  covered.daily_path,
+  covered.logical_date,
   1,
-  window.window_index,
-  encode(digest(window.window_content, 'sha256'), 'hex'),
-  window.char_start,
-  window.char_end,
-  window.created_at
-FROM covered_windows window
+  covered.window_index,
+  encode(digest(covered.window_content, 'sha256'), 'hex'),
+  covered.char_start,
+  covered.char_end,
+  covered.created_at
+FROM covered_windows covered
 ON CONFLICT (
   user_id,
   workspace_id,
