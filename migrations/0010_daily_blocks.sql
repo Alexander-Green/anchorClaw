@@ -246,17 +246,17 @@ fixed_windows AS (
     block.daily_entry_id,
     block.daily_path,
     block.logical_date,
-    generated.offset AS char_start,
+    generated.window_offset AS char_start,
     least(
-      generated.offset + 768,
+      generated.window_offset + 768,
       anchorclaw_migration_0010_utf16_length(block.normalized_content)
     ) AS char_end,
-    generated.offset / 640 AS window_index,
+    generated.window_offset / 640 AS window_index,
     anchorclaw_migration_0010_utf16_slice(
       block.normalized_content,
-      generated.offset,
+      generated.window_offset,
       least(
-        generated.offset + 768,
+        generated.window_offset + 768,
         anchorclaw_migration_0010_utf16_length(block.normalized_content)
       )
     ) AS window_content
@@ -265,7 +265,7 @@ fixed_windows AS (
     0,
     anchorclaw_migration_0010_utf16_length(block.normalized_content) - 1,
     640
-  ) AS generated(offset)
+  ) AS generated(window_offset)
   WHERE anchorclaw_migration_0010_utf16_length(block.normalized_content) > 0
 ),
 verified_legacy_receipts AS (
