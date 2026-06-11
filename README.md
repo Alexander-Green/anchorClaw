@@ -4,24 +4,30 @@
 
 # AnchorClaw - Reliable Postgres Memory for OpenClaw
 
-> Alpha preview. API and operator workflows may change before stable release.
->
-> Alpha migration notice:
-> `plugins.entries.anchorclaw.config.workspaceDir` and
-> `maintenance.extractor.agentId` were removed starting in `0.0.9`.
-> The reason is the move to an explicit multi-agent workspace model, where
-> runtime/import/maintenance scope is resolved from OpenClaw agent context
-> instead of one global plugin workspace key.
-> See [ARCHITECTURE.md#multi-agent-workspace-model](./ARCHITECTURE.md#multi-agent-workspace-model).
-
 **No more "the agent forgot everything again."**
 
-**This is not just another memory plugin. AnchorClaw is a full Postgres-backed
-memory backend for OpenClaw's durable and daily memory runtime.**
+**AnchorClaw turns OpenClaw memory into real application state: Postgres-backed,
+inspectable, migratable, and multi-agent aware.**
+
+It is built for the messy cases operators hit first:
+
+- resets and compaction should not scatter useful context across sessions and
+  files;
+- `MEMORY.md` and daily notes should not become a noisy pile of duplicates;
+- multiple users, bots, agents, and workspaces need clear memory boundaries;
+- shared workspaces should intentionally share memory without duplicate
+  processing.
 
 AnchorClaw replaces fragile file-first OpenClaw memory with PostgreSQL as the
 source of truth, while keeping OpenClaw's existing tools, CLI flows, and
 `MEMORY.md` / `memory/YYYY-MM-DD.md` expectations compatible.
+
+| Before AnchorClaw | With AnchorClaw |
+| --- | --- |
+| Memory lives in Markdown files that drift over time. | Durable and daily memory are DB-backed and auditable. |
+| Reset and compaction can leave context split across places. | Runtime reads and writes go through one Postgres-backed memory layer. |
+| Multi-agent setups depend on one global plugin workspace. | Memory scope follows active OpenClaw agent/workspace routing. |
+| Operators debug memory by reading files, prompts, and tool output. | Imports, diagnostics, and provenance are queryable. |
 
 AnchorClaw is multi-agent aware. Runtime memory follows the active OpenClaw
 agent workspace, while imports and background maintenance use explicit
@@ -38,6 +44,16 @@ That means SQL-first storage, deterministic writes, full-text search, clean
 imports, backups, migrations, and inspectable state before adding any semantic
 magic. Embeddings and semantic recall are planned as an enrichment layer on top
 of the database, not as the foundation that decides whether memory survives.
+
+> Alpha preview. API and operator workflows may change before stable release.
+>
+> Alpha migration notice:
+> `plugins.entries.anchorclaw.config.workspaceDir` and
+> `maintenance.extractor.agentId` were removed starting in `0.0.9`.
+> The reason is the move to an explicit multi-agent workspace model, where
+> runtime/import/maintenance scope is resolved from OpenClaw agent context
+> instead of one global plugin workspace key.
+> See [ARCHITECTURE.md#multi-agent-workspace-model](./ARCHITECTURE.md#multi-agent-workspace-model).
 
 **AnchorClaw is built and maintained by Alexander Green.**
 Canonical repository: https://github.com/Alexander-Green/anchorClaw
@@ -91,7 +107,9 @@ AnchorClaw starts lower in the stack:
   content into Postgres without keeping duplicate active runtime files.
 - **Multi-agent workspace routing**: runtime operations follow the active agent,
   imports target explicitly selected agents, and maintenance follows an
-  explicit default, selected-agent, or all-workspaces scope.
+  explicit default, selected-agent, or all-workspaces scope. Selected-agent
+  maintenance is configured through `maintenance.workspaceScope`, while setup
+  CLI writes only `default-agent` or `all-agent-workspaces`.
 - **Path-based workspace deduplication** so several agents pointing to the same
   resolved workspace path do not create duplicate maintenance or import
   targets.
@@ -146,7 +164,9 @@ instead of relying on one global plugin workspace:
 - imports explicitly target the default agent, one configured agent, or every
   unique configured agent workspace;
 - background maintenance explicitly covers the default agent, selected agents,
-  or all configured workspaces;
+  or all configured workspaces. Selected-agent maintenance is an explicit
+  `maintenance.workspaceScope` config mode, not a `setup
+  --maintenance-workspace-scope` flag value;
 - different workspace paths map to isolated DB memory scopes;
 - agents sharing the same resolved workspace path intentionally share one DB
   memory scope;

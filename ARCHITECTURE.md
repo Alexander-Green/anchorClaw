@@ -350,6 +350,7 @@ The intended matrix is:
 | explicit `--agent ops` import | resolved workspace of `ops` |
 | background maintenance with `workspaceScope=default-agent` | resolved workspace of the default agent |
 | background maintenance with `workspaceScope=all-agent-workspaces` | every unique resolved workspace, deduped by path |
+| background maintenance with `workspaceScope=agents` | resolved workspaces of listed agents, deduped by path |
 | multiple agents sharing one resolved workspace path | one DB workspace scope for that shared path |
 | external backup/legacy source import | read from external `sourceDir`, write into explicit target workspace |
 

@@ -182,6 +182,11 @@ implicit-main case.
 Use `--maintenance-workspace-scope all-agent-workspaces` when maintenance should
 cover every unique configured workspace from `agents.list`.
 
+For selected-agent maintenance, preconfigure `maintenance.workspaceScope` with
+`mode: "agents"` and an explicit `agents` list. Setup preserves that existing
+config value, but `--maintenance-workspace-scope` does not create selected-agent
+scopes.
+
 If `maintenance.workspaceScope` is already present in config, the flag can be
 omitted and setup preserves the existing value.
 
