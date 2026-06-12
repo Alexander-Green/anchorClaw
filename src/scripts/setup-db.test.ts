@@ -278,6 +278,251 @@ describe("runAnchorClawSetup", () => {
     }
   });
 
+  it("writes semantic enablement and defaults memorySearch from non-interactive flags", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ plugins: {} }, null, 2) + "\n");
+
+      await runAnchorClawSetup({
+        nonInteractive: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+        maintenanceWorkspaceScope: "default-agent",
+        semanticEnabled: true,
+        semanticProvider: "openai-compatible",
+        semanticModel: "text-embedding-3-small",
+        semanticBaseUrl: "http://127.0.0.1:1234/v1",
+        semanticApiKey: "${ANCHORCLAW_EMBED_API_KEY}",
+      });
+
+      const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(cfg.plugins.entries.anchorclaw.config.semantic).toEqual({ enabled: true });
+      expect(cfg.agents.defaults.memorySearch).toEqual({
+        provider: "openai-compatible",
+        model: "text-embedding-3-small",
+        remote: {
+          baseUrl: "http://127.0.0.1:1234/v1",
+          apiKey: "${ANCHORCLAW_EMBED_API_KEY}",
+        },
+      });
+      expect(consoleLogSpy).toHaveBeenCalledWith("- semantic: enabled");
+      expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch provider: openai-compatible");
+      expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch model: text-embedding-3-small");
+      expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch apiKey: configured");
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("merges semantic setup with existing defaults memorySearch and preserves per-agent overrides", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "openai-compatible",
+                model: "old-model",
+                remote: {
+                  baseUrl: "http://127.0.0.1:1234/v1",
+                  apiKey: { env: "OLD_EMBED_API_KEY" },
+                },
+              },
+            },
+            list: [
+              {
+                id: "ops",
+                memorySearch: {
+                  provider: "custom-provider",
+                  model: "ops-model",
+                },
+              },
+            ],
+          },
+          plugins: {
+            entries: {
+              anchorclaw: {
+                config: {
+                  semantic: {
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          },
+        }, null, 2) + "\n",
+      );
+
+      await runAnchorClawSetup({
+        nonInteractive: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+        maintenanceWorkspaceScope: "default-agent",
+        semanticModel: "new-model",
+      });
+
+      const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(cfg.plugins.entries.anchorclaw.config.semantic).toEqual({ enabled: true });
+      expect(cfg.agents.defaults.memorySearch).toEqual({
+        provider: "openai-compatible",
+        model: "new-model",
+        remote: {
+          baseUrl: "http://127.0.0.1:1234/v1",
+          apiKey: { env: "OLD_EMBED_API_KEY" },
+        },
+      });
+      expect(cfg.agents.list[0].memorySearch).toEqual({
+        provider: "custom-provider",
+        model: "ops-model",
+      });
+      expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch apiKey: configured");
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when semantic is enabled non-interactively without provider/model after merge", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ plugins: {} }, null, 2) + "\n");
+
+      await expect(
+        runAnchorClawSetup({
+          nonInteractive: true,
+          adminUrl: "postgres://localhost/postgres",
+          dbName: "anchorclaw",
+          dbUser: "anchorclaw",
+          dbPassword: "secret",
+          schema: "memory",
+          maintenanceWorkspaceScope: "default-agent",
+          semanticEnabled: true,
+        }),
+      ).rejects.toThrow(
+        "semantic setup requires agents.defaults.memorySearch.provider or --semantic-provider when semantic is enabled",
+      );
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when semantic flags are used with skip-config", async () => {
+    await expect(
+      runAnchorClawSetup({
+        nonInteractive: true,
+        skipConfig: true,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+        semanticEnabled: true,
+        semanticProvider: "openai-compatible",
+        semanticModel: "text-embedding-3-small",
+      }),
+    ).rejects.toThrow("semantic setup options require config update; remove semantic flags or omit --skip-config");
+  });
+
   it("disables bundled session-memory hook while preserving its config", async () => {
     const previousHome = process.env.HOME;
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
@@ -613,6 +858,7 @@ describe("runAnchorClawSetup", () => {
         "", // schema
         "", // password
         "", // update config -> default yes
+        "", // semantic -> default no
         "", // maintenance scope -> default first choice
       ];
 
@@ -675,6 +921,7 @@ describe("runAnchorClawSetup", () => {
         "", // schema
         "", // password
         "", // update config -> default yes
+        "", // semantic -> default no
         "2", // maintenance scope -> disable maintenance
         "", // rotate existing user password -> default no
       ];
@@ -829,6 +1076,98 @@ describe("runAnchorClawSetup", () => {
 
       const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
       expect(cfg).toEqual({ plugins: {} });
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.OPENCLAW_CONFIG_DIR;
+      } else {
+        process.env.OPENCLAW_CONFIG_DIR = previousConfigDir;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("uses existing defaults as interactive semantic prompt defaults and lets Enter keep them", async () => {
+    const previousHome = process.env.HOME;
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousConfigDir = process.env.OPENCLAW_CONFIG_DIR;
+    const home = mkdtempSync(join(tmpdir(), "anchorclaw-setup-"));
+    const configDir = join(home, ".openclaw");
+    const configPath = join(configDir, "openclaw.json");
+    try {
+      process.env.HOME = home;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.OPENCLAW_CONFIG_DIR;
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "openai-compatible",
+                model: "text-embedding-3-small",
+                remote: {
+                  baseUrl: "http://127.0.0.1:1234/v1",
+                },
+              },
+            },
+          },
+          plugins: {},
+        }, null, 2) + "\n",
+      );
+
+      readlineState.answers = [
+        "", // admin url
+        "", // db name
+        "", // db user
+        "", // schema
+        "", // password
+        "", // update config -> default yes
+        "y", // semantic -> enable
+        "", // provider -> keep existing
+        "", // model -> keep existing
+        "", // baseUrl -> keep existing
+        "", // apiKey -> keep/skip
+        "", // maintenance scope -> default first choice
+      ];
+
+      await runAnchorClawSetup({
+        nonInteractive: false,
+        adminUrl: "postgres://localhost/postgres",
+        dbName: "anchorclaw",
+        dbUser: "anchorclaw",
+        dbPassword: "secret",
+        schema: "memory",
+      });
+
+      const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(cfg.plugins.entries.anchorclaw.config.semantic).toEqual({ enabled: true });
+      expect(cfg.agents.defaults.memorySearch).toEqual({
+        provider: "openai-compatible",
+        model: "text-embedding-3-small",
+        remote: {
+          baseUrl: "http://127.0.0.1:1234/v1",
+        },
+      });
+      expect(consoleLogSpy).toHaveBeenCalledWith("- semantic: enabled");
+      expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch apiKey: not configured");
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;

@@ -19,6 +19,8 @@ This guide keeps the operator details out of the main README. Start with
 - PostgreSQL
 
 AnchorClaw does not require embeddings for the MVP.
+The current runtime path remains SQL/FTS-first even if you preconfigure the
+future semantic layer during setup.
 
 ## Basic Install
 
@@ -54,6 +56,14 @@ Setup preserves unrelated top-level `anchorclaw.config` keys such as
 `identity`, `sessions`, and `limits`. It updates the `maintenance` enablement,
 workspace scope, and extractor enablement selected during setup while
 preserving existing interval, batch, and extractor limit overrides.
+
+When semantic is enabled during setup, setup also writes:
+
+- `plugins.entries.anchorclaw.config.semantic.enabled = true`
+- `agents.defaults.memorySearch`
+
+Setup only manages `agents.defaults.memorySearch` in this first slice. Existing
+per-agent `agents.list[].memorySearch` overrides are preserved as-is.
 
 Setup rewrites `anchorclaw.config.postgres`; if you use SSL or custom pool
 settings, add those overrides after setup.
@@ -160,6 +170,10 @@ By default, setup runs in interactive mode and prompts for:
 - schema name (`none` uses the default PostgreSQL `search_path`)
 - app password, or auto-generate
 - whether to update `~/.openclaw/openclaw.json`
+- whether to enable the AnchorClaw semantic layer
+- if semantic is enabled: `provider`, `model`, optional `baseUrl`, and optional
+  `apiKey`, using existing `agents.defaults.memorySearch` values as prompt
+  defaults when present
 
 Non-interactive example:
 
@@ -170,6 +184,22 @@ openclaw anchorclaw setup \
   --db-user anchorclaw \
   --schema memory \
   --maintenance-workspace-scope default-agent \
+  --non-interactive
+```
+
+Non-interactive semantic example:
+
+```bash
+openclaw anchorclaw setup \
+  --admin-url postgres://postgres:password@localhost/postgres \
+  --db-name anchorclaw \
+  --db-user anchorclaw \
+  --schema memory \
+  --maintenance-workspace-scope default-agent \
+  --semantic-enabled \
+  --semantic-provider openai-compatible \
+  --semantic-model text-embedding-3-small \
+  --semantic-base-url http://127.0.0.1:1234/v1 \
   --non-interactive
 ```
 
@@ -196,6 +226,22 @@ touch config, use `--skip-config --non-interactive`.
 If config update is enabled and no maintenance scope is available from either
 the flag or existing config, setup fails fast instead of guessing.
 
+Semantic merge rules:
+
+- `--semantic-enabled` turns on
+  `plugins.entries.anchorclaw.config.semantic.enabled`;
+- semantic flags write only `agents.defaults.memorySearch`;
+- if a semantic flag is omitted, setup reuses the existing
+  `agents.defaults.memorySearch` value;
+- if a semantic flag is provided, it overrides the existing default value;
+- after merge, `provider` and `model` must exist or setup fails fast;
+- `baseUrl` is optional in the first slice;
+- `apiKey` is optional and is reported only as `configured` or
+  `not configured` in setup output;
+- existing `memorySearch` config does not auto-enable AnchorClaw semantic by
+  itself;
+- semantic flags require config update and are not compatible with `--skip-config`.
+
 Useful flags:
 
 - `--skip-config`: keep `~/.openclaw/openclaw.json` unchanged
@@ -203,6 +249,13 @@ Useful flags:
 - `--db-password <pass>`: set app user password explicitly
 - `--maintenance-workspace-scope <mode>`: write maintenance scope into config;
   supported values are `default-agent` and `all-agent-workspaces`
+- `--semantic-enabled`: enable `plugins.entries.anchorclaw.config.semantic.enabled`
+- `--semantic-provider <id>`: set `agents.defaults.memorySearch.provider`
+- `--semantic-model <model>`: set `agents.defaults.memorySearch.model`
+- `--semantic-base-url <url>`: set
+  `agents.defaults.memorySearch.remote.baseUrl`
+- `--semantic-api-key <value>`: set
+  `agents.defaults.memorySearch.remote.apiKey`
 
 Defaults when omitted:
 
@@ -261,6 +314,42 @@ into `plugins.entries.anchorclaw.config`.
   }
 }
 ```
+
+Semantic opt-in example:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "anchorclaw": {
+        "config": {
+          "semantic": {
+            "enabled": true
+          }
+        }
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "memorySearch": {
+        "provider": "openai-compatible",
+        "model": "text-embedding-3-small",
+        "remote": {
+          "baseUrl": "http://127.0.0.1:1234/v1"
+        }
+      }
+    }
+  }
+}
+```
+
+Current boundary:
+
+- this prepares config for the future semantic layer;
+- current AnchorClaw runtime still uses SQL/FTS retrieval;
+- `memory_status` reports semantic enabled/configured state, but semantic
+  retrieval itself is not active yet.
 
 `sessions.search.enabled` controls whether the sessions corpus is exposed.
 `sessions.visibility` controls which indexed transcripts an agent can search

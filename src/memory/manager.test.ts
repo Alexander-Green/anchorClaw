@@ -184,7 +184,6 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
   });
 
   it("filters sessions hits in current mode through visibility helper", async () => {
-    vi.mocked(memorySearchDb).mockResolvedValueOnce([]);
     vi.mocked(memorySearchSessionsIndexDb).mockResolvedValueOnce([
       {
         corpus: "sessions",
@@ -221,7 +220,6 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
   });
 
   it("filters sessions hits in visible mode through visibility helper", async () => {
-    vi.mocked(memorySearchDb).mockResolvedValueOnce([]);
     vi.mocked(memorySearchSessionsIndexDb).mockResolvedValueOnce([
       {
         corpus: "sessions",
@@ -330,6 +328,138 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       custom: {
         degraded: true,
         error: "runtime_workspace_unavailable",
+      },
+    });
+  });
+
+  it("reports semantic layer disabled by default", async () => {
+    const manager = createAnchorClawMemorySearchManager({
+      api: {
+        runtime: buildRuntime(),
+      } as any,
+      cfg: {
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      } as any,
+      ensureReady: async () => undefined,
+      getPool: () => ({ query: vi.fn() }) as any,
+      agentId: "main",
+    });
+
+    expect(manager.status()).toMatchObject({
+      custom: {
+        semanticConfigured: false,
+        semanticEnabled: false,
+        semanticEffective: false,
+        semanticReason: "semantic_disabled",
+      },
+    });
+    expect(manager.getCachedEmbeddingAvailability?.()).toMatchObject({
+      ok: false,
+      error: "semantic layer disabled",
+    });
+  });
+
+  it("reports semantic opt-in as not implemented without changing search behavior", async () => {
+    vi.mocked(memorySearchDb).mockResolvedValueOnce([
+      {
+        corpus: "memory",
+        path: "db-memory/items/m1.md",
+        kind: "note",
+        score: 0.9,
+        snippet: "saved fact",
+        startLine: 1,
+        endLine: 1,
+      },
+    ] as any);
+    const manager = createAnchorClawMemorySearchManager({
+      api: {
+        runtime: buildRuntime(),
+      } as any,
+      cfg: {
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        semantic: { enabled: true },
+      } as any,
+      ensureReady: async () => undefined,
+      getPool: () => ({ query: vi.fn() }) as any,
+      agentId: "main",
+    });
+
+    const debug: unknown[] = [];
+    const results = await manager.search("saved", { onDebug: (item) => debug.push(item) });
+
+    expect(results).toHaveLength(1);
+    expect(memorySearchDb).toHaveBeenCalledTimes(1);
+    expect(debug).toEqual([{ backend: "builtin", configuredMode: "postgres", effectiveMode: "postgres" }]);
+    expect(manager.status()).toMatchObject({
+      custom: {
+        semanticConfigured: true,
+        semanticEnabled: true,
+        semanticEffective: false,
+        semanticReason: "semantic_not_implemented",
+      },
+    });
+    await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
+      ok: false,
+      error: "semantic layer not implemented",
+    });
+  });
+
+  it("resolves semantic provider/model from agent memorySearch before defaults", () => {
+    const manager = createAnchorClawMemorySearchManager({
+      api: {
+        runtime: {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          config: {
+            current: () => ({
+              agents: {
+                defaults: {
+                  memorySearch: {
+                    provider: "openai",
+                    model: "text-embedding-3-small",
+                  },
+                },
+                list: [
+                  { id: "main", default: true, workspace: "/runtime/main" },
+                  {
+                    id: "ops",
+                    workspace: "/runtime/ops",
+                    memorySearch: {
+                      provider: "ollama",
+                      model: "nomic-embed-text",
+                      remote: {
+                        baseUrl: "http://127.0.0.1:11434",
+                        apiKey: "${OLLAMA_KEY}",
+                      },
+                    },
+                  },
+                ],
+              },
+            }),
+          },
+        },
+      } as any,
+      cfg: {
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        semantic: { enabled: true },
+      } as any,
+      ensureReady: async () => undefined,
+      getPool: () => ({ query: vi.fn() }) as any,
+      agentId: "ops",
+    });
+
+    expect(manager.status()).toMatchObject({
+      custom: {
+        semanticConfigured: true,
+        semanticEnabled: true,
+        semanticEffective: false,
+        semanticReason: "semantic_not_implemented",
+        semanticMemorySearchConfigured: true,
+        semanticResolvedFrom: "agent",
+        semanticProvider: "ollama",
+        semanticModel: "nomic-embed-text",
+        semanticBaseUrl: "http://127.0.0.1:11434",
+        semanticApiKeyConfigured: true,
       },
     });
   });

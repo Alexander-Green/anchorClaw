@@ -16,6 +16,11 @@ export type AnchorClawSetupOptions = {
   rotateDbPassword?: boolean;
   schema?: string;
   maintenanceWorkspaceScope?: "default-agent" | "all-agent-workspaces";
+  semanticEnabled?: boolean;
+  semanticProvider?: string;
+  semanticModel?: string;
+  semanticBaseUrl?: string;
+  semanticApiKey?: string;
   schemaNone?: boolean;
   skipConfig?: boolean;
   nonInteractive?: boolean;
@@ -36,12 +41,25 @@ type ResolvedSetupOptions = {
   maintenanceWorkspaceScope?: MaintenanceWorkspaceScopeConfig;
   maintenanceEnabled: boolean;
   extractorEnabled: boolean;
+  semanticConfigEnabled?: boolean;
+  semanticResolvedEnabled: boolean;
+  semanticProvider?: string;
+  semanticModel?: string;
+  semanticBaseUrl?: string;
+  semanticApiKey?: string;
+  semanticApiKeyConfigured: boolean;
   skipConfig: boolean;
   nonInteractive: boolean;
 };
 
 type PromptInjectionConfigState = "enabled" | "disabled" | "unset";
 type SessionMemoryHookConfigState = "enabled" | "disabled" | "unset";
+type ExistingMemorySearchDefaults = {
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  apiKeyConfigured: boolean;
+};
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DATABASE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -84,6 +102,11 @@ function normalizeEnvPath(value: string | undefined): string | undefined {
     return undefined;
   }
   return trimmed;
+}
+
+function normalizeOptionalInput(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function resolveSafeOsHomedir(): string | undefined {
@@ -188,6 +211,29 @@ function readExistingMaintenanceWorkspaceScope(
     return agentIds ? { mode, agents: agentIds } : undefined;
   }
   return undefined;
+}
+
+function readExistingSemanticEnabled(cfg: Record<string, any> | undefined): boolean {
+  return cfg?.plugins?.entries?.anchorclaw?.config?.semantic?.enabled === true;
+}
+
+function readExistingDefaultsMemorySearch(
+  cfg: Record<string, any> | undefined,
+): ExistingMemorySearchDefaults {
+  const memorySearch = asRecord(cfg?.agents?.defaults?.memorySearch);
+  const remote = asRecord(memorySearch.remote);
+  return {
+    provider: typeof memorySearch.provider === "string" && memorySearch.provider.trim()
+      ? memorySearch.provider.trim()
+      : undefined,
+    model: typeof memorySearch.model === "string" && memorySearch.model.trim()
+      ? memorySearch.model.trim()
+      : undefined,
+    baseUrl: typeof remote.baseUrl === "string" && remote.baseUrl.trim()
+      ? remote.baseUrl.trim()
+      : undefined,
+    apiKeyConfigured: Object.prototype.hasOwnProperty.call(remote, "apiKey"),
+  };
 }
 
 function formatMaintenanceWorkspaceScope(scope: MaintenanceWorkspaceScopeConfig | undefined): string | undefined {
@@ -403,11 +449,19 @@ async function promptIfNeeded(params: {
   );
   const existingConfig = readOpenClawConfigRecord();
   const existingMaintenanceWorkspaceScope = readExistingMaintenanceWorkspaceScope(existingConfig);
+  const existingSemanticEnabled = readExistingSemanticEnabled(existingConfig);
+  const existingMemorySearchDefaults = readExistingDefaultsMemorySearch(existingConfig);
   let maintenanceEnabled = !skipConfig;
   let extractorEnabled = !skipConfig;
   let maintenanceWorkspaceScope = maintenanceWorkspaceScopeMode
     ? scopeConfigFromMode(maintenanceWorkspaceScopeMode)
     : undefined;
+  let semanticConfigEnabled: boolean | undefined;
+  let semanticResolvedEnabled = existingSemanticEnabled;
+  let semanticProvider = normalizeOptionalInput(params.options.semanticProvider);
+  let semanticModel = normalizeOptionalInput(params.options.semanticModel);
+  let semanticBaseUrl = normalizeOptionalInput(params.options.semanticBaseUrl);
+  let semanticApiKey = normalizeOptionalInput(params.options.semanticApiKey);
 
   let adminUrl = params.options.adminUrl?.trim() || defaults.adminUrl;
   let dbName = params.options.dbName?.trim() || defaults.dbName;
@@ -424,6 +478,17 @@ async function promptIfNeeded(params: {
   }
 
   let dbPassword = params.options.dbPassword?.trim() || "";
+
+  const semanticFlagsProvided =
+    params.options.semanticEnabled === true ||
+    typeof semanticProvider === "string" ||
+    typeof semanticModel === "string" ||
+    typeof semanticBaseUrl === "string" ||
+    typeof semanticApiKey === "string";
+
+  if (skipConfig && semanticFlagsProvided) {
+    throw new Error("semantic setup options require config update; remove semantic flags or omit --skip-config");
+  }
 
   if (!nonInteractive) {
     const rl = createInterface({ input, output });
@@ -459,6 +524,57 @@ async function promptIfNeeded(params: {
       params.options.skipConfig = !update;
 
       if (!params.options.skipConfig) {
+        const semanticDefault = existingSemanticEnabled ? "Y/n" : "y/N";
+        const semanticAnswer = (
+          await rl.question(`Enable AnchorClaw semantic layer? [${semanticDefault}]: `)
+        )
+          .trim()
+          .toLowerCase();
+        const semanticEnabled = semanticAnswer
+          ? ["y", "yes"].includes(semanticAnswer)
+          : existingSemanticEnabled;
+        semanticResolvedEnabled = semanticEnabled;
+        if (semanticEnabled) {
+          semanticConfigEnabled = true;
+          const providerDefault = semanticProvider ?? existingMemorySearchDefaults.provider ?? "";
+          const providerAnswer = (
+            await rl.question(
+              `Semantic provider${providerDefault ? ` [${providerDefault}]` : ""}: `,
+            )
+          ).trim();
+          semanticProvider = providerAnswer || providerDefault || undefined;
+
+          const modelDefault = semanticModel ?? existingMemorySearchDefaults.model ?? "";
+          const modelAnswer = (
+            await rl.question(
+              `Semantic model${modelDefault ? ` [${modelDefault}]` : ""}: `,
+            )
+          ).trim();
+          semanticModel = modelAnswer || modelDefault || undefined;
+
+          const baseUrlDefault = semanticBaseUrl ?? existingMemorySearchDefaults.baseUrl ?? "";
+          const baseUrlAnswer = (
+            await rl.question(
+              `Semantic baseUrl${baseUrlDefault ? ` [${baseUrlDefault}]` : ""} [optional]: `,
+            )
+          ).trim();
+          semanticBaseUrl = baseUrlAnswer || baseUrlDefault || undefined;
+
+          const apiKeyPromptLabel =
+            typeof semanticApiKey === "string"
+              ? "[provided]"
+              : existingMemorySearchDefaults.apiKeyConfigured
+                ? "[configured]"
+                : "[optional]";
+          const apiKeyAnswer = (
+            await rl.question(`Semantic apiKey ${apiKeyPromptLabel} (Enter to keep/skip): `)
+          ).trim();
+          if (apiKeyAnswer) {
+            semanticApiKey = apiKeyAnswer;
+          }
+        } else if (existingSemanticEnabled) {
+          semanticConfigEnabled = false;
+        }
         if (!maintenanceWorkspaceScope) {
           const promptResult = await promptForMaintenanceWorkspaceScope({
             rl,
@@ -475,6 +591,7 @@ async function promptIfNeeded(params: {
       } else {
         maintenanceEnabled = false;
         extractorEnabled = false;
+        semanticResolvedEnabled = existingSemanticEnabled;
       }
 
       if (dbPassword) {
@@ -491,6 +608,18 @@ async function promptIfNeeded(params: {
       rl.close();
     }
   } else {
+    if (
+      (typeof semanticProvider === "string" ||
+        typeof semanticModel === "string" ||
+        typeof semanticBaseUrl === "string" ||
+        typeof semanticApiKey === "string") &&
+      params.options.semanticEnabled !== true &&
+      !existingSemanticEnabled
+    ) {
+      throw new Error(
+        "semantic provider/model/base-url/api-key options require --semantic-enabled or existing semantic.enabled=true",
+      );
+    }
     maintenanceWorkspaceScope = ensureNonInteractiveMaintenanceScopeDecision({
       skipConfig,
       maintenanceWorkspaceScopeMode,
@@ -498,7 +627,35 @@ async function promptIfNeeded(params: {
     });
     maintenanceEnabled = !skipConfig;
     extractorEnabled = !skipConfig;
+    if (params.options.semanticEnabled === true) {
+      semanticConfigEnabled = true;
+      semanticResolvedEnabled = true;
+    } else if (existingSemanticEnabled) {
+      semanticConfigEnabled = true;
+      semanticResolvedEnabled = true;
+    } else {
+      semanticResolvedEnabled = false;
+    }
   }
+
+  if (semanticResolvedEnabled) {
+    semanticProvider = semanticProvider ?? existingMemorySearchDefaults.provider;
+    semanticModel = semanticModel ?? existingMemorySearchDefaults.model;
+    semanticBaseUrl = semanticBaseUrl ?? existingMemorySearchDefaults.baseUrl;
+    if (!semanticProvider) {
+      throw new Error(
+        "semantic setup requires agents.defaults.memorySearch.provider or --semantic-provider when semantic is enabled",
+      );
+    }
+    if (!semanticModel) {
+      throw new Error(
+        "semantic setup requires agents.defaults.memorySearch.model or --semantic-model when semantic is enabled",
+      );
+    }
+  }
+
+  const semanticApiKeyConfigured =
+    typeof semanticApiKey === "string" ? true : existingMemorySearchDefaults.apiKeyConfigured;
 
   validateDatabaseName(dbName);
   validateIdentifier(dbUser, "db-user");
@@ -520,6 +677,13 @@ async function promptIfNeeded(params: {
     maintenanceWorkspaceScope,
     maintenanceEnabled,
     extractorEnabled,
+    semanticConfigEnabled,
+    semanticResolvedEnabled,
+    semanticProvider,
+    semanticModel,
+    semanticBaseUrl,
+    semanticApiKey,
+    semanticApiKeyConfigured,
     skipConfig: Boolean(params.options.skipConfig),
     nonInteractive,
   };
@@ -676,6 +840,11 @@ function updateOpenClawConfig(params: {
   maintenanceWorkspaceScope?: MaintenanceWorkspaceScopeConfig;
   maintenanceEnabled: boolean;
   extractorEnabled: boolean;
+  semanticEnabled?: boolean;
+  semanticProvider?: string;
+  semanticModel?: string;
+  semanticBaseUrl?: string;
+  semanticApiKey?: string;
 }): {
   path: string;
   updated: boolean;
@@ -711,6 +880,13 @@ function updateOpenClawConfig(params: {
   cfg.plugins.entries.anchorclaw ??= {};
   cfg.plugins.entries.anchorclaw.enabled = true;
   cfg.plugins.entries.anchorclaw.config ??= {};
+  if (typeof params.semanticEnabled === "boolean") {
+    const existingSemanticConfig = asRecord(cfg.plugins.entries.anchorclaw.config.semantic);
+    cfg.plugins.entries.anchorclaw.config.semantic = {
+      ...existingSemanticConfig,
+      enabled: params.semanticEnabled,
+    };
+  }
   const existingPostgresConfig = cfg.plugins.entries.anchorclaw.config.postgres ?? {};
   const nextPostgresConfig: Record<string, unknown> = {
     ...existingPostgresConfig,
@@ -728,6 +904,28 @@ function updateOpenClawConfig(params: {
     nextPostgresConfig.password = params.dbPassword;
   }
   cfg.plugins.entries.anchorclaw.config.postgres = nextPostgresConfig;
+  if (typeof params.semanticEnabled === "boolean" && params.semanticEnabled) {
+    cfg.agents ??= {};
+    cfg.agents.defaults ??= {};
+    const existingMemorySearch = asRecord(cfg.agents.defaults.memorySearch);
+    const existingRemote = asRecord(existingMemorySearch.remote);
+    const nextMemorySearch: Record<string, unknown> = {
+      ...existingMemorySearch,
+      ...(params.semanticProvider ? { provider: params.semanticProvider } : {}),
+      ...(params.semanticModel ? { model: params.semanticModel } : {}),
+    };
+    const nextRemote: Record<string, unknown> = { ...existingRemote };
+    if (typeof params.semanticBaseUrl === "string") {
+      nextRemote.baseUrl = params.semanticBaseUrl;
+    }
+    if (typeof params.semanticApiKey === "string") {
+      nextRemote.apiKey = params.semanticApiKey;
+    }
+    if (Object.keys(nextRemote).length > 0) {
+      nextMemorySearch.remote = nextRemote;
+    }
+    cfg.agents.defaults.memorySearch = nextMemorySearch;
+  }
   const existingMaintenanceConfig = asRecord(cfg.plugins.entries.anchorclaw.config.maintenance);
   const existingMaintenanceWorkspaceScope = readExistingMaintenanceWorkspaceScope(cfg);
   const resolvedMaintenanceWorkspaceScope =
@@ -821,6 +1019,11 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
       maintenanceWorkspaceScope: options.maintenanceWorkspaceScope,
       maintenanceEnabled: options.maintenanceEnabled,
       extractorEnabled: options.extractorEnabled,
+      semanticEnabled: options.semanticConfigEnabled,
+      semanticProvider: options.semanticProvider,
+      semanticModel: options.semanticModel,
+      semanticBaseUrl: options.semanticBaseUrl,
+      semanticApiKey: options.semanticApiKey,
     });
   }
 
@@ -850,6 +1053,25 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     console.log(`- config: updated ${configUpdate.path}`);
   } else if (configUpdate) {
     console.log(`- config: not found (${configUpdate.path})`);
+  }
+  if (!options.skipConfig && options.semanticResolvedEnabled) {
+    if (configUpdate?.updated) {
+      console.log("- semantic: enabled");
+      if (options.semanticProvider) {
+        console.log(`- memorySearch provider: ${options.semanticProvider}`);
+      }
+      if (options.semanticModel) {
+        console.log(`- memorySearch model: ${options.semanticModel}`);
+      }
+      if (options.semanticBaseUrl) {
+        console.log(`- memorySearch baseUrl: ${options.semanticBaseUrl}`);
+      }
+      console.log(`- memorySearch apiKey: ${options.semanticApiKeyConfigured ? "configured" : "not configured"}`);
+    } else if (configUpdate) {
+      console.warn("Warning: semantic settings were not written because openclaw.json was not found.");
+    }
+  } else if (!options.skipConfig && options.semanticConfigEnabled === false && configUpdate?.updated) {
+    console.log("- semantic: disabled");
   }
   if (!options.skipConfig && configUpdate?.updated) {
     if (configUpdate.sessionMemoryAfter === "disabled" && configUpdate.sessionMemoryBefore !== "disabled") {

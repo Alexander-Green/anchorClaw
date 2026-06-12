@@ -1,5 +1,10 @@
 import type { OpenClawPluginApi } from "../api.js";
-import { resolveSessionsSearchState, type AnchorClawConfig } from "../config.js";
+import {
+  resolveAgentMemorySearchConfig,
+  resolveSemanticLayerState,
+  resolveSessionsSearchState,
+  type AnchorClawConfig,
+} from "../config.js";
 import type { PostgresPool } from "../postgres.js";
 import type { SessionIndexBootstrapTarget } from "../plugin/session-delta.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
@@ -147,6 +152,12 @@ export function createAnchorClawMemorySearchManager(
   const sessionsSearch = resolveSessionsSearchState(cfg);
   const sessionsVisibility = sessionsSearch.visibility;
   const sessionsEnabled = sessionsSearch.effective;
+  const semanticLayer = resolveSemanticLayerState(cfg);
+  const resolveSemanticMemorySearch = () =>
+    resolveAgentMemorySearchConfig({
+      runtimeConfig: resolveRuntimeConfig(),
+      agentId: params.agentId,
+    });
 
   const resolveRuntimeConfig = (): any | undefined =>
     typeof (api as any)?.runtime?.config?.current === "function"
@@ -431,6 +442,7 @@ export function createAnchorClawMemorySearchManager(
     status() {
       const limits = resolveMemoryLimits(cfg);
       const workspaceDir = resolveWorkspaceDir();
+      const semanticMemorySearch = resolveSemanticMemorySearch();
       return {
         backend: "builtin",
         provider: "anchorclaw-postgres",
@@ -446,6 +458,18 @@ export function createAnchorClawMemorySearchManager(
           sessionsSearchEffective: sessionsSearch.effective,
           ...(sessionsSearch.reason ? { sessionsSearchReason: sessionsSearch.reason } : {}),
           sessionsVisibility,
+          semanticConfigured: semanticLayer.configured,
+          semanticEnabled: semanticLayer.enabled,
+          semanticEffective: semanticLayer.effective,
+          ...(semanticLayer.reason ? { semanticReason: semanticLayer.reason } : {}),
+          semanticMemorySearchConfigured: semanticMemorySearch.configured,
+          ...(semanticMemorySearch.source ? { semanticResolvedFrom: semanticMemorySearch.source } : {}),
+          ...(semanticMemorySearch.provider ? { semanticProvider: semanticMemorySearch.provider } : {}),
+          ...(semanticMemorySearch.model ? { semanticModel: semanticMemorySearch.model } : {}),
+          ...(semanticMemorySearch.baseUrl ? { semanticBaseUrl: semanticMemorySearch.baseUrl } : {}),
+          ...(semanticMemorySearch.configured
+            ? { semanticApiKeyConfigured: semanticMemorySearch.apiKeyConfigured }
+            : {}),
           purpose: params.purpose ?? "default",
           ...(!workspaceDir ? { degraded: true, error: RUNTIME_WORKSPACE_UNAVAILABLE } : {}),
         },
@@ -510,11 +534,27 @@ export function createAnchorClawMemorySearchManager(
     },
 
     getCachedEmbeddingAvailability() {
-      return { ok: false, cached: true, checked: true, error: "semantic layer not configured" };
+      return {
+        ok: false,
+        cached: true,
+        checked: true,
+        error:
+          semanticLayer.reason === "semantic_not_implemented"
+            ? "semantic layer not implemented"
+            : "semantic layer disabled",
+      };
     },
 
     async probeEmbeddingAvailability() {
-      return { ok: false, checked: true, checkedAtMs: Date.now(), error: "semantic layer not configured" };
+      return {
+        ok: false,
+        checked: true,
+        checkedAtMs: Date.now(),
+        error:
+          semanticLayer.reason === "semantic_not_implemented"
+            ? "semantic layer not implemented"
+            : "semantic layer disabled",
+      };
     },
 
     async probeVectorAvailability() {

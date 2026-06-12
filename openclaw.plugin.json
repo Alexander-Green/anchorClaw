@@ -51,6 +51,16 @@
       "help": "Minimum appended message records before reindexing sessions transcripts.",
       "advanced": true
     },
+    "semantic": {
+      "label": "Semantic Layer",
+      "help": "Reserved opt-in settings for AnchorClaw semantic/vector retrieval. Disabled by default; SQL/FTS remains the active path until the semantic layer is implemented.",
+      "advanced": true
+    },
+    "semantic.enabled": {
+      "label": "Semantic Enabled",
+      "help": "Opt AnchorClaw into the future semantic layer. OpenClaw memorySearch provider config alone does not enable AnchorClaw semantic retrieval.",
+      "advanced": true
+    },
     "identity": {
       "label": "Identity",
       "help": "Stable owner identity for memory scoping",
@@ -202,6 +212,16 @@
         "additionalProperties": false,
         "properties": {
           "promptLogEnabled": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "semantic": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
             "type": "boolean",
             "default": false
           }

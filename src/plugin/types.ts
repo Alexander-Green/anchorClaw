@@ -84,6 +84,18 @@ export type MemoryStatusCheckResult = {
     readable?: boolean;
     error?: string;
   };
+  semantic?: {
+    configured: boolean;
+    enabled: boolean;
+    effective: boolean;
+    reasonCode?: "semantic_disabled" | "semantic_not_implemented";
+    source?: "agent" | "defaults";
+    provider?: string;
+    model?: string;
+    baseUrl?: string;
+    apiKeyConfigured?: boolean;
+    error?: string;
+  };
   index?: {
     trackedFiles: number;
     pendingBytes: number;

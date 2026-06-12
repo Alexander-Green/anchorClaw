@@ -1,6 +1,10 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
-import { resolveSessionsSearchState } from "../../config.js";
+import {
+  resolveAgentMemorySearchConfig,
+  resolveSemanticLayerState,
+  resolveSessionsSearchState,
+} from "../../config.js";
 import { scanLegacyWorkspace } from "../../importer.js";
 import type { MemoryStatusCheckResult } from "../types.js";
 import {
@@ -51,6 +55,75 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
         return unavailable;
       }
       const promptInjectionAllowed = isPromptInjectionAllowed(api, toolCtx);
+      const semanticLayer = resolveSemanticLayerState(ctx.cfg);
+      const resolveSemanticRuntimeConfig = () =>
+        toolCtx.runtimeConfig ??
+        (typeof toolCtx.getRuntimeConfig === "function" ? toolCtx.getRuntimeConfig() : undefined) ??
+        (typeof api?.runtime?.config?.current === "function" ? api.runtime.config.current() : undefined);
+      const resolveSemanticAgentId = () =>
+        toolCtx.agentId ?? ((api as any)?.runtime?.agentId as string | undefined);
+      const describeSemanticError = (params: {
+        runtimeConfig: unknown;
+        agentId?: string;
+        provider?: string;
+        model?: string;
+      }): string | undefined => {
+        if (!semanticLayer.enabled) {
+          return undefined;
+        }
+        if (!params.runtimeConfig) {
+          return "runtime config unavailable; cannot resolve semantic memorySearch";
+        }
+        if (!params.agentId) {
+          return "runtime agent id unavailable; cannot resolve semantic memorySearch";
+        }
+        if (!params.provider || !params.model) {
+          return "semantic enabled but memorySearch.provider/model is not configured for the active agent";
+        }
+        return undefined;
+      };
+      const logSemanticError = (params: {
+        error: string;
+        agentId?: string;
+        provider?: string;
+        model?: string;
+      }) => {
+        const parts = [
+          `anchorclaw: semantic status check warning (${params.error})`,
+          params.agentId ? `agent=${params.agentId}` : undefined,
+          params.provider ? `provider=${params.provider}` : undefined,
+          params.model ? `model=${params.model}` : undefined,
+        ].filter(Boolean);
+        api.logger.warn(parts.join(" "));
+      };
+      const buildSemanticStatus = (agentId?: string, runtimeConfig?: unknown) => {
+        const semanticMemorySearch = resolveAgentMemorySearchConfig({
+          runtimeConfig: runtimeConfig ?? resolveSemanticRuntimeConfig(),
+          agentId: agentId ?? resolveSemanticAgentId(),
+        });
+        const resolvedRuntimeConfig = runtimeConfig ?? resolveSemanticRuntimeConfig();
+        const resolvedAgentId = agentId ?? resolveSemanticAgentId();
+        const error = describeSemanticError({
+          runtimeConfig: resolvedRuntimeConfig,
+          agentId: resolvedAgentId,
+          provider: semanticMemorySearch.provider,
+          model: semanticMemorySearch.model,
+        });
+        return {
+          configured: semanticLayer.configured,
+          enabled: semanticLayer.enabled,
+          effective: semanticLayer.effective,
+          ...(semanticLayer.reason ? { reasonCode: semanticLayer.reason } : {}),
+          ...(semanticMemorySearch.source ? { source: semanticMemorySearch.source } : {}),
+          ...(semanticMemorySearch.provider ? { provider: semanticMemorySearch.provider } : {}),
+          ...(semanticMemorySearch.model ? { model: semanticMemorySearch.model } : {}),
+          ...(semanticMemorySearch.baseUrl ? { baseUrl: semanticMemorySearch.baseUrl } : {}),
+          ...(semanticMemorySearch.configured
+            ? { apiKeyConfigured: semanticMemorySearch.apiKeyConfigured }
+            : {}),
+          ...(error ? { error } : {}),
+        };
+      };
       const base: MemoryStatusCheckResult = {
         ok: ctx.durableState?.overall === "ready",
         backend: "anchorclaw",
@@ -71,8 +144,10 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
           readCompatibilityPath: "db-only",
           importMode: "canonical_table",
         },
+        semantic: buildSemanticStatus(),
       };
       if (activeCheck) {
+        let semanticWarningLogged = false;
         let workspaceTarget: {
           workspaceDir: string;
           agentId: string;
@@ -94,8 +169,27 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
             throw new Error(String(resolved.details.error ?? "runtime_workspace_unavailable"));
           }
           workspaceTarget = resolved;
+          base.semantic = buildSemanticStatus(workspaceTarget.agentId, toolCtx.runtimeConfig);
+          if (base.semantic?.error && !semanticWarningLogged) {
+            logSemanticError({
+              error: base.semantic.error,
+              agentId: workspaceTarget.agentId,
+              provider: base.semantic.provider,
+              model: base.semantic.model,
+            });
+            semanticWarningLogged = true;
+          }
           return workspaceTarget;
         };
+        if (base.semantic?.error && !semanticWarningLogged) {
+          logSemanticError({
+            error: base.semantic.error,
+            agentId: resolveSemanticAgentId(),
+            provider: base.semantic.provider,
+            model: base.semantic.model,
+          });
+          semanticWarningLogged = true;
+        }
         const startedAt = Date.now();
         let dbError: string | undefined;
         try {

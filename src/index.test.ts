@@ -132,6 +132,36 @@ vi.mock("./config.js", () => ({
       reason: !configured ? "search_disabled" : visibility === "off" ? "visibility_off" : null,
     };
   },
+  resolveSemanticLayerState: (cfg: any) => {
+    const enabled = cfg?.semantic?.enabled === true;
+    return {
+      configured: enabled,
+      enabled,
+      effective: false,
+      reason: enabled ? "semantic_not_implemented" : "semantic_disabled",
+    };
+  },
+  resolveAgentMemorySearchConfig: ({ runtimeConfig, agentId }: any) => {
+    const defaults = runtimeConfig?.agents?.defaults?.memorySearch;
+    const agent = Array.isArray(runtimeConfig?.agents?.list)
+      ? runtimeConfig.agents.list.find((entry: any) => entry?.id === agentId)
+      : undefined;
+    const memorySearch = agent?.memorySearch ?? defaults;
+    return memorySearch
+      ? {
+          configured: true,
+          source: agent?.memorySearch ? "agent" : "defaults",
+          ...(memorySearch.provider ? { provider: memorySearch.provider } : {}),
+          ...(memorySearch.model ? { model: memorySearch.model } : {}),
+          ...(memorySearch.remote?.baseUrl ? { baseUrl: memorySearch.remote.baseUrl } : {}),
+          apiKeyConfigured: Boolean(memorySearch.remote?.apiKey),
+        }
+      : {
+          configured: false,
+          source: null,
+          apiKeyConfigured: false,
+        };
+  },
 }));
 
 vi.mock("./identity.js", () => ({
@@ -1471,6 +1501,78 @@ describe("phase2 session delta listener", () => {
     expect(healthy.details.sdk.degraded).toBe(false);
   });
 
+  it("reports resolved semantic memorySearch source/provider/model via memory_status", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      semantic: { enabled: true },
+    });
+    const { api, runServiceStart } = buildApi();
+    (api.runtime as any).agentId = "ops";
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        },
+        list: [
+          { id: "main", default: true, workspace: "/tmp/work" },
+          {
+            id: "ops",
+            workspace: "/tmp/ops",
+            memorySearch: {
+              provider: "ollama",
+              model: "nomic-embed-text",
+              remote: { baseUrl: "http://127.0.0.1:11434", apiKey: "${OLLAMA_KEY}" },
+            },
+          },
+        ],
+      },
+    });
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const statusRegistration = findRegisteredTool(api, "memory_status");
+    const result = await statusRegistration.execute("toolcall-status-semantic-1", {});
+    expect(result.details.semantic).toMatchObject({
+      configured: true,
+      enabled: true,
+      effective: false,
+      reasonCode: "semantic_not_implemented",
+      source: "agent",
+      provider: "ollama",
+      model: "nomic-embed-text",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKeyConfigured: true,
+    });
+  });
+
+  it("reports semantic error when semantic is enabled but provider/model are not configured", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      semantic: { enabled: true },
+    });
+    const { api, runServiceStart } = buildApi();
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/tmp/work" }],
+      },
+    });
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const statusRegistration = findRegisteredTool(api, "memory_status");
+    const result = await statusRegistration.execute("toolcall-status-semantic-2", {});
+    expect(result.details.semantic).toMatchObject({
+      configured: true,
+      enabled: true,
+      effective: false,
+      reasonCode: "semantic_not_implemented",
+      error: "semantic enabled but memorySearch.provider/model is not configured for the active agent",
+    });
+  });
+
   it("runs active checks via memory_status when check=true", async () => {
     const pool = {
       query: vi.fn(async (sql?: string) => {
@@ -1584,6 +1686,66 @@ describe("phase2 session delta listener", () => {
       exists: true,
       readable: false,
     });
+  });
+
+  it("logs semantic warning during active memory_status check when semantic config is incomplete", async () => {
+    const pool = {
+      query: vi.fn(async (sql?: string) => {
+        const queryText = String(sql ?? "");
+        if (queryText.includes("to_regclass(")) {
+          return {
+            rows: [
+              {
+                memory_items: "memory_items",
+                memory_daily_entries: "memory_daily_entries",
+                memory_daily_blocks: "memory_daily_blocks",
+                memory_daily_block_extraction_windows:
+                  "memory_daily_block_extraction_windows",
+                session_index_files: "session_index_files",
+                session_index_chunks: "session_index_chunks",
+                schema_migrations: "schema_migrations",
+              },
+            ],
+          };
+        }
+        if (queryText.includes("schema_migrations")) {
+          return { rows: [{ id: "0002" }] };
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn(async () => ({
+        query: vi.fn(async () => ({ rows: [] })),
+        release: vi.fn(),
+      })),
+    };
+    createPool.mockReturnValue(pool);
+    statFs.mockResolvedValueOnce({ size: 1 });
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      semantic: { enabled: true },
+    });
+
+    const { api, runServiceStart } = buildApi();
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/tmp/work" }],
+      },
+    });
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const statusRegistration = findRegisteredTool(api, "memory_status");
+    const result = await statusRegistration.execute("toolcall-status-semantic-active-1", {
+      check: true,
+    });
+    expect(result.details.semantic).toMatchObject({
+      error: "semantic enabled but memorySearch.provider/model is not configured for the active agent",
+    });
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "anchorclaw: semantic status check warning (semantic enabled but memorySearch.provider/model is not configured for the active agent)",
+      ),
+    );
   });
 
   it("reports migrations failure via memory_status active check when ensureReady fails", async () => {

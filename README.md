@@ -44,6 +44,8 @@ That means SQL-first storage, deterministic writes, full-text search, clean
 imports, backups, migrations, and inspectable state before adding any semantic
 magic. Embeddings and semantic recall are planned as an enrichment layer on top
 of the database, not as the foundation that decides whether memory survives.
+Setup can now prepare that future semantic config, but current retrieval still
+stays on the SQL/FTS path.
 
 > Alpha preview. API and operator workflows may change before stable release.
 >
@@ -222,6 +224,11 @@ Setup does not need to rewrite workspace `AGENTS.md`. It configures AnchorClaw
 as the OpenClaw memory slot and disables the bundled file-based `session-memory`
 hook so `/new` and `/reset` captures stay DB-backed.
 
+If you want to preconfigure the future semantic layer, setup can also write
+`plugins.entries.anchorclaw.config.semantic.enabled` plus
+`agents.defaults.memorySearch`. In this first slice it only manages agent
+defaults and leaves per-agent `memorySearch` overrides alone.
+
 For manual provisioning, SSL, pool tuning, Docker-style identity, and
 non-interactive setup, see [INSTALL.md](./INSTALL.md).
 
@@ -255,6 +262,14 @@ The planned semantic layer will enrich the Postgres source of truth with hybrid
 retrieval: lexical search plus vector recall, with a reliable fallback when
 embeddings are disabled or fail. That gives us better discovery without making
 memory correctness depend on model-dependent similarity scores.
+
+Current implementation boundary:
+
+- `setup` can prepare semantic config and `memory_status` can report semantic
+  enabled/configured state;
+- current `memory_search` and runtime recall still use the existing SQL/FTS
+  path;
+- enabling semantic config today does not yet activate vector retrieval.
 
 Nearer-term future work includes:
 

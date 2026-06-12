@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { anchorClawConfigSchema } from "./config.js";
+import {
+  anchorClawConfigSchema,
+  resolveAgentMemorySearchConfig,
+  resolveSemanticLayerState,
+} from "./config.js";
 
 function baseConfig(): Record<string, unknown> {
   return {
@@ -72,6 +76,140 @@ describe("anchorClawConfigSchema debug", () => {
         },
       }),
     ).toThrow("debug.promptLogEnabled must be a boolean");
+  });
+});
+
+describe("anchorClawConfigSchema semantic", () => {
+  it("treats omitted semantic config as disabled", () => {
+    const parsed = anchorClawConfigSchema.parse(baseConfig());
+    expect(parsed.semantic).toBeUndefined();
+    expect(resolveSemanticLayerState(parsed)).toEqual({
+      configured: false,
+      enabled: false,
+      effective: false,
+      reason: "semantic_disabled",
+    });
+  });
+
+  it("accepts semantic.enabled=true but reports it as not implemented yet", () => {
+    const parsed = anchorClawConfigSchema.parse({
+      ...baseConfig(),
+      semantic: {
+        enabled: true,
+      },
+    });
+    expect(parsed.semantic?.enabled).toBe(true);
+    expect(resolveSemanticLayerState(parsed)).toEqual({
+      configured: true,
+      enabled: true,
+      effective: false,
+      reason: "semantic_not_implemented",
+    });
+  });
+
+  it("rejects non-boolean semantic.enabled", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        semantic: {
+          enabled: "yes" as any,
+        },
+      }),
+    ).toThrow("semantic.enabled must be a boolean");
+  });
+
+  it("rejects unknown semantic keys", () => {
+    expect(() =>
+      anchorClawConfigSchema.parse({
+        ...baseConfig(),
+        semantic: {
+          enabled: false,
+          provider: "openclaw-memorySearch",
+        },
+      }),
+    ).toThrow("semantic has unknown keys: provider");
+  });
+});
+
+describe("resolveAgentMemorySearchConfig", () => {
+  it("prefers per-agent memorySearch over defaults", () => {
+    expect(
+      resolveAgentMemorySearchConfig({
+        runtimeConfig: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "openai",
+                model: "text-embedding-3-small",
+                remote: { baseUrl: "https://defaults.example", apiKey: "${DEFAULTS_KEY}" },
+              },
+            },
+            list: [
+              {
+                id: "main",
+                memorySearch: {
+                  provider: "ollama",
+                  model: "nomic-embed-text",
+                  remote: { baseUrl: "http://127.0.0.1:11434", apiKey: "${OLLAMA_KEY}" },
+                },
+              },
+            ],
+          },
+        },
+        agentId: "main",
+      }),
+    ).toEqual({
+      configured: true,
+      source: "agent",
+      provider: "ollama",
+      model: "nomic-embed-text",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKeyConfigured: true,
+    });
+  });
+
+  it("falls back to defaults when agent has no memorySearch", () => {
+    expect(
+      resolveAgentMemorySearchConfig({
+        runtimeConfig: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "openai",
+                model: "text-embedding-3-small",
+                remote: { baseUrl: "https://defaults.example" },
+              },
+            },
+            list: [{ id: "main" }],
+          },
+        },
+        agentId: "main",
+      }),
+    ).toEqual({
+      configured: true,
+      source: "defaults",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      baseUrl: "https://defaults.example",
+      apiKeyConfigured: false,
+    });
+  });
+
+  it("reports unconfigured when neither agent nor defaults define memorySearch", () => {
+    expect(
+      resolveAgentMemorySearchConfig({
+        runtimeConfig: {
+          agents: {
+            list: [{ id: "main" }],
+          },
+        },
+        agentId: "main",
+      }),
+    ).toEqual({
+      configured: false,
+      source: null,
+      apiKeyConfigured: false,
+    });
   });
 });
 

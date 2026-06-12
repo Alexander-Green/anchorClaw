@@ -46,6 +46,11 @@ export default definePluginEntry({
             "--maintenance-workspace-scope <mode>",
             'Maintenance extractor scope: "default-agent" or "all-agent-workspaces"',
           )
+          .option("--semantic-enabled", "Enable AnchorClaw semantic layer")
+          .option("--semantic-provider <id>", "Embedding provider id for agents.defaults.memorySearch.provider")
+          .option("--semantic-model <model>", "Embedding model for agents.defaults.memorySearch.model")
+          .option("--semantic-base-url <url>", "Embedding provider base URL for agents.defaults.memorySearch.remote.baseUrl")
+          .option("--semantic-api-key <value>", "Embedding provider API key or ${ENV_VAR} for agents.defaults.memorySearch.remote.apiKey")
           .option("--schema-none", "Disable dedicated schema and use default PostgreSQL search_path")
           .option("--skip-config", "Do not update ~/.openclaw/openclaw.json")
           .option("--non-interactive", "Disable prompts and use defaults/flags only")
@@ -57,6 +62,11 @@ export default definePluginEntry({
             rotateDbPassword?: boolean;
             schema?: string;
             maintenanceWorkspaceScope?: "default-agent" | "all-agent-workspaces";
+            semanticEnabled?: boolean;
+            semanticProvider?: string;
+            semanticModel?: string;
+            semanticBaseUrl?: string;
+            semanticApiKey?: string;
             schemaNone?: boolean;
             skipConfig?: boolean;
             nonInteractive?: boolean;
@@ -69,6 +79,11 @@ export default definePluginEntry({
               rotateDbPassword: opts.rotateDbPassword,
               schema: opts.schema,
               maintenanceWorkspaceScope: opts.maintenanceWorkspaceScope,
+              semanticEnabled: opts.semanticEnabled,
+              semanticProvider: opts.semanticProvider,
+              semanticModel: opts.semanticModel,
+              semanticBaseUrl: opts.semanticBaseUrl,
+              semanticApiKey: opts.semanticApiKey,
               schemaNone: opts.schemaNone,
               skipConfig: opts.skipConfig,
               nonInteractive: opts.nonInteractive,

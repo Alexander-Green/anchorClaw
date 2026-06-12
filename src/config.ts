@@ -7,6 +7,9 @@ export type AnchorClawConfig = {
   debug?: {
     promptLogEnabled?: boolean;
   };
+  semantic?: {
+    enabled?: boolean;
+  };
   sessions?: {
     search?: {
       enabled?: boolean;
@@ -69,10 +72,34 @@ export type SessionsSearchState = {
   reason: "search_disabled" | "visibility_off" | null;
 };
 
+export type SemanticLayerState = {
+  configured: boolean;
+  enabled: boolean;
+  effective: boolean;
+  reason: "semantic_disabled" | "semantic_not_implemented" | null;
+};
+
+export type ResolvedAgentMemorySearchConfig = {
+  configured: boolean;
+  source: "agent" | "defaults" | null;
+  provider?: string;
+  model?: string;
+  baseUrl?: string;
+  apiKeyConfigured: boolean;
+};
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function readLooseOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
 }
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
@@ -222,7 +249,11 @@ export const anchorClawConfigSchema = {
     if (Object.prototype.hasOwnProperty.call(obj, "workspaceDir")) {
       throw new Error(WORKSPACE_DIR_REMOVED_MESSAGE);
     }
-    assertAllowedKeys(obj, ["debug", "sessions", "identity", "postgres", "maintenance", "limits"], "anchorclaw config");
+    assertAllowedKeys(
+      obj,
+      ["debug", "semantic", "sessions", "identity", "postgres", "maintenance", "limits"],
+      "anchorclaw config",
+    );
 
     const debugObj = asRecord(obj.debug);
     if (obj.debug !== undefined && !debugObj) {
@@ -233,6 +264,17 @@ export const anchorClawConfigSchema = {
     }
     const debugPromptLogEnabled = debugObj
       ? readOptionalBoolean(debugObj.promptLogEnabled, "debug.promptLogEnabled")
+      : undefined;
+
+    const semanticObj = asRecord(obj.semantic);
+    if (obj.semantic !== undefined && !semanticObj) {
+      throw new Error("semantic must be an object");
+    }
+    if (semanticObj) {
+      assertAllowedKeys(semanticObj, ["enabled"], "semantic");
+    }
+    const semanticEnabled = semanticObj
+      ? readOptionalBoolean(semanticObj.enabled, "semantic.enabled")
       : undefined;
 
     const sessionsObj = asRecord(obj.sessions);
@@ -514,6 +556,13 @@ export const anchorClawConfigSchema = {
             },
           }
         : {}),
+      ...(typeof semanticEnabled === "boolean"
+        ? {
+            semantic: {
+              enabled: semanticEnabled,
+            },
+          }
+        : {}),
       sessions: {
         search: {
           enabled: sessionsSearchEnabled ?? false,
@@ -598,5 +647,91 @@ export function resolveSessionsSearchState(
     visibility,
     effective: true,
     reason: null,
+  };
+}
+
+export function resolveSemanticLayerState(
+  cfg: Pick<AnchorClawConfig, "semantic"> | null | undefined,
+): SemanticLayerState {
+  const enabled = cfg?.semantic?.enabled === true;
+  if (!enabled) {
+    return {
+      configured: false,
+      enabled: false,
+      effective: false,
+      reason: "semantic_disabled",
+    };
+  }
+  return {
+    configured: true,
+    enabled: true,
+    effective: false,
+    reason: "semantic_not_implemented",
+  };
+}
+
+function readRuntimeMemorySearchConfig(value: unknown): Omit<
+  ResolvedAgentMemorySearchConfig,
+  "configured" | "source"
+> {
+  const obj = asRecord(value);
+  const remote = asRecord(obj?.remote);
+  const provider = readLooseOptionalString(obj?.provider);
+  const model = readLooseOptionalString(obj?.model);
+  const baseUrl = readLooseOptionalString(remote?.baseUrl);
+  const apiKeyConfigured = Boolean(readLooseOptionalString(remote?.apiKey));
+  return {
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+    apiKeyConfigured,
+  };
+}
+
+function hasRuntimeMemorySearchConfig(
+  value: Omit<ResolvedAgentMemorySearchConfig, "configured" | "source">,
+): boolean {
+  return Boolean(value.provider || value.model || value.baseUrl || value.apiKeyConfigured);
+}
+
+export function resolveAgentMemorySearchConfig(params: {
+  runtimeConfig: unknown;
+  agentId?: string | null | undefined;
+}): ResolvedAgentMemorySearchConfig {
+  const runtimeConfig = asRecord(params.runtimeConfig);
+  const agents = asRecord(runtimeConfig?.agents);
+  const defaults = readRuntimeMemorySearchConfig(asRecord(agents?.defaults)?.memorySearch);
+
+  const agentId = readLooseOptionalString(params.agentId);
+  if (agentId && Array.isArray(agents?.list)) {
+    for (const entry of agents.list) {
+      const agent = asRecord(entry);
+      if (readLooseOptionalString(agent?.id) !== agentId) {
+        continue;
+      }
+      const resolved = readRuntimeMemorySearchConfig(agent?.memorySearch);
+      if (hasRuntimeMemorySearchConfig(resolved)) {
+        return {
+          configured: true,
+          source: "agent",
+          ...resolved,
+        };
+      }
+      break;
+    }
+  }
+
+  if (hasRuntimeMemorySearchConfig(defaults)) {
+    return {
+      configured: true,
+      source: "defaults",
+      ...defaults,
+    };
+  }
+
+  return {
+    configured: false,
+    source: null,
+    apiKeyConfigured: false,
   };
 }
