@@ -34,7 +34,7 @@
     "pg": "^8.16.0"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.12"
+    "openclaw": ">=2026.5.28"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -58,10 +58,10 @@
     "install": {
       "npmSpec": "@alexandrgreen/anchorclaw",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.12"
+      "minHostVersion": ">=2026.5.28"
     },
     "compat": {
-      "pluginApi": ">=2026.5.12"
+      "pluginApi": ">=2026.5.28"
     },
     "release": {
       "publishToClawHub": true,

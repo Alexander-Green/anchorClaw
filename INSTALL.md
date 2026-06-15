@@ -14,7 +14,7 @@ This guide keeps the operator details out of the main README. Start with
 
 ## Prerequisites
 
-- OpenClaw host `>= 2026.5.12` with memory plugin slots
+- OpenClaw host `>= 2026.5.28` with memory plugin slots
 - Node.js for the plugin runtime
 - PostgreSQL
 

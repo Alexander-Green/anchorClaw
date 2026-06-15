@@ -191,7 +191,7 @@ for the routing contract and full workspace matrix.
 
 Prerequisites:
 
-- OpenClaw host `>= 2026.5.12`
+- OpenClaw host `>= 2026.5.28`
 - Node.js
 - PostgreSQL
 

@@ -35,6 +35,10 @@ const {
   isUsageCountedSessionTranscriptFileName,
   runCliImport,
   poolEnd,
+  resolveMemorySearchConfigSdkMock,
+  resolveAgentDirSdkMock,
+  getEmbeddingProviderSdkMock,
+  getMemoryEmbeddingProviderSdkMock,
 } = vi.hoisted(() => ({
   registerMemoryCapability: vi.fn(),
   definePluginEntry: vi.fn((entry: unknown) => entry),
@@ -109,6 +113,34 @@ const {
   ),
   runCliImport: vi.fn(async () => undefined),
   poolEnd: vi.fn(async () => undefined),
+  resolveMemorySearchConfigSdkMock: vi.fn((runtimeConfig: any, agentId: string) => {
+    const defaults = runtimeConfig?.agents?.defaults?.memorySearch;
+    const agent = Array.isArray(runtimeConfig?.agents?.list)
+      ? runtimeConfig.agents.list.find((entry: any) => entry?.id === agentId)
+      : undefined;
+    const memorySearch = agent?.memorySearch ?? defaults;
+    if (!memorySearch?.provider || !memorySearch?.model) {
+      return null;
+    }
+    if (memorySearch.enabled === false) {
+      return null;
+    }
+    return {
+      enabled: true,
+      provider: memorySearch.provider,
+      model: memorySearch.model,
+      remote: memorySearch.remote ?? {},
+      local: memorySearch.local ?? {},
+      fallback: memorySearch.fallback ?? "none",
+      inputType: memorySearch.inputType,
+      queryInputType: memorySearch.queryInputType,
+      documentInputType: memorySearch.documentInputType,
+      outputDimensionality: memorySearch.outputDimensionality,
+    };
+  }),
+  resolveAgentDirSdkMock: vi.fn(() => "/tmp/agent"),
+  getEmbeddingProviderSdkMock: vi.fn(),
+  getMemoryEmbeddingProviderSdkMock: vi.fn(),
 }));
 
 vi.mock("./api.js", () => ({
@@ -253,6 +285,19 @@ vi.mock("./scripts/import-legacy.js", () => ({
 vi.mock("./plugin/maintenance.js", () => ({
   createMaintenanceRuntime: createMaintenanceRuntimeMock,
   registerMaintenanceLifecycle: registerMaintenanceLifecycleMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", () => ({
+  resolveMemorySearchConfig: resolveMemorySearchConfigSdkMock,
+  resolveAgentDir: resolveAgentDirSdkMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
+  getEmbeddingProvider: getEmbeddingProviderSdkMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
+  getMemoryEmbeddingProvider: getMemoryEmbeddingProviderSdkMock,
 }));
 
 vi.mock("./identity-policy.js", () => ({
@@ -1573,6 +1618,203 @@ describe("phase2 session delta listener", () => {
     });
   });
 
+  it("reports semantic provider probe details during active memory_status check", async () => {
+    const pool = {
+      query: vi.fn(async (sql?: string) => {
+        const queryText = String(sql ?? "");
+        if (queryText.includes("to_regclass(")) {
+          return {
+            rows: [
+              {
+                vector_extension_installed: true,
+                memory_items: "memory_items",
+                memory_daily_entries: "memory_daily_entries",
+                memory_daily_blocks: "memory_daily_blocks",
+                memory_daily_block_extraction_windows:
+                  "memory_daily_block_extraction_windows",
+                memory_item_embeddings: "memory_item_embeddings",
+                session_index_files: "session_index_files",
+                session_index_chunks: "session_index_chunks",
+                schema_migrations: "schema_migrations",
+                semantic_schema_migrations: "semantic_schema_migrations",
+              },
+            ],
+          };
+        }
+        if (queryText.includes("semantic_schema_migrations")) {
+          return { rows: [{ id: "0001" }] };
+        }
+        if (queryText.includes("schema_migrations")) {
+          return { rows: [{ id: "0010" }] };
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn(async () => ({
+        query: vi.fn(async () => ({ rows: [] })),
+        release: vi.fn(),
+      })),
+    };
+    createPool.mockReturnValue(pool);
+    statFs.mockResolvedValueOnce({ size: 1 });
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      semantic: { enabled: true },
+    });
+    getEmbeddingProviderSdkMock.mockReturnValueOnce({
+      create: vi.fn(async () => ({
+        provider: {
+          id: "openai-compatible",
+          model: "text-embedding-3-small",
+          embed: vi.fn(async () => Array.from({ length: 1536 }, () => 0.01)),
+          close: vi.fn(),
+        },
+      })),
+    });
+
+    const { api, runServiceStart } = buildApi();
+    (api.runtime as any).agentId = "ops";
+    (api.runtime as any).workspaceDir = "/tmp/ops";
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        },
+        list: [
+          { id: "main", default: true, workspace: "/tmp/work" },
+          {
+            id: "ops",
+            workspace: "/tmp/ops",
+            memorySearch: {
+              provider: "openai-compatible",
+              model: "text-embedding-3-small",
+              remote: { baseUrl: "http://127.0.0.1:1234/v1", apiKey: "${EMBED_KEY}" },
+            },
+          },
+        ],
+      },
+    });
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const statusRegistration = findRegisteredTool(api, "memory_status");
+    const result = await statusRegistration.execute("toolcall-status-semantic-active-probe-1", {
+      check: true,
+    });
+    expect(result.details.semantic.error).toBeUndefined();
+    expect(result.details.semantic).toMatchObject({
+      configured: true,
+      enabled: true,
+      effective: false,
+      reasonCode: "semantic_not_implemented",
+      schemaReady: true,
+      schemaVersion: "0001",
+      vectorExtensionInstalled: true,
+      source: "agent",
+      provider: "openai-compatible",
+      model: "text-embedding-3-small",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      apiKeyConfigured: true,
+      checked: true,
+      providerKind: "generic",
+      providerReachable: true,
+      dimensions: 1536,
+    });
+    expect(result.details.semantic.profileKey).toHaveLength(64);
+    expect(typeof result.details.semantic.checkedAtMs).toBe("number");
+  });
+
+  it("reports semantic schema gaps without blocking the base runtime", async () => {
+    const pool = {
+      query: vi.fn(async (sql?: string) => {
+        const queryText = String(sql ?? "");
+        if (queryText.includes("to_regclass(")) {
+          return {
+            rows: [
+              {
+                vector_extension_installed: false,
+                memory_items: "memory_items",
+                memory_daily_entries: "memory_daily_entries",
+                memory_daily_blocks: "memory_daily_blocks",
+                memory_daily_block_extraction_windows:
+                  "memory_daily_block_extraction_windows",
+                memory_item_embeddings: null,
+                session_index_files: "session_index_files",
+                session_index_chunks: "session_index_chunks",
+                schema_migrations: "schema_migrations",
+                semantic_schema_migrations: null,
+              },
+            ],
+          };
+        }
+        if (queryText.includes("schema_migrations")) {
+          return { rows: [{ id: "0010" }] };
+        }
+        return { rows: [] };
+      }),
+      connect: vi.fn(async () => ({
+        query: vi.fn(async () => ({ rows: [] })),
+        release: vi.fn(),
+      })),
+    };
+    createPool.mockReturnValue(pool);
+    statFs.mockResolvedValueOnce({ size: 1 });
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      semantic: { enabled: true },
+    });
+    getEmbeddingProviderSdkMock.mockReturnValueOnce({
+      create: vi.fn(async () => ({
+        provider: {
+          id: "openai-compatible",
+          model: "text-embedding-3-small",
+          embed: vi.fn(async () => Array.from({ length: 1536 }, () => 0.01)),
+          close: vi.fn(),
+        },
+      })),
+    });
+
+    const { api, runServiceStart } = buildApi();
+    (api.runtime as any).agentId = "ops";
+    (api.runtime as any).workspaceDir = "/tmp/ops";
+    (api.runtime as any).config.current = () => ({
+      plugins: { slots: { memory: "anchorclaw" } },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/work" },
+          {
+            id: "ops",
+            workspace: "/tmp/ops",
+            memorySearch: {
+              provider: "openai-compatible",
+              model: "text-embedding-3-small",
+              remote: { baseUrl: "http://127.0.0.1:1234/v1", apiKey: "${EMBED_KEY}" },
+            },
+          },
+        ],
+      },
+    });
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const statusRegistration = findRegisteredTool(api, "memory_status");
+    const result = await statusRegistration.execute("toolcall-status-semantic-active-probe-gap-1", {
+      check: true,
+    });
+
+    expect(result.details.database?.ok).toBe(true);
+    expect(result.details.semantic).toMatchObject({
+      configured: true,
+      enabled: true,
+      schemaReady: false,
+      vectorExtensionInstalled: false,
+      providerReachable: true,
+      error:
+        "semantic schema not ready (pgvector extension, memory_item_embeddings, semantic_schema_migrations missing)",
+    });
+  });
+
   it("runs active checks via memory_status when check=true", async () => {
     const pool = {
       query: vi.fn(async (sql?: string) => {
@@ -1581,14 +1823,17 @@ describe("phase2 session delta listener", () => {
           return {
             rows: [
               {
+                vector_extension_installed: true,
                 memory_items: "memory_items",
                 memory_daily_entries: "memory_daily_entries",
                 memory_daily_blocks: "memory_daily_blocks",
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
+                memory_item_embeddings: "memory_item_embeddings",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
+                semantic_schema_migrations: "semantic_schema_migrations",
               },
             ],
           };
@@ -1648,14 +1893,17 @@ describe("phase2 session delta listener", () => {
           return {
             rows: [
               {
+                vector_extension_installed: true,
                 memory_items: "memory_items",
                 memory_daily_entries: "memory_daily_entries",
                 memory_daily_blocks: "memory_daily_blocks",
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
+                memory_item_embeddings: "memory_item_embeddings",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
+                semantic_schema_migrations: "semantic_schema_migrations",
               },
             ],
           };
@@ -1696,14 +1944,17 @@ describe("phase2 session delta listener", () => {
           return {
             rows: [
               {
+                vector_extension_installed: true,
                 memory_items: "memory_items",
                 memory_daily_entries: "memory_daily_entries",
                 memory_daily_blocks: "memory_daily_blocks",
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
+                memory_item_embeddings: "memory_item_embeddings",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
+                semantic_schema_migrations: "semantic_schema_migrations",
               },
             ],
           };
@@ -1778,14 +2029,17 @@ describe("phase2 session delta listener", () => {
           return {
             rows: [
               {
+                vector_extension_installed: true,
                 memory_items: "memory_items",
                 memory_daily_entries: "memory_daily_entries",
                 memory_daily_blocks: "memory_daily_blocks",
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
+                memory_item_embeddings: "memory_item_embeddings",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
+                semantic_schema_migrations: "semantic_schema_migrations",
               },
             ],
           };

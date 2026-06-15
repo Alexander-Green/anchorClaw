@@ -6,6 +6,8 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Client } from "pg";
 
+import { loadBundledSemanticMigrationsFromDisk } from "../migrations-fs.js";
+import { applyMigrations } from "../migrations.js";
 import { resolveWorkspaceTargets } from "../workspace-targets.js";
 
 export type AnchorClawSetupOptions = {
@@ -831,6 +833,37 @@ async function ensureSchemaAndGrants(params: {
   }
 }
 
+async function ensureSemanticProvisioning(params: {
+  adminUrl: string;
+  dbName: string;
+  schema: string | undefined;
+}): Promise<{ applied: string[] }> {
+  const targetUrl = buildTargetConnectionUrl(params.adminUrl, params.dbName);
+  const client = new Client({ connectionString: targetUrl });
+  await client.connect();
+  try {
+    if (params.schema) {
+      await client.query(`SET search_path TO ${quoteIdentifier(params.schema)}, public`);
+    }
+    await client.query("CREATE EXTENSION IF NOT EXISTS vector");
+    const migrations = await loadBundledSemanticMigrationsFromDisk();
+    const poolLike = {
+      query: async (text: string, values?: unknown[]) => client.query(text, values),
+      connect: async () => ({
+        query: async (text: string, values?: unknown[]) => client.query(text, values),
+        release: () => undefined,
+      }),
+    } as any;
+    return applyMigrations({
+      pool: poolLike,
+      migrations,
+      tableName: "semantic_schema_migrations",
+    });
+  } finally {
+    await client.end();
+  }
+}
+
 function updateOpenClawConfig(params: {
   dbName: string;
   dbUser: string;
@@ -1006,6 +1039,13 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     dbUser: options.dbUser,
     schema: options.schema,
   });
+  const semanticProvisioning = options.semanticResolvedEnabled
+    ? await ensureSemanticProvisioning({
+        adminUrl: options.adminUrl,
+        dbName: options.dbName,
+        schema: options.schema,
+      })
+    : undefined;
 
   let configUpdate: ReturnType<typeof updateOpenClawConfig> | undefined;
   if (!options.skipConfig) {
@@ -1067,11 +1107,27 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
         console.log(`- memorySearch baseUrl: ${options.semanticBaseUrl}`);
       }
       console.log(`- memorySearch apiKey: ${options.semanticApiKeyConfigured ? "configured" : "not configured"}`);
+      console.log(
+        `- semantic schema: ${semanticProvisioning && semanticProvisioning.applied.length > 0
+          ? `applied ${semanticProvisioning.applied.join(", ")}`
+          : "ready"}`,
+      );
     } else if (configUpdate) {
       console.warn("Warning: semantic settings were not written because openclaw.json was not found.");
+      console.log(
+        `- semantic schema: ${semanticProvisioning && semanticProvisioning.applied.length > 0
+          ? `applied ${semanticProvisioning.applied.join(", ")}`
+          : "ready"}`,
+      );
     }
   } else if (!options.skipConfig && options.semanticConfigEnabled === false && configUpdate?.updated) {
     console.log("- semantic: disabled");
+  } else if (options.semanticResolvedEnabled) {
+    console.log(
+      `- semantic schema: ${semanticProvisioning && semanticProvisioning.applied.length > 0
+        ? `applied ${semanticProvisioning.applied.join(", ")}`
+        : "ready"}`,
+    );
   }
   if (!options.skipConfig && configUpdate?.updated) {
     if (configUpdate.sessionMemoryAfter === "disabled" && configUpdate.sessionMemoryBefore !== "disabled") {

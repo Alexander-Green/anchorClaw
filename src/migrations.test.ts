@@ -52,6 +52,20 @@ describe("applyMigrations", () => {
     }
   });
 
+  it("defines semantic embeddings storage without ANN indexes in the first migration", () => {
+    const sql = readFileSync(
+      new URL("../migrations/semantic/0001_memory_item_embeddings.sql", import.meta.url),
+      "utf8",
+    );
+
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS memory_item_embeddings");
+    expect(sql).toContain("embedding vector NOT NULL");
+    expect(sql).toContain("PRIMARY KEY (memory_item_id, profile_key)");
+    expect(sql).toContain("CREATE INDEX IF NOT EXISTS memory_item_embeddings_profile_key_idx");
+    expect(sql).not.toContain("USING hnsw");
+    expect(sql).not.toContain("USING ivfflat");
+  });
+
   it("runs each migration inside a dedicated client transaction", async () => {
     const clientCalls: Array<{ sql: string; args: unknown[] }> = [];
     const client = {
@@ -119,5 +133,43 @@ describe("applyMigrations", () => {
 
     expect(clientCalls).toEqual(["BEGIN", "BROKEN SQL", "ROLLBACK"]);
     expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports a separate migration table for semantic schema", async () => {
+    const clientCalls: Array<{ sql: string; args: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (sql: string, args: unknown[] = []) => {
+        clientCalls.push({ sql, args });
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+    };
+    const poolQuery = vi.fn(async (sql: string) => {
+      if (sql.includes("SELECT id, applied_at FROM semantic_schema_migrations")) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+    const pool = {
+      query: poolQuery,
+      connect: vi.fn(async () => client),
+    } as any;
+
+    const got = await applyMigrations({
+      pool,
+      migrations: [{ filename: "0001_memory_item_embeddings.sql", sql: "CREATE TABLE demo(id int);" }],
+      tableName: "semantic_schema_migrations",
+    });
+
+    expect(got).toEqual({ applied: ["0001"] });
+    expect(poolQuery).toHaveBeenCalledWith(
+      expect.stringContaining("CREATE TABLE IF NOT EXISTS semantic_schema_migrations"),
+    );
+    expect(clientCalls.map((call) => call.sql)).toEqual([
+      "BEGIN",
+      "CREATE TABLE demo(id int);",
+      "INSERT INTO semantic_schema_migrations (id) VALUES ($1)",
+      "COMMIT",
+    ]);
   });
 });

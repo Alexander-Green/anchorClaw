@@ -89,11 +89,20 @@ export type MemoryStatusCheckResult = {
     enabled: boolean;
     effective: boolean;
     reasonCode?: "semantic_disabled" | "semantic_not_implemented";
+    schemaReady?: boolean;
+    schemaVersion?: string | null;
+    vectorExtensionInstalled?: boolean;
     source?: "agent" | "defaults";
     provider?: string;
     model?: string;
     baseUrl?: string;
     apiKeyConfigured?: boolean;
+    profileKey?: string;
+    providerKind?: "generic" | "memory_legacy";
+    checked?: boolean;
+    checkedAtMs?: number;
+    providerReachable?: boolean;
+    dimensions?: number;
     error?: string;
   };
   index?: {

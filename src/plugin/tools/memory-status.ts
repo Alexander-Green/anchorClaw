@@ -1,11 +1,14 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
 import {
-  resolveAgentMemorySearchConfig,
-  resolveSemanticLayerState,
   resolveSessionsSearchState,
 } from "../../config.js";
 import { scanLegacyWorkspace } from "../../importer.js";
+import {
+  inspectSemanticSchema,
+  probeSemanticProvider,
+  resolveSemanticRuntimeProfile,
+} from "../../semantic/runtime.js";
 import type { MemoryStatusCheckResult } from "../types.js";
 import {
   ensureToolRuntimeReady,
@@ -27,6 +30,24 @@ function isPromptInjectionAllowed(api: any, toolCtx: OpenClawPluginToolContext):
     typeof api?.runtime?.config?.current === "function" ? api.runtime.config.current() : undefined;
   const hooks = currentConfig?.plugins?.entries?.anchorclaw?.hooks;
   return hooks?.allowPromptInjection !== false;
+}
+
+function describeSemanticSchemaGap(params: {
+  vectorExtensionInstalled: boolean;
+  embeddingsTableReady: boolean;
+  migrationsTableReady: boolean;
+}): string {
+  const missing: string[] = [];
+  if (!params.vectorExtensionInstalled) {
+    missing.push("pgvector extension");
+  }
+  if (!params.embeddingsTableReady) {
+    missing.push("memory_item_embeddings");
+  }
+  if (!params.migrationsTableReady) {
+    missing.push("semantic_schema_migrations");
+  }
+  return `semantic schema not ready (${missing.join(", ")} missing)`;
 }
 
 export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
@@ -55,33 +76,12 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
         return unavailable;
       }
       const promptInjectionAllowed = isPromptInjectionAllowed(api, toolCtx);
-      const semanticLayer = resolveSemanticLayerState(ctx.cfg);
       const resolveSemanticRuntimeConfig = () =>
         toolCtx.runtimeConfig ??
         (typeof toolCtx.getRuntimeConfig === "function" ? toolCtx.getRuntimeConfig() : undefined) ??
         (typeof api?.runtime?.config?.current === "function" ? api.runtime.config.current() : undefined);
       const resolveSemanticAgentId = () =>
         toolCtx.agentId ?? ((api as any)?.runtime?.agentId as string | undefined);
-      const describeSemanticError = (params: {
-        runtimeConfig: unknown;
-        agentId?: string;
-        provider?: string;
-        model?: string;
-      }): string | undefined => {
-        if (!semanticLayer.enabled) {
-          return undefined;
-        }
-        if (!params.runtimeConfig) {
-          return "runtime config unavailable; cannot resolve semantic memorySearch";
-        }
-        if (!params.agentId) {
-          return "runtime agent id unavailable; cannot resolve semantic memorySearch";
-        }
-        if (!params.provider || !params.model) {
-          return "semantic enabled but memorySearch.provider/model is not configured for the active agent";
-        }
-        return undefined;
-      };
       const logSemanticError = (params: {
         error: string;
         agentId?: string;
@@ -97,32 +97,11 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
         api.logger.warn(parts.join(" "));
       };
       const buildSemanticStatus = (agentId?: string, runtimeConfig?: unknown) => {
-        const semanticMemorySearch = resolveAgentMemorySearchConfig({
+        return resolveSemanticRuntimeProfile({
+          cfg: ctx.cfg,
           runtimeConfig: runtimeConfig ?? resolveSemanticRuntimeConfig(),
           agentId: agentId ?? resolveSemanticAgentId(),
-        });
-        const resolvedRuntimeConfig = runtimeConfig ?? resolveSemanticRuntimeConfig();
-        const resolvedAgentId = agentId ?? resolveSemanticAgentId();
-        const error = describeSemanticError({
-          runtimeConfig: resolvedRuntimeConfig,
-          agentId: resolvedAgentId,
-          provider: semanticMemorySearch.provider,
-          model: semanticMemorySearch.model,
-        });
-        return {
-          configured: semanticLayer.configured,
-          enabled: semanticLayer.enabled,
-          effective: semanticLayer.effective,
-          ...(semanticLayer.reason ? { reasonCode: semanticLayer.reason } : {}),
-          ...(semanticMemorySearch.source ? { source: semanticMemorySearch.source } : {}),
-          ...(semanticMemorySearch.provider ? { provider: semanticMemorySearch.provider } : {}),
-          ...(semanticMemorySearch.model ? { model: semanticMemorySearch.model } : {}),
-          ...(semanticMemorySearch.baseUrl ? { baseUrl: semanticMemorySearch.baseUrl } : {}),
-          ...(semanticMemorySearch.configured
-            ? { apiKeyConfigured: semanticMemorySearch.apiKeyConfigured }
-            : {}),
-          ...(error ? { error } : {}),
-        };
+        }).profile;
       };
       const base: MemoryStatusCheckResult = {
         ok: ctx.durableState?.overall === "ready",
@@ -169,7 +148,13 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
             throw new Error(String(resolved.details.error ?? "runtime_workspace_unavailable"));
           }
           workspaceTarget = resolved;
-          base.semantic = buildSemanticStatus(workspaceTarget.agentId, toolCtx.runtimeConfig);
+          const targetSemantic = buildSemanticStatus(workspaceTarget.agentId, toolCtx.runtimeConfig);
+          base.semantic = base.semantic
+            ? {
+                ...base.semantic,
+                ...targetSemantic,
+              }
+            : targetSemantic;
           if (base.semantic?.error && !semanticWarningLogged) {
             logSemanticError({
               error: base.semantic.error,
@@ -194,8 +179,9 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
         let dbError: string | undefined;
         try {
           await ctx.ensureReady();
-          await ctx.getPool().query("SELECT 1");
-          const schemaRows = await ctx.getPool().query<{
+          const pool = ctx.getPool();
+          await pool.query("SELECT 1");
+          const schemaRows = await pool.query<{
             memory_items: string | null;
             memory_daily_entries: string | null;
             memory_daily_blocks: string | null;
@@ -219,7 +205,7 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
               schema?.session_index_chunks &&
               schema?.schema_migrations,
           );
-          const migrationRows = await ctx.getPool().query<{ id: string }>(
+          const migrationRows = await pool.query<{ id: string }>(
             "SELECT id FROM schema_migrations ORDER BY id DESC LIMIT 1",
           );
           base.database = {
@@ -235,6 +221,29 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
             base.overall = "blocked";
             base.migrationsState = "failed";
             base.reason ??= "schema_incomplete";
+          }
+          if (base.semantic?.enabled) {
+            const semanticSchema = await inspectSemanticSchema({ pool });
+            const currentSemantic =
+              base.semantic ?? buildSemanticStatus(resolveSemanticAgentId(), toolCtx.runtimeConfig);
+            base.semantic = {
+              ...currentSemantic,
+              schemaReady: semanticSchema.schemaReady,
+              schemaVersion: semanticSchema.schemaVersion,
+              vectorExtensionInstalled: semanticSchema.vectorExtensionInstalled,
+            };
+            if (!semanticSchema.schemaReady && !base.semantic.error) {
+              base.semantic.error = describeSemanticSchemaGap(semanticSchema);
+            }
+            if (base.semantic.error && !semanticWarningLogged) {
+              logSemanticError({
+                error: base.semantic.error,
+                agentId: resolveSemanticAgentId(),
+                provider: base.semantic.provider,
+                model: base.semantic.model,
+              });
+              semanticWarningLogged = true;
+            }
           }
         } catch (error) {
           dbError = error instanceof Error ? error.message : String(error);
@@ -294,6 +303,61 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
             ...(sessionsSearch.reason ? { reasonCode: sessionsSearch.reason } : {}),
             error: error instanceof Error ? error.message : String(error),
           };
+        }
+
+        try {
+          const target = getWorkspaceTarget();
+          const semanticProbe = await probeSemanticProvider({
+            cfg: ctx.cfg,
+            runtimeConfig: resolveSemanticRuntimeConfig(),
+            agentId: target.agentId,
+          });
+          if (semanticProbe) {
+            const currentSemantic = base.semantic ?? buildSemanticStatus(target.agentId, toolCtx.runtimeConfig);
+            base.semantic = {
+              ...currentSemantic,
+              checked: semanticProbe.checked,
+              checkedAtMs: semanticProbe.checkedAtMs,
+              providerKind: semanticProbe.providerKind,
+              providerReachable: semanticProbe.providerReachable,
+              ...(typeof semanticProbe.dimensions === "number"
+                ? { dimensions: semanticProbe.dimensions }
+                : {}),
+              ...(semanticProbe.error ? { error: semanticProbe.error } : {}),
+            };
+            if (semanticProbe.error && !semanticWarningLogged) {
+              logSemanticError({
+                error: semanticProbe.error,
+                agentId: target.agentId,
+                provider: base.semantic?.provider,
+                model: base.semantic?.model,
+              });
+              semanticWarningLogged = true;
+            }
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const workspaceAgentId = (workspaceTarget as { agentId?: string } | null)?.agentId;
+          const currentSemantic =
+            base.semantic ??
+            buildSemanticStatus(workspaceAgentId ?? resolveSemanticAgentId(), toolCtx.runtimeConfig);
+          base.semantic = {
+            ...currentSemantic,
+            checked: true,
+            checkedAtMs: Date.now(),
+            providerReachable: false,
+            error: message,
+          };
+          if (!semanticWarningLogged) {
+            const warnedAgentId = workspaceAgentId ?? resolveSemanticAgentId();
+            logSemanticError({
+              error: message,
+              agentId: warnedAgentId,
+              provider: base.semantic?.provider,
+              model: base.semantic?.model,
+            });
+            semanticWarningLogged = true;
+          }
         }
 
         const pending = Array.from(ctx.sessionDelta.stateByPath.values()).reduce(
