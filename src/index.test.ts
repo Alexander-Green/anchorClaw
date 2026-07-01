@@ -220,8 +220,6 @@ vi.mock("./memory/get.js", () => ({ memoryGetFromDb }));
 vi.mock("./memory/search.js", () => ({ memorySearchDb: vi.fn(async () => []) }));
 vi.mock("./memory/store.js", () => ({ memoryStoreDb: vi.fn() }));
 vi.mock("./memory/forget.js", () => ({ memoryForgetDb: vi.fn() }));
-vi.mock("./memory/recall.js", () => ({ memoryRecallDb: vi.fn() }));
-
 vi.mock("./memory/prompt.js", () => ({
   queryPromptMemoryItems: queryPromptItems,
   queryPromptDailyEntries,
