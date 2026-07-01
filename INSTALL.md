@@ -19,8 +19,9 @@ This guide keeps the operator details out of the main README. Start with
 - PostgreSQL
 
 AnchorClaw does not require embeddings for the MVP.
-The current runtime path remains SQL/FTS-first even if you preconfigure the
-future semantic layer during setup.
+The runtime path remains SQL/FTS-first; the optional semantic layer enriches
+durable memory search and falls back to lexical retrieval if embeddings are
+missing or unavailable.
 
 ## Basic Install
 
@@ -346,10 +347,16 @@ Semantic opt-in example:
 
 Current boundary:
 
-- this prepares config for the future semantic layer;
-- current AnchorClaw runtime still uses SQL/FTS retrieval;
-- `memory_status` reports semantic enabled/configured state, but semantic
-  retrieval itself is not active yet.
+- this enables the optional semantic layer and provisions the separate semantic
+  schema when setup can reach Postgres with admin privileges;
+- durable `memory_items` use hybrid SQL/FTS + vector retrieval when the active
+  OpenClaw agent has a resolvable `memorySearch` provider/model;
+- daily memory and sessions remain lexical in this slice;
+- missing/stale embeddings are built on demand: search tries a small inline
+  batch first, then queues bounded maintenance indexing when backlog remains;
+- if semantic provider/schema/runtime is unavailable, AnchorClaw keeps lexical
+  SQL/FTS retrieval working and reports the semantic problem in
+  `memory_status`, tool details, or logs.
 
 `sessions.search.enabled` controls whether the sessions corpus is exposed.
 `sessions.visibility` controls which indexed transcripts an agent can search

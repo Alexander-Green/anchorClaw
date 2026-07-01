@@ -26,6 +26,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
 }));
 
 import {
+  buildSemanticEmbedding,
   probeSemanticProvider,
   resolveSemanticRuntimeProfile,
 } from "./runtime.js";
@@ -79,8 +80,7 @@ describe("semantic runtime", () => {
     expect(first.profile).toMatchObject({
       configured: true,
       enabled: true,
-      effective: false,
-      reasonCode: "semantic_not_implemented",
+      effective: true,
       source: "defaults",
       provider: "openai-compatible",
       model: "text-embedding-3-small",
@@ -208,5 +208,65 @@ describe("semantic runtime", () => {
       providerReachable: false,
       error: "embedding dimensions mismatch: expected 3, got 2",
     });
+  });
+
+  it("passes query/document purpose to generic providers while create receives configured input types", async () => {
+    resolveMemorySearchConfigMock.mockReturnValue({
+      enabled: true,
+      provider: "openai-compatible",
+      model: "text-embedding-3-small",
+      remote: { baseUrl: "http://127.0.0.1:1234/v1", apiKey: "${EMBED_KEY}" },
+      inputType: "shared-input",
+      queryInputType: "search_query",
+      documentInputType: "search_document",
+      outputDimensionality: 3,
+      local: {},
+      fallback: "none",
+    });
+    const embed = vi.fn(async () => [0.1, 0.2, 0.3]);
+    const create = vi.fn(async () => ({
+      provider: {
+        id: "openai-compatible",
+        model: "text-embedding-3-small",
+        embed,
+        close: vi.fn(),
+      },
+    }));
+    getEmbeddingProviderMock.mockReturnValue({ create });
+
+    await buildSemanticEmbedding({
+      cfg: { semantic: { enabled: true } },
+      runtimeConfig: { agents: { list: [{ id: "main" }] } },
+      agentId: "main",
+      text: "query text",
+      purpose: "query",
+      timeoutMs: 1000,
+    });
+    await buildSemanticEmbedding({
+      cfg: { semantic: { enabled: true } },
+      runtimeConfig: { agents: { list: [{ id: "main" }] } },
+      agentId: "main",
+      text: "document text",
+      purpose: "document",
+      timeoutMs: 1000,
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputType: "shared-input",
+        queryInputType: "search_query",
+        documentInputType: "search_document",
+      }),
+    );
+    expect(embed).toHaveBeenNthCalledWith(
+      1,
+      "query text",
+      expect.objectContaining({ inputType: "query" }),
+    );
+    expect(embed).toHaveBeenNthCalledWith(
+      2,
+      "document text",
+      expect.objectContaining({ inputType: "document" }),
+    );
   });
 });

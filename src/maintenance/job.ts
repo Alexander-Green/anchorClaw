@@ -5,6 +5,7 @@ import type { AnchorClawConfig } from "../config.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { memoryStoreDb } from "../memory/store.js";
 import type { PostgresPool } from "../postgres.js";
+import { processSemanticIndexingRequests } from "../semantic/indexing.js";
 import { extractMaintenanceCandidates } from "./extractor.js";
 
 const SOURCE_KIND = "daily_entries";
@@ -351,6 +352,9 @@ export type MaintenanceCycleResult = {
   heuristicCandidateCount: number;
   insertedCount: number;
   skippedCount: number;
+  semanticRequestCount: number;
+  semanticIndexedCount: number;
+  semanticFailedCount: number;
   dryRun: boolean;
   error?: string;
 };
@@ -379,6 +383,9 @@ export async function runMaintenanceCycle(params: {
   let heuristicCandidateCount = 0;
   let insertedCount = 0;
   let skippedCount = 0;
+  let semanticRequestCount = 0;
+  let semanticIndexedCount = 0;
+  let semanticFailedCount = 0;
 
   try {
     const runInsert = await params.pool.query<{ id: string }>(
@@ -524,6 +531,45 @@ export async function runMaintenanceCycle(params: {
       skippedCount += heuristicCandidateCount;
     }
 
+    if (!params.dryRun && params.cfg.semantic?.enabled === true) {
+      const runtimeConfig =
+        typeof (params.api as any)?.runtime?.config?.current === "function"
+          ? (params.api as any).runtime.config.current()
+          : undefined;
+      if (!runtimeConfig) {
+        params.api.logger.warn(
+          "anchorclaw: semantic maintenance skipped because OpenClaw runtime config is unavailable",
+        );
+      } else {
+        try {
+          const semanticResult = await processSemanticIndexingRequests({
+            pool: params.pool,
+            cfg: params.cfg,
+            runtimeConfig,
+            userId: scope.userId,
+            workspaceId: scope.workspaceId,
+            requestLimit: 5,
+            itemBatchSize: Math.max(1, Math.min(params.batchSize, 25)),
+            timeoutMs: 15_000,
+            logger: params.api.logger,
+          });
+          semanticRequestCount = semanticResult.processedRequests;
+          semanticIndexedCount = semanticResult.indexed;
+          semanticFailedCount = semanticResult.failed;
+          if (semanticResult.processedRequests > 0) {
+            params.api.logger.info(
+              `anchorclaw: semantic maintenance processed ${semanticResult.processedRequests} request(s), indexed=${semanticResult.indexed}, requeued=${semanticResult.requeued}, superseded=${semanticResult.superseded}, failed=${semanticResult.failed}`,
+            );
+          }
+        } catch (error) {
+          semanticFailedCount += 1;
+          params.api.logger.warn(
+            `anchorclaw: semantic maintenance skipped (${error instanceof Error ? error.message : String(error)})`,
+          );
+        }
+      }
+    }
+
     if (runId) {
       await params.pool.query(
         `
@@ -548,6 +594,9 @@ export async function runMaintenanceCycle(params: {
       heuristicCandidateCount,
       insertedCount,
       skippedCount,
+      semanticRequestCount,
+      semanticIndexedCount,
+      semanticFailedCount,
       dryRun: params.dryRun,
     };
   } catch (error) {
@@ -578,6 +627,9 @@ export async function runMaintenanceCycle(params: {
       heuristicCandidateCount,
       insertedCount,
       skippedCount,
+      semanticRequestCount,
+      semanticIndexedCount,
+      semanticFailedCount,
       dryRun: params.dryRun,
       error: message,
     };

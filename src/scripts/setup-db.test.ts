@@ -323,7 +323,7 @@ describe("runAnchorClawSetup", () => {
       expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch provider: openai-compatible");
       expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch model: text-embedding-3-small");
       expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch apiKey: configured");
-      expect(consoleLogSpy).toHaveBeenCalledWith("- semantic schema: applied 0001");
+      expect(consoleLogSpy).toHaveBeenCalledWith("- semantic schema: applied 0001, 0002");
 
       const targetSql = pgState.clients
         .filter((client) => client.connectionString.endsWith("/anchorclaw"))
@@ -333,6 +333,7 @@ describe("runAnchorClawSetup", () => {
       expect(targetSql).toContain("CREATE EXTENSION IF NOT EXISTS vector");
       expect(targetSql).toContain("CREATE TABLE IF NOT EXISTS semantic_schema_migrations");
       expect(targetSql).toContain("CREATE TABLE IF NOT EXISTS memory_item_embeddings");
+      expect(targetSql).toContain("CREATE TABLE IF NOT EXISTS semantic_indexing_requests");
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;
@@ -436,7 +437,7 @@ describe("runAnchorClawSetup", () => {
         model: "ops-model",
       });
       expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch apiKey: configured");
-      expect(consoleLogSpy).toHaveBeenCalledWith("- semantic schema: applied 0001");
+      expect(consoleLogSpy).toHaveBeenCalledWith("- semantic schema: applied 0001, 0002");
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;

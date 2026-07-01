@@ -169,8 +169,8 @@ vi.mock("./config.js", () => ({
     return {
       configured: enabled,
       enabled,
-      effective: false,
-      reason: enabled ? "semantic_not_implemented" : "semantic_disabled",
+      effective: enabled,
+      reason: enabled ? null : "semantic_disabled",
     };
   },
   resolveAgentMemorySearchConfig: ({ runtimeConfig, agentId }: any) => {
@@ -1583,8 +1583,7 @@ describe("phase2 session delta listener", () => {
     expect(result.details.semantic).toMatchObject({
       configured: true,
       enabled: true,
-      effective: false,
-      reasonCode: "semantic_not_implemented",
+      effective: true,
       source: "agent",
       provider: "ollama",
       model: "nomic-embed-text",
@@ -1612,8 +1611,7 @@ describe("phase2 session delta listener", () => {
     expect(result.details.semantic).toMatchObject({
       configured: true,
       enabled: true,
-      effective: false,
-      reasonCode: "semantic_not_implemented",
+      effective: true,
       error: "semantic enabled but memorySearch.provider/model is not configured for the active agent",
     });
   });
@@ -1633,6 +1631,7 @@ describe("phase2 session delta listener", () => {
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
                 memory_item_embeddings: "memory_item_embeddings",
+                semantic_indexing_requests: "semantic_indexing_requests",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
@@ -1642,7 +1641,7 @@ describe("phase2 session delta listener", () => {
           };
         }
         if (queryText.includes("semantic_schema_migrations")) {
-          return { rows: [{ id: "0001" }] };
+          return { rows: [{ id: "0002" }] };
         }
         if (queryText.includes("schema_migrations")) {
           return { rows: [{ id: "0010" }] };
@@ -1707,11 +1706,11 @@ describe("phase2 session delta listener", () => {
     expect(result.details.semantic).toMatchObject({
       configured: true,
       enabled: true,
-      effective: false,
-      reasonCode: "semantic_not_implemented",
+      effective: true,
       schemaReady: true,
-      schemaVersion: "0001",
+      schemaVersion: "0002",
       vectorExtensionInstalled: true,
+      indexingRequestsTableReady: true,
       source: "agent",
       provider: "openai-compatible",
       model: "text-embedding-3-small",
@@ -1741,6 +1740,7 @@ describe("phase2 session delta listener", () => {
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
                 memory_item_embeddings: null,
+                semantic_indexing_requests: null,
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
@@ -1811,7 +1811,7 @@ describe("phase2 session delta listener", () => {
       vectorExtensionInstalled: false,
       providerReachable: true,
       error:
-        "semantic schema not ready (pgvector extension, memory_item_embeddings, semantic_schema_migrations missing)",
+        "semantic schema not ready (pgvector extension, memory_item_embeddings, semantic_indexing_requests, semantic_schema_migrations missing)",
     });
   });
 
@@ -1830,6 +1830,7 @@ describe("phase2 session delta listener", () => {
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
                 memory_item_embeddings: "memory_item_embeddings",
+                semantic_indexing_requests: "semantic_indexing_requests",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
@@ -1900,6 +1901,7 @@ describe("phase2 session delta listener", () => {
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
                 memory_item_embeddings: "memory_item_embeddings",
+                semantic_indexing_requests: "semantic_indexing_requests",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
@@ -1951,6 +1953,7 @@ describe("phase2 session delta listener", () => {
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
                 memory_item_embeddings: "memory_item_embeddings",
+                semantic_indexing_requests: "semantic_indexing_requests",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",
@@ -2036,6 +2039,7 @@ describe("phase2 session delta listener", () => {
                 memory_daily_block_extraction_windows:
                   "memory_daily_block_extraction_windows",
                 memory_item_embeddings: "memory_item_embeddings",
+                semantic_indexing_requests: "semantic_indexing_requests",
                 session_index_files: "session_index_files",
                 session_index_chunks: "session_index_chunks",
                 schema_migrations: "schema_migrations",

@@ -131,7 +131,7 @@ export function createMaintenanceRuntime(params: {
         invalidatePromptMemory({ workspaceDir: target.workspaceDir });
       }
       api.logger.info(
-        `anchorclaw: maintenance cycle completed${labelSuffix} (dryRun=${result.dryRun}, scanned=${result.scannedCount}, heuristicCandidates=${result.heuristicCandidateCount}, inserted=${result.insertedCount}, skipped=${result.skippedCount})`,
+        `anchorclaw: maintenance cycle completed${labelSuffix} (dryRun=${result.dryRun}, scanned=${result.scannedCount}, heuristicCandidates=${result.heuristicCandidateCount}, inserted=${result.insertedCount}, skipped=${result.skippedCount}, semanticRequests=${result.semanticRequestCount}, semanticIndexed=${result.semanticIndexedCount}, semanticFailed=${result.semanticFailedCount})`,
       );
     }
     return true;

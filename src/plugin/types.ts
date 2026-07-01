@@ -88,10 +88,11 @@ export type MemoryStatusCheckResult = {
     configured: boolean;
     enabled: boolean;
     effective: boolean;
-    reasonCode?: "semantic_disabled" | "semantic_not_implemented";
+    reasonCode?: "semantic_disabled";
     schemaReady?: boolean;
     schemaVersion?: string | null;
     vectorExtensionInstalled?: boolean;
+    indexingRequestsTableReady?: boolean;
     source?: "agent" | "defaults";
     provider?: string;
     model?: string;

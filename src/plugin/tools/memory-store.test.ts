@@ -114,6 +114,13 @@ describe("memory_store visible output", () => {
         sessionKey: "agent:main:main",
       }),
     );
+    expect(memoryStoreDbMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        semantic: expect.objectContaining({
+          agentId: "main",
+        }),
+      }),
+    );
   });
 
   it("waits for lazy startup bootstrap when durable state is still pending", async () => {
@@ -184,5 +191,12 @@ describe("memory_store visible output", () => {
       }),
     );
     expect(memoryStoreDbMock).toHaveBeenCalledTimes(1);
+    expect(memoryStoreDbMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        semantic: expect.objectContaining({
+          agentId: "ops",
+        }),
+      }),
+    );
   });
 });

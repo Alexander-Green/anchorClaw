@@ -76,7 +76,7 @@ export type SemanticLayerState = {
   configured: boolean;
   enabled: boolean;
   effective: boolean;
-  reason: "semantic_disabled" | "semantic_not_implemented" | null;
+  reason: "semantic_disabled" | null;
 };
 
 export type ResolvedAgentMemorySearchConfig = {
@@ -665,8 +665,8 @@ export function resolveSemanticLayerState(
   return {
     configured: true,
     enabled: true,
-    effective: false,
-    reason: "semantic_not_implemented",
+    effective: true,
+    reason: null,
   };
 }
 

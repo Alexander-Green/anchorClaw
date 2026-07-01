@@ -35,6 +35,7 @@ function isPromptInjectionAllowed(api: any, toolCtx: OpenClawPluginToolContext):
 function describeSemanticSchemaGap(params: {
   vectorExtensionInstalled: boolean;
   embeddingsTableReady: boolean;
+  indexingRequestsTableReady: boolean;
   migrationsTableReady: boolean;
 }): string {
   const missing: string[] = [];
@@ -43,6 +44,9 @@ function describeSemanticSchemaGap(params: {
   }
   if (!params.embeddingsTableReady) {
     missing.push("memory_item_embeddings");
+  }
+  if (!params.indexingRequestsTableReady) {
+    missing.push("semantic_indexing_requests");
   }
   if (!params.migrationsTableReady) {
     missing.push("semantic_schema_migrations");
@@ -231,6 +235,7 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
               schemaReady: semanticSchema.schemaReady,
               schemaVersion: semanticSchema.schemaVersion,
               vectorExtensionInstalled: semanticSchema.vectorExtensionInstalled,
+              indexingRequestsTableReady: semanticSchema.indexingRequestsTableReady,
             };
             if (!semanticSchema.schemaReady && !base.semantic.error) {
               base.semantic.error = describeSemanticSchemaGap(semanticSchema);

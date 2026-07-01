@@ -72,6 +72,9 @@ function completedMaintenanceResult() {
     heuristicCandidateCount: 0,
     insertedCount: 0,
     skippedCount: 0,
+    semanticRequestCount: 0,
+    semanticIndexedCount: 0,
+    semanticFailedCount: 0,
     dryRun: false,
   };
 }

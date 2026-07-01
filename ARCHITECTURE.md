@@ -399,12 +399,19 @@ This gives a deterministic baseline:
 
 ## Semantic Enrichment Layer
 
-Future semantic recall should sit above the SQL source of truth.
+Semantic recall sits above the SQL source of truth.
 
-Planned shape:
+Current shape:
 
-- embeddings/vector table attached to durable and daily records;
-- hybrid retrieval that combines FTS and vector scores;
+- `memory_item_embeddings` is a derived sidecar index attached to durable
+  `memory_items`;
+- direct durable writes try to build the current agent/profile embedding after
+  the DB commit;
+- `memory_search` combines SQL/FTS and exact cosine vector search for durable
+  `memory_items` when semantic is enabled;
+- missing or stale embeddings are handled demand-first: search attempts a small
+  inline indexing batch, then queues bounded maintenance work if backlog
+  remains;
 - failure mode that falls back to lexical search without breaking tool APIs;
 - semantic near-duplicate assistance can be added here for extractor and direct
   writes, but it should remain optional and never replace deterministic baseline

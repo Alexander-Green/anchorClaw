@@ -1,7 +1,54 @@
 import { describe, expect, it } from "vitest";
-import { memorySearchDailyDb, memorySearchDb } from "./search.js";
+import { memorySearchDailyDb, memorySearchDb, memorySearchSemanticDb } from "./search.js";
 
 describe("memorySearchDb ranking contract", () => {
+  it("searches semantic embeddings for the selected profile and current item version", async () => {
+    const capturedSql: string[] = [];
+    const capturedParams: unknown[][] = [];
+    const pool = {
+      query: async (sql: string, params: unknown[]) => {
+        capturedSql.push(sql);
+        capturedParams.push(params);
+        return {
+          rows: [
+            {
+              id: "semantic-1",
+              title: "Semantic result",
+              type: "fact",
+              content: "Semantic result content",
+              canonical_key: "semantic_result",
+              updated_at: "2026-07-01T10:00:00.000Z",
+              score: 0.87,
+            },
+          ],
+        };
+      },
+    } as any;
+
+    const hits = await memorySearchSemanticDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      profileKey: "profile-1",
+      queryVector: [0.1, 0.2, 0.3],
+      limits: { maxResults: 10 } as any,
+      maxResults: 5,
+    });
+
+    expect(capturedSql[0]).toContain("JOIN memory_item_embeddings emb");
+    expect(capturedSql[0]).toContain("emb.profile_key = $3");
+    expect(capturedSql[0]).toContain("emb.memory_item_version IS NOT DISTINCT FROM mi.version");
+    expect(capturedSql[0]).toContain("emb.dimensions = $5");
+    expect(capturedSql[0]).toContain("emb.embedding <=> $4::vector");
+    expect(capturedParams[0]).toEqual(["u1", "w1", "profile-1", "[0.1,0.2,0.3]", 3, 5]);
+    expect(hits[0]).toMatchObject({
+      id: "semantic-1",
+      path: "db-memory/items/semantic-1.md",
+      canonicalKey: "semantic_result",
+      score: 0.87,
+    });
+  });
+
   it("uses exact boosts on title/content/canonical key in the strict FTS path", async () => {
     const capturedSql: string[] = [];
     const capturedParams: unknown[][] = [];

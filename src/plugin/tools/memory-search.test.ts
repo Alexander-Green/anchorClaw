@@ -6,16 +6,23 @@ const {
   resolveLimitsMock,
   memorySearchDbMock,
   memorySearchDailyDbMock,
+  memorySearchSemanticDbMock,
   memorySearchSessionsMock,
   hasSessionsIndexRowsMock,
   memorySearchSessionsIndexDbMock,
   filterSessionHitsByVisibilityMock,
   scanLegacyWorkspaceMock,
+  countMissingSemanticEmbeddingsMock,
+  enqueueSemanticIndexingRequestMock,
+  indexMissingSemanticEmbeddingsMock,
+  buildSemanticEmbeddingMock,
+  resolveSemanticRuntimeProfileMock,
 } = vi.hoisted(() => ({
   resolveScopeMock: vi.fn(async () => ({ userId: "u1", workspaceId: "w1" })),
   resolveLimitsMock: vi.fn(() => ({ maxResults: 10 })),
   memorySearchDbMock: vi.fn(async () => []),
   memorySearchDailyDbMock: vi.fn(async () => []),
+  memorySearchSemanticDbMock: vi.fn(async () => []),
   memorySearchSessionsMock: vi.fn(async () => []),
   hasSessionsIndexRowsMock: vi.fn(async () => false),
   memorySearchSessionsIndexDbMock: vi.fn(async () => []),
@@ -31,6 +38,30 @@ const {
     unreadableCount: 0,
     hasActiveLegacy: false,
   })),
+  countMissingSemanticEmbeddingsMock: vi.fn(async () => 0),
+  enqueueSemanticIndexingRequestMock: vi.fn(async () => ({ queued: true })),
+  indexMissingSemanticEmbeddingsMock: vi.fn(async () => ({
+    enabled: true,
+    profileKey: "profile-1",
+    attempted: 0,
+    indexed: 0,
+    remaining: 0,
+  })),
+  buildSemanticEmbeddingMock: vi.fn(async () => ({
+    profileKey: "profile-1",
+    providerKind: "generic",
+    dimensions: 3,
+    vector: [0.1, 0.2, 0.3],
+  })),
+  resolveSemanticRuntimeProfileMock: vi.fn(() => ({
+    resolvedMemorySearch: null,
+    profile: {
+      configured: false,
+      enabled: false,
+      effective: false,
+      reasonCode: "semantic_disabled",
+    },
+  })),
 }));
 
 vi.mock("../../identity.js", () => ({
@@ -44,6 +75,7 @@ vi.mock("../../memory/limits.js", () => ({
 vi.mock("../../memory/search.js", () => ({
   memorySearchDb: memorySearchDbMock,
   memorySearchDailyDb: memorySearchDailyDbMock,
+  memorySearchSemanticDb: memorySearchSemanticDbMock,
 }));
 
 vi.mock("../../memory/sessions.js", () => ({
@@ -61,6 +93,17 @@ vi.mock("../../memory/sessions-visibility.js", () => ({
 
 vi.mock("../../importer.js", () => ({
   scanLegacyWorkspace: scanLegacyWorkspaceMock,
+}));
+
+vi.mock("../../semantic/indexing.js", () => ({
+  countMissingSemanticEmbeddings: countMissingSemanticEmbeddingsMock,
+  enqueueSemanticIndexingRequest: enqueueSemanticIndexingRequestMock,
+  indexMissingSemanticEmbeddings: indexMissingSemanticEmbeddingsMock,
+}));
+
+vi.mock("../../semantic/runtime.js", () => ({
+  buildSemanticEmbedding: buildSemanticEmbeddingMock,
+  resolveSemanticRuntimeProfile: resolveSemanticRuntimeProfileMock,
 }));
 
 function buildCtx() {
@@ -121,6 +164,30 @@ function materializeRegisteredTool(registerTool: ReturnType<typeof vi.fn>, overr
 describe("memory_search tool exactTop1 metadata", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (resolveSemanticRuntimeProfileMock as any).mockReturnValue({
+      resolvedMemorySearch: null,
+      profile: {
+        configured: false,
+        enabled: false,
+        effective: false,
+        reasonCode: "semantic_disabled",
+      },
+    });
+    buildSemanticEmbeddingMock.mockResolvedValue({
+      profileKey: "profile-1",
+      providerKind: "generic",
+      dimensions: 3,
+      vector: [0.1, 0.2, 0.3],
+    });
+    countMissingSemanticEmbeddingsMock.mockResolvedValue(0);
+    enqueueSemanticIndexingRequestMock.mockResolvedValue({ queued: true });
+    indexMissingSemanticEmbeddingsMock.mockResolvedValue({
+      enabled: true,
+      profileKey: "profile-1",
+      attempted: 0,
+      indexed: 0,
+      remaining: 0,
+    });
   });
 
   it("emits exactTop1 metadata and top exact line for literal top-1 match", async () => {
@@ -194,6 +261,95 @@ describe("memory_search tool exactTop1 metadata", () => {
         sessionKey: "agent:ops:main",
       }),
     );
+  });
+
+  it("runs inline semantic indexing before queuing maintenance when semantic backlog exists", async () => {
+    (resolveSemanticRuntimeProfileMock as any).mockReturnValue({
+      resolvedMemorySearch: {},
+      profile: {
+        configured: true,
+        enabled: true,
+        effective: true,
+        profileKey: "profile-1",
+        provider: "openai-compatible",
+        model: "text-embedding-3-small",
+      },
+    });
+    memorySearchDbMock.mockResolvedValueOnce([]);
+    (memorySearchSemanticDbMock as any)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          corpus: "memory",
+          path: "db-memory/items/semantic-1.md",
+          id: "semantic-1",
+          title: "Semantic hit",
+          kind: "fact",
+          score: 0.91,
+          snippet: "Semantic hit from embedding search",
+        },
+      ]);
+    countMissingSemanticEmbeddingsMock.mockResolvedValueOnce(3);
+    indexMissingSemanticEmbeddingsMock.mockResolvedValueOnce({
+      enabled: true,
+      profileKey: "profile-1",
+      attempted: 1,
+      indexed: 1,
+      remaining: 2,
+    });
+    const { ctx, registerTool } = buildCtx();
+    ctx.cfg = { semantic: { enabled: true }, sessions: { search: { enabled: true }, visibility: "current" } };
+    registerMemorySearchTool({
+      ctx,
+      invalidatePromptMemory: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = materializeRegisteredTool(registerTool);
+
+    const result = await def.execute("toolcall-semantic-1", {
+      query: "meaningful context",
+      corpus: "memory",
+    });
+
+    expect(buildSemanticEmbeddingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purpose: "query",
+        text: "meaningful context",
+      }),
+    );
+    expect(indexMissingSemanticEmbeddingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        userId: "u1",
+        workspaceId: "w1",
+        limit: 5,
+        expectedDimensions: 3,
+      }),
+    );
+    expect(memorySearchSemanticDbMock).toHaveBeenCalledTimes(2);
+    expect(enqueueSemanticIndexingRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "u1",
+        workspaceId: "w1",
+        agentId: "main",
+        profileKey: "profile-1",
+        reason: "search_missing",
+      }),
+    );
+    expect(result.details.meta.retrievalMode).toBe("hybrid_memory");
+    expect(result.details.meta.semantic).toMatchObject({
+      enabled: true,
+      profileKey: "profile-1",
+      queryEmbedded: true,
+      inlineAttempted: 1,
+      inlineIndexed: 1,
+      backlog: 2,
+      queued: true,
+    });
+    expect(result.details.results[0]).toMatchObject({
+      id: "semantic-1",
+      snippet: "Semantic hit from embedding search",
+    });
   });
 
   it("does not emit exactTop1 metadata for non-literal top-1", async () => {

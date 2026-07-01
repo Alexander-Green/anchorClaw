@@ -359,7 +359,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
     });
   });
 
-  it("reports semantic opt-in as not implemented without changing search behavior", async () => {
+  it("reports semantic opt-in without changing manager lexical search behavior", async () => {
     vi.mocked(memorySearchDb).mockResolvedValueOnce([
       {
         corpus: "memory",
@@ -389,18 +389,23 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
 
     expect(results).toHaveLength(1);
     expect(memorySearchDb).toHaveBeenCalledTimes(1);
-    expect(debug).toEqual([{ backend: "builtin", configuredMode: "postgres", effectiveMode: "postgres" }]);
+    expect(debug).toEqual([
+      {
+        backend: "builtin",
+        configuredMode: "postgres+semantic-sidecar",
+        effectiveMode: "postgres",
+      },
+    ]);
     expect(manager.status()).toMatchObject({
       custom: {
         semanticConfigured: true,
         semanticEnabled: true,
-        semanticEffective: false,
-        semanticReason: "semantic_not_implemented",
+        semanticEffective: true,
       },
     });
     await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
       ok: false,
-      error: "semantic layer not implemented",
+      error: "semantic memorySearch provider/model not configured",
     });
   });
 
@@ -452,8 +457,7 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
       custom: {
         semanticConfigured: true,
         semanticEnabled: true,
-        semanticEffective: false,
-        semanticReason: "semantic_not_implemented",
+        semanticEffective: true,
         semanticMemorySearchConfigured: true,
         semanticResolvedFrom: "agent",
         semanticProvider: "ollama",
@@ -461,6 +465,9 @@ describe("createAnchorClawMemorySearchManager visibility behavior", () => {
         semanticBaseUrl: "http://127.0.0.1:11434",
         semanticApiKeyConfigured: true,
       },
+    });
+    expect(manager.getCachedEmbeddingAvailability?.()).toMatchObject({
+      ok: true,
     });
   });
 

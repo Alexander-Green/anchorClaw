@@ -22,7 +22,7 @@ export type SemanticRuntimeProfile = {
   configured: boolean;
   enabled: boolean;
   effective: boolean;
-  reasonCode?: "semantic_disabled" | "semantic_not_implemented";
+  reasonCode?: "semantic_disabled";
   source?: "agent" | "defaults";
   provider?: string;
   model?: string;
@@ -45,6 +45,7 @@ export type SemanticSchemaState = {
   schemaReady: boolean;
   vectorExtensionInstalled: boolean;
   embeddingsTableReady: boolean;
+  indexingRequestsTableReady: boolean;
   migrationsTableReady: boolean;
   schemaVersion: string | null;
 };
@@ -58,7 +59,11 @@ type InternalSemanticProvider = {
   id: string;
   model: string;
   close?: () => Promise<void> | void;
-  embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+  embedText: (
+    text: string,
+    purpose: "query" | "document",
+    options?: { signal?: AbortSignal },
+  ) => Promise<number[]>;
 };
 
 function errorMessage(error: unknown): string {
@@ -245,7 +250,11 @@ async function createSemanticProvider(params: {
         id: result.provider.id,
         model: result.provider.model,
         close: result.provider.close,
-        embedQuery: async (text: string, options?: { signal?: AbortSignal }) =>
+        embedText: async (
+          text: string,
+          _purpose: "query" | "document",
+          options?: { signal?: AbortSignal },
+        ) =>
           result.provider!.embedQuery(text, options),
       },
       providerKind: "memory_legacy",
@@ -276,14 +285,77 @@ async function createSemanticProvider(params: {
       id: result.provider.id,
       model: result.provider.model,
       close: result.provider.close,
-      embedQuery: async (text: string, options?: { signal?: AbortSignal }) =>
+      embedText: async (
+        text: string,
+        purpose: "query" | "document",
+        options?: { signal?: AbortSignal },
+      ) =>
         result.provider!.embed(text, {
           signal: options?.signal,
-          inputType: "query",
+          inputType: purpose,
         }),
     },
     providerKind: "generic",
   };
+}
+
+export type SemanticEmbeddingResult = {
+  profileKey: string;
+  providerKind: SemanticProviderKind;
+  dimensions: number;
+  vector: number[];
+};
+
+export async function buildSemanticEmbedding(params: {
+  cfg: Pick<AnchorClawConfig, "semantic"> | null | undefined;
+  runtimeConfig: unknown;
+  agentId?: string | null | undefined;
+  text: string;
+  purpose?: "query" | "document";
+  timeoutMs?: number;
+}): Promise<SemanticEmbeddingResult | null> {
+  const { profile, resolvedMemorySearch } = resolveSemanticRuntimeProfile(params);
+  if (!profile.enabled) {
+    return null;
+  }
+  if (!resolvedMemorySearch || !params.runtimeConfig || !params.agentId || !profile.profileKey) {
+    throw new Error(profile.error ?? "semantic runtime is not ready for embedding");
+  }
+
+  let provider: InternalSemanticProvider | undefined;
+  let providerKind: SemanticProviderKind = "generic";
+  try {
+    const created = await createSemanticProvider({
+      runtimeConfig: params.runtimeConfig as RuntimeConfigLike,
+      agentId: String(params.agentId),
+      resolvedMemorySearch,
+    });
+    provider = created.provider;
+    providerKind = created.providerKind;
+    const timeoutMs = typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 15_000;
+    const { controller, dispose } = createProbeAbortController(timeoutMs);
+    try {
+      const vector = await provider.embedText(
+        params.text,
+        params.purpose ?? "document",
+        { signal: controller.signal },
+      );
+      const dimensions = validateEmbeddingVector({
+        vector,
+        configuredDimensions: resolvedMemorySearch.outputDimensionality,
+      });
+      return {
+        profileKey: profile.profileKey,
+        providerKind,
+        dimensions,
+        vector,
+      };
+    } finally {
+      dispose();
+    }
+  } finally {
+    await provider?.close?.();
+  }
 }
 
 export async function probeSemanticProvider(params: {
@@ -320,9 +392,11 @@ export async function probeSemanticProvider(params: {
     const timeoutMs = typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 15_000;
     const { controller, dispose } = createProbeAbortController(timeoutMs);
     try {
-      const vector = await provider.embedQuery("anchorclaw semantic probe", {
-        signal: controller.signal,
-      });
+      const vector = await provider.embedText(
+        "anchorclaw semantic probe",
+        "query",
+        { signal: controller.signal },
+      );
       const dimensions = validateEmbeddingVector({
         vector,
         configuredDimensions: resolvedMemorySearch.outputDimensionality,
@@ -356,16 +430,19 @@ export async function inspectSemanticSchema(params: {
   const rows = await params.pool.query<{
     vector_extension_installed: boolean;
     memory_item_embeddings: string | null;
+    semantic_indexing_requests: string | null;
     semantic_schema_migrations: string | null;
   }>(
     `SELECT
       EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS vector_extension_installed,
       to_regclass('memory_item_embeddings') AS memory_item_embeddings,
+      to_regclass('semantic_indexing_requests') AS semantic_indexing_requests,
       to_regclass('semantic_schema_migrations') AS semantic_schema_migrations`,
   );
   const schema = rows.rows[0];
   const vectorExtensionInstalled = schema?.vector_extension_installed === true;
   const embeddingsTableReady = Boolean(schema?.memory_item_embeddings);
+  const indexingRequestsTableReady = Boolean(schema?.semantic_indexing_requests);
   const migrationsTableReady = Boolean(schema?.semantic_schema_migrations);
 
   let schemaVersion: string | null = null;
@@ -377,9 +454,14 @@ export async function inspectSemanticSchema(params: {
   }
 
   return {
-    schemaReady: vectorExtensionInstalled && embeddingsTableReady && migrationsTableReady,
+    schemaReady:
+      vectorExtensionInstalled &&
+      embeddingsTableReady &&
+      indexingRequestsTableReady &&
+      migrationsTableReady,
     vectorExtensionInstalled,
     embeddingsTableReady,
+    indexingRequestsTableReady,
     migrationsTableReady,
     schemaVersion,
   };

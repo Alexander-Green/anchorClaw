@@ -91,7 +91,7 @@ describe("anchorClawConfigSchema semantic", () => {
     });
   });
 
-  it("accepts semantic.enabled=true but reports it as not implemented yet", () => {
+  it("accepts semantic.enabled=true as the semantic layer opt-in", () => {
     const parsed = anchorClawConfigSchema.parse({
       ...baseConfig(),
       semantic: {
@@ -102,8 +102,8 @@ describe("anchorClawConfigSchema semantic", () => {
     expect(resolveSemanticLayerState(parsed)).toEqual({
       configured: true,
       enabled: true,
-      effective: false,
-      reason: "semantic_not_implemented",
+      effective: true,
+      reason: null,
     });
   });
 

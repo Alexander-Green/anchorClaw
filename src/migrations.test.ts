@@ -66,6 +66,20 @@ describe("applyMigrations", () => {
     expect(sql).not.toContain("USING ivfflat");
   });
 
+  it("adds semantic indexing requests in the second semantic migration", () => {
+    const sql = readFileSync(
+      new URL("../migrations/semantic/0002_semantic_indexing_requests.sql", import.meta.url),
+      "utf8",
+    );
+
+    expect(sql).toContain("ADD COLUMN IF NOT EXISTS memory_item_version");
+    expect(sql).toContain("CREATE TABLE IF NOT EXISTS semantic_indexing_requests");
+    expect(sql).toContain("PRIMARY KEY (user_id, workspace_id, profile_key)");
+    expect(sql).toContain("semantic_indexing_requests_pending_idx");
+    expect(sql).not.toContain("USING hnsw");
+    expect(sql).not.toContain("USING ivfflat");
+  });
+
   it("runs each migration inside a dedicated client transaction", async () => {
     const clientCalls: Array<{ sql: string; args: unknown[] }> = [];
     const client = {

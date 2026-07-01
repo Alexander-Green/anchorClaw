@@ -304,9 +304,12 @@ export function createAnchorClawMemorySearchManager(
         results.push(...filteredSessionHits);
       }
 
-      // No semantic/vector layer yet.
       if (typeof opts?.onDebug === "function") {
-        opts.onDebug({ backend: "builtin", configuredMode: "postgres", effectiveMode: "postgres" });
+        opts.onDebug({
+          backend: "builtin",
+          configuredMode: semanticLayer.enabled ? "postgres+semantic-sidecar" : "postgres",
+          effectiveMode: "postgres",
+        });
       }
 
       // Filter by minScore if provided (mostly relevant for vector search; keep behavior consistent).
@@ -534,31 +537,48 @@ export function createAnchorClawMemorySearchManager(
     },
 
     getCachedEmbeddingAvailability() {
+      const semanticMemorySearch = resolveSemanticMemorySearch();
+      if (semanticLayer.enabled && semanticMemorySearch.configured) {
+        return {
+          ok: true,
+          cached: true,
+          checked: true,
+        };
+      }
       return {
         ok: false,
         cached: true,
         checked: true,
         error:
-          semanticLayer.reason === "semantic_not_implemented"
-            ? "semantic layer not implemented"
+          semanticLayer.enabled
+            ? "semantic memorySearch provider/model not configured"
             : "semantic layer disabled",
       };
     },
 
     async probeEmbeddingAvailability() {
+      const semanticMemorySearch = resolveSemanticMemorySearch();
+      if (semanticLayer.enabled && semanticMemorySearch.configured) {
+        return {
+          ok: true,
+          checked: true,
+          checkedAtMs: Date.now(),
+        };
+      }
       return {
         ok: false,
         checked: true,
         checkedAtMs: Date.now(),
         error:
-          semanticLayer.reason === "semantic_not_implemented"
-            ? "semantic layer not implemented"
+          semanticLayer.enabled
+            ? "semantic memorySearch provider/model not configured"
             : "semantic layer disabled",
       };
     },
 
     async probeVectorAvailability() {
-      return false;
+      const semanticMemorySearch = resolveSemanticMemorySearch();
+      return semanticLayer.enabled && semanticMemorySearch.configured;
     },
   };
 }

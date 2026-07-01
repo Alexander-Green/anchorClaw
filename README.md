@@ -42,10 +42,10 @@ The core bet is simple: durable memory should be durable first.
 
 That means SQL-first storage, deterministic writes, full-text search, clean
 imports, backups, migrations, and inspectable state before adding any semantic
-magic. Embeddings and semantic recall are planned as an enrichment layer on top
-of the database, not as the foundation that decides whether memory survives.
-Setup can now prepare that future semantic config, but current retrieval still
-stays on the SQL/FTS path.
+magic. Embeddings and semantic recall are an optional enrichment layer on top
+of the database, not the foundation that decides whether memory survives.
+When enabled, semantic retrieval augments durable memory search while SQL/FTS
+remains the fallback path.
 
 > Alpha preview. API and operator workflows may change before stable release.
 >
@@ -224,10 +224,11 @@ Setup does not need to rewrite workspace `AGENTS.md`. It configures AnchorClaw
 as the OpenClaw memory slot and disables the bundled file-based `session-memory`
 hook so `/new` and `/reset` captures stay DB-backed.
 
-If you want to preconfigure the future semantic layer, setup can also write
+If you want to enable the optional semantic layer, setup can also write
 `plugins.entries.anchorclaw.config.semantic.enabled` plus
-`agents.defaults.memorySearch`. In this first slice it only manages agent
-defaults and leaves per-agent `memorySearch` overrides alone.
+`agents.defaults.memorySearch` and apply the separate pgvector-backed semantic
+schema. Setup only manages agent defaults and leaves per-agent `memorySearch`
+overrides alone.
 
 For manual provisioning, SSL, pool tuning, Docker-style identity, and
 non-interactive setup, see [INSTALL.md](./INSTALL.md).
@@ -254,28 +255,32 @@ supported value. The maintenance/extractor path is a foundation for automatic
 promotion from daily context into durable memory, not yet the primary reliability
 claim.
 
-## SQL First, Semantic Later
+## SQL First, Semantic Enrichment
 
 AnchorClaw is not anti-embeddings. It is anti-"embeddings are the database."
 
-The planned semantic layer will enrich the Postgres source of truth with hybrid
+The optional semantic layer enriches the Postgres source of truth with hybrid
 retrieval: lexical search plus vector recall, with a reliable fallback when
-embeddings are disabled or fail. That gives us better discovery without making
-memory correctness depend on model-dependent similarity scores.
+embeddings are disabled, missing, or fail. That gives us better discovery
+without making memory correctness depend on model-dependent similarity scores.
 
 Current implementation boundary:
 
-- `setup` can prepare semantic config and `memory_status` can report semantic
-  enabled/configured state;
-- current `memory_search` and runtime recall still use the existing SQL/FTS
-  path;
-- enabling semantic config today does not yet activate vector retrieval.
+- `setup` prepares semantic config and applies the separate semantic schema
+  when semantic is enabled;
+- direct durable writes try a best-effort embedding sidecar after the DB commit;
+- `memory_search` uses hybrid lexical + vector retrieval for durable
+  `memory_items` when semantic is enabled and the active agent has a resolvable
+  OpenClaw `memorySearch` provider/model;
+- missing or stale embeddings are indexed on demand: search tries a small inline
+  batch first and queues bounded maintenance work when backlog remains;
+- daily memory and sessions stay lexical in this slice;
+- if semantic provider/schema/runtime is unavailable, AnchorClaw falls back to
+  lexical SQL/FTS and reports the semantic error in status/details/logs.
 
 Nearer-term future work includes:
 
-- semantic search and hybrid ranking on top of the Postgres source of truth;
-- optional semantic duplicate assistance for automated promotion and direct
-  writes when the semantic layer is enabled;
+- optional semantic duplicate assistance for automated promotion;
 - persona/profile context with separate injection budgets, if a clear product
   need emerges.
 
@@ -284,7 +289,7 @@ Nearer-term future work includes:
 - [INSTALL.md](./INSTALL.md) - setup, configuration, import, SSL, pool tuning,
   and manual Postgres provisioning.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - data model, compatibility layer,
-  corpuses, maintenance, identity, and future semantic layers.
+  corpuses, maintenance, identity, and semantic layers.
 - [TweetClaw source memory workflow](docs/integrations/tweetclaw.md) - community
   integration notes contributed by the TweetClaw/Xquik community. TweetClaw and
   Xquik are maintained separately from AnchorClaw.

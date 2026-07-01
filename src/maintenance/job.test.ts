@@ -5,6 +5,7 @@ import { runMaintenanceCycle } from "./job.js";
 const resolveUserAndWorkspaceScope = vi.hoisted(() => vi.fn());
 const extractMaintenanceCandidates = vi.hoisted(() => vi.fn());
 const memoryStoreDb = vi.hoisted(() => vi.fn());
+const processSemanticIndexingRequests = vi.hoisted(() => vi.fn());
 
 vi.mock("../identity.js", () => ({
   resolveUserAndWorkspaceScope,
@@ -14,6 +15,9 @@ vi.mock("./extractor.js", () => ({
 }));
 vi.mock("../memory/store.js", () => ({
   memoryStoreDb,
+}));
+vi.mock("../semantic/indexing.js", () => ({
+  processSemanticIndexingRequests,
 }));
 
 function buildApi() {
@@ -59,6 +63,7 @@ describe("runMaintenanceCycle daily maintenance", () => {
     resolveUserAndWorkspaceScope.mockReset();
     extractMaintenanceCandidates.mockReset();
     memoryStoreDb.mockReset();
+    processSemanticIndexingRequests.mockReset();
     resolveUserAndWorkspaceScope.mockResolvedValue({
       userId: "11111111-1111-1111-1111-111111111111",
       workspaceId: "22222222-2222-2222-2222-222222222222",
@@ -229,6 +234,66 @@ describe("runMaintenanceCycle daily maintenance", () => {
     expect(
       queries.some((sql) => sql.includes("regexp_replace(content, '\\s+', ' ', 'g')")),
     ).toBe(true);
+  });
+
+  it("processes semantic indexing requests after the daily extractor pass", async () => {
+    processSemanticIndexingRequests.mockResolvedValueOnce({
+      processedRequests: 1,
+      indexed: 2,
+      requeued: 0,
+      superseded: 0,
+      failed: 0,
+    });
+    const queries: string[] = [];
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes("INSERT INTO memory_maintenance_runs")) {
+          return { rows: [{ id: "run-semantic" }], rowCount: 1 };
+        }
+        if (sql.includes("FROM memory_daily_blocks")) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("UPDATE memory_maintenance_runs")) {
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    } as any;
+    const cfg = buildCfg();
+    cfg.semantic = { enabled: true };
+    const api = {
+      ...buildApi(),
+      runtime: {
+        config: {
+          current: () => ({ agents: { list: [{ id: "main" }] } }),
+        },
+      },
+    } as any;
+
+    const result = await runMaintenanceCycle({
+      api,
+      cfg,
+      pool,
+      workspaceDir: "/workspace",
+      agentId: "main",
+      dryRun: false,
+      batchSize: 100,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.semanticRequestCount).toBe(1);
+    expect(result.semanticIndexedCount).toBe(2);
+    expect(result.semanticFailedCount).toBe(0);
+    expect(processSemanticIndexingRequests).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "11111111-1111-1111-1111-111111111111",
+        workspaceId: "22222222-2222-2222-2222-222222222222",
+        itemBatchSize: 25,
+      }),
+    );
+    expect(extractMaintenanceCandidates).not.toHaveBeenCalled();
+    expect(queries.some((sql) => sql.includes("UPDATE memory_maintenance_runs"))).toBe(true);
   });
 
   it("filters extractor source rows to memory_log only", async () => {

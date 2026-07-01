@@ -1,4 +1,5 @@
 import type { PostgresPool } from "../postgres.js";
+import { formatSemanticVectorLiteral } from "../semantic/indexing.js";
 import type { MemoryLimits } from "./limits.js";
 import { searchDailyEntriesDb } from "./daily.js";
 
@@ -26,6 +27,16 @@ export type MemorySearchHit = {
 };
 
 type MemorySearchRow = {
+  id: string;
+  title: string | null;
+  type: string;
+  content: string;
+  canonical_key?: string | null;
+  updated_at: string;
+  score: number;
+};
+
+type SemanticMemorySearchRow = {
   id: string;
   title: string | null;
   type: string;
@@ -311,6 +322,64 @@ export async function memorySearchDb(params: {
   }
 
   return [];
+}
+
+export async function memorySearchSemanticDb(params: {
+  pool: PostgresPool;
+  userId: string;
+  workspaceId: string;
+  profileKey: string;
+  queryVector: readonly number[];
+  limits: MemoryLimits;
+  maxResults?: number;
+}): Promise<MemorySearchHit[]> {
+  const limit = clampInteger(params.maxResults ?? params.limits.maxResults, 1, params.limits.maxResults);
+  const result = await params.pool.query<SemanticMemorySearchRow>(
+    `
+    SELECT
+      mi.id,
+      mi.title,
+      mi.type,
+      mi.content,
+      mi.canonical_key,
+      mi.updated_at,
+      (1 - (emb.embedding <=> $4::vector)) AS score
+    FROM memory_items mi
+    JOIN memory_item_embeddings emb
+      ON emb.memory_item_id = mi.id
+     AND emb.profile_key = $3
+    WHERE mi.user_id = $1
+      AND mi.workspace_id = $2
+      AND mi.status = 'active'
+      AND emb.memory_item_version IS NOT DISTINCT FROM mi.version
+      AND emb.dimensions = $5
+    ORDER BY emb.embedding <=> $4::vector ASC, mi.importance DESC, mi.updated_at DESC, mi.id ASC
+    LIMIT $6
+    `,
+    [
+      params.userId,
+      params.workspaceId,
+      params.profileKey,
+      formatSemanticVectorLiteral(params.queryVector),
+      params.queryVector.length,
+      limit,
+    ],
+  );
+
+  return result.rows.map((row) => {
+    const snippet = row.content.length > 240 ? `${row.content.slice(0, 240)}…` : row.content;
+    return {
+      corpus: "memory",
+      path: `db-memory/items/${row.id}.md`,
+      id: row.id,
+      title: row.title ?? undefined,
+      kind: row.type,
+      canonicalKey: row.canonical_key ?? undefined,
+      score: Number.isFinite(row.score) ? row.score : 0,
+      snippet,
+      updatedAt: row.updated_at,
+    };
+  });
 }
 
 export async function memorySearchDailyDb(params: {

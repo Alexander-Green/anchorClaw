@@ -81,6 +81,13 @@ export function registerMemoryStoreTool({ ctx, invalidatePromptMemory, ensureSta
         workspaceId: scope.workspaceId,
         actor: ctx.resolveActor(),
         logger: api.logger,
+        semantic: {
+          cfg: ctx.cfg,
+          runtimeConfig:
+            toolCtx.runtimeConfig ??
+            (typeof toolCtx.getRuntimeConfig === "function" ? toolCtx.getRuntimeConfig() : undefined),
+          agentId: workspaceTarget.agentId,
+        },
         input: { content, ...(canonicalKey ? { canonicalKey } : {}), ...(type ? { type } : {}) },
       });
 

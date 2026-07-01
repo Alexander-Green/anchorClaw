@@ -1,4 +1,7 @@
+import type { AnchorClawConfig } from "../config.js";
 import type { PostgresPool } from "../postgres.js";
+import { upsertMemoryItemEmbedding } from "../semantic/indexing.js";
+import { buildSemanticEmbedding } from "../semantic/runtime.js";
 
 // MVP: keep types aligned with the OpenClaw `MEMORY.md` role.
 // Future: add explicit durable types (profile/config/skill/summary/automation) behind a clear policy.
@@ -43,6 +46,11 @@ export async function memoryStoreDb(params: {
   workspaceId: string;
   actor?: string;
   logger?: { warn(message: string): void };
+  semantic?: {
+    cfg: Pick<AnchorClawConfig, "semantic"> | null | undefined;
+    runtimeConfig: unknown;
+    agentId?: string | null | undefined;
+  };
   input: unknown;
 }): Promise<MemoryStoreResult> {
   const raw = (params.input ?? {}) as any;
@@ -180,7 +188,6 @@ export async function memoryStoreDb(params: {
     if (!row) {
       throw new Error("failed to store memory item");
     }
-
     await client.query(
       `
       INSERT INTO memory_audit_log (user_id, item_id, operation, before, after, actor, created_at)
@@ -212,7 +219,7 @@ export async function memoryStoreDb(params: {
     );
 
     await client.query("COMMIT");
-    return {
+    const result: MemoryStoreResult = {
       ok: true,
       corpus: "memory",
       path: `db-memory/items/${row.id}.md`,
@@ -221,6 +228,32 @@ export async function memoryStoreDb(params: {
       created: !before,
       version: row.version,
     };
+    if (params.semantic?.runtimeConfig && params.semantic?.agentId) {
+      try {
+        const embedding = await buildSemanticEmbedding({
+          cfg: params.semantic.cfg,
+          runtimeConfig: params.semantic.runtimeConfig,
+          agentId: params.semantic.agentId,
+          text: content,
+          purpose: "document",
+        });
+        if (embedding) {
+          await upsertMemoryItemEmbedding({
+            pool: params.pool,
+            memoryItemId: row.id,
+            profileKey: embedding.profileKey,
+            vector: embedding.vector,
+            memoryItemVersion: row.version,
+            dimensions: embedding.dimensions,
+          });
+        }
+      } catch (error) {
+        params.logger?.warn(
+          `anchorclaw: semantic write skipped for memory item ${row.id} (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+    }
+    return result;
   } catch (error) {
     try {
       await client.query("ROLLBACK");
