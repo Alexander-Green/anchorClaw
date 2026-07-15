@@ -172,6 +172,23 @@ export default definePluginEntry({
       triggerMaintenanceNow,
       ensureSessionDeltaListener,
     });
+
+    if (!ctx.cfg) {
+      // Keep the capability and diagnostics available, but do not start DB-backed runtime before setup.
+      api.logger.info("anchorclaw: plugin registered (disabled until configured)");
+      registerAnchorClawMemoryCapability({
+        ctx,
+        ensureSessionsIndexBootstrapped,
+      });
+      registerAnchorClawTools({
+        ctx,
+        invalidatePromptMemory,
+        ensureSessionsIndexBootstrapped,
+        ensureStartupBootstrap,
+      });
+      return;
+    }
+
     const maintenanceServiceRegistered = registerAnchorClawGatewayService({
       api,
       kickoffStartupBootstrap,

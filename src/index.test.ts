@@ -573,6 +573,35 @@ describe("cli registration", () => {
       expect.stringContaining('installed but not active (plugins.slots.memory="memory-core")'),
     );
   });
+
+  it("keeps configuration diagnostics available without starting DB runtime", async () => {
+    parseCfg.mockImplementation(() => {
+      throw new Error("postgres config required");
+    });
+    const { api, runServiceStart } = buildApi();
+
+    (plugin as any).register(api);
+    await runServiceStart();
+
+    expect(api.registerCli).toHaveBeenCalledTimes(1);
+    expect(api.registerService).not.toHaveBeenCalled();
+    expect(api.runtime.events.onSessionTranscriptUpdate).not.toHaveBeenCalled();
+    expect(api.on).not.toHaveBeenCalled();
+    expect(api.registerHook).not.toHaveBeenCalled();
+    expect(createPool).not.toHaveBeenCalled();
+
+    const capability = registerMemoryCapability.mock.calls[0]?.[1];
+    expect(capability.promptBuilder()).toEqual([
+      "AnchorClaw memory is disabled until configured (postgres config required).",
+    ]);
+
+    const statusTool = findRegisteredTool(api, "memory_status");
+    const status = await statusTool.execute("toolcall-status", { check: true });
+    expect(status.details).toEqual({
+      disabled: true,
+      error: "postgres config required",
+    });
+  });
 });
 
 describe("tool registration", () => {
