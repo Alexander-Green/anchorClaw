@@ -17,6 +17,7 @@ describe("memorySearchDb ranking contract", () => {
               type: "fact",
               content: "Semantic result content",
               canonical_key: "semantic_result",
+              importance: 85,
               updated_at: "2026-07-01T10:00:00.000Z",
               score: 0.87,
             },
@@ -45,6 +46,7 @@ describe("memorySearchDb ranking contract", () => {
       id: "semantic-1",
       path: "db-memory/items/semantic-1.md",
       canonicalKey: "semantic_result",
+      importance: 85,
       score: 0.87,
     });
   });
@@ -497,6 +499,49 @@ describe("memorySearchDb ranking contract", () => {
     expect(hits).toHaveLength(2);
     expect(hits[0]?.path).toBe("db-memory/items/item-1.md");
     expect(hits[1]?.path).toBe("memory/2026-05-20.md");
+  });
+
+  it("preserves durable importance ordering after merging with daily search", async () => {
+    const pool = {
+      query: async (sql: string) => {
+        if (String(sql).includes("FROM memory_items")) {
+          return {
+            rows: [
+              {
+                id: "z-high",
+                title: "High importance",
+                type: "fact",
+                content: "same lexical score",
+                importance: 90,
+                updated_at: "2026-07-15T10:00:00.000Z",
+                score: 1,
+              },
+              {
+                id: "a-low",
+                title: "Low importance",
+                type: "fact",
+                content: "same lexical score",
+                importance: 10,
+                updated_at: "2026-07-15T11:00:00.000Z",
+                score: 1,
+              },
+            ],
+          };
+        }
+        return { rows: [] as any[] };
+      },
+    } as any;
+
+    const hits = await memorySearchDb({
+      pool,
+      userId: "u1",
+      workspaceId: "w1",
+      limits: { maxResults: 10 } as any,
+      query: "same lexical score",
+      maxResults: 5,
+    });
+
+    expect(hits.map((hit) => hit.id)).toEqual(["z-high", "a-low"]);
   });
 
   it("excludes session-capture daily rows from daily corpus results", async () => {

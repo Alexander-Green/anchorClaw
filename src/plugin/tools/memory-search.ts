@@ -3,6 +3,7 @@ import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { scanLegacyWorkspace } from "../../importer.js";
 import { resolveSessionsSearchState } from "../../config.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
+import { compareMemorySearchHits } from "../../memory/ranking.js";
 import {
   memorySearchDailyDb,
   memorySearchDb,
@@ -145,12 +146,7 @@ function mergeMemoryHits(params: {
 
   return Array.from(merged.values())
     .map(({ hit, score }) => ({ ...hit, score }))
-    .sort((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
-      }
-      return left.path.localeCompare(right.path);
-    })
+    .sort(compareMemorySearchHits)
     .slice(0, params.limit);
 }
 
@@ -687,9 +683,7 @@ export function registerMemorySearchTool({
           if (rs !== ls) {
             return rs - ls;
           }
-          const lp = typeof left?.path === "string" ? left.path : "";
-          const rp = typeof right?.path === "string" ? right.path : "";
-          return lp.localeCompare(rp);
+          return compareMemorySearchHits(left, right);
         });
       }
       const topHit = hits[0] as any;

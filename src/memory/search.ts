@@ -1,6 +1,7 @@
 import type { PostgresPool } from "../postgres.js";
 import { formatSemanticVectorLiteral } from "../semantic/indexing.js";
 import type { MemoryLimits } from "./limits.js";
+import { compareMemorySearchHits } from "./ranking.js";
 import { searchDailyEntriesDb } from "./daily.js";
 
 export type MemorySearchParams = {
@@ -16,6 +17,7 @@ export type MemorySearchHit = {
   kind?: string;
   sourceKind?: string;
   canonicalKey?: string;
+  importance?: number;
   score: number;
   snippet: string;
   id?: string;
@@ -32,6 +34,7 @@ type MemorySearchRow = {
   type: string;
   content: string;
   canonical_key?: string | null;
+  importance?: number;
   updated_at: string;
   score: number;
 };
@@ -42,6 +45,7 @@ type SemanticMemorySearchRow = {
   type: string;
   content: string;
   canonical_key?: string | null;
+  importance?: number;
   updated_at: string;
   score: number;
 };
@@ -64,6 +68,7 @@ function mapRowsToHits(rows: MemorySearchRow[], relaxedQuery?: string): MemorySe
       title: row.title ?? undefined,
       kind: row.type,
       canonicalKey: row.canonical_key ?? undefined,
+      importance: Number.isFinite(row.importance) ? row.importance : undefined,
       score: Number.isFinite(row.score) ? row.score : 0,
       snippet,
       updatedAt: row.updated_at,
@@ -145,6 +150,7 @@ async function queryMemoryItems(params: {
       type,
       content,
       canonical_key,
+      importance,
       updated_at,
       (
         ts_rank_cd(to_tsvector('simple', search_text), q.ts_query)
@@ -184,6 +190,7 @@ async function queryMemoryItemsFuzzy(params: {
       type,
       content,
       canonical_key,
+      importance,
       updated_at,
       (
         GREATEST(
@@ -226,18 +233,6 @@ async function queryImportedDailyMemory(params: {
   return searchDailyEntriesDb(params);
 }
 
-function sortMergedHits(left: MemorySearchHit, right: MemorySearchHit): number {
-  if (right.score !== left.score) {
-    return right.score - left.score;
-  }
-  const leftKind = left.kind === "daily-note" ? 1 : 0;
-  const rightKind = right.kind === "daily-note" ? 1 : 0;
-  if (leftKind !== rightKind) {
-    return leftKind - rightKind;
-  }
-  return left.path.localeCompare(right.path);
-}
-
 export async function memorySearchDb(params: {
   pool: PostgresPool;
   userId: string;
@@ -267,7 +262,7 @@ export async function memorySearchDb(params: {
     limit,
   });
   if (strictHits.length > 0 || strictDailyHits.length > 0) {
-    return [...strictHits, ...strictDailyHits].sort(sortMergedHits).slice(0, limit);
+    return [...strictHits, ...strictDailyHits].sort(compareMemorySearchHits).slice(0, limit);
   }
 
   const relaxedQueries = deriveRelaxedQueries(q);
@@ -306,7 +301,7 @@ export async function memorySearchDb(params: {
   }
   if (merged.size > 0) {
     return Array.from(merged.values())
-      .sort(sortMergedHits)
+      .sort(compareMemorySearchHits)
       .slice(0, limit);
   }
 
@@ -342,6 +337,7 @@ export async function memorySearchSemanticDb(params: {
       mi.type,
       mi.content,
       mi.canonical_key,
+      mi.importance,
       mi.updated_at,
       (1 - (emb.embedding <=> $4::vector)) AS score
     FROM memory_items mi
@@ -375,6 +371,7 @@ export async function memorySearchSemanticDb(params: {
       title: row.title ?? undefined,
       kind: row.type,
       canonicalKey: row.canonical_key ?? undefined,
+      importance: Number.isFinite(row.importance) ? row.importance : undefined,
       score: Number.isFinite(row.score) ? row.score : 0,
       snippet,
       updatedAt: row.updated_at,
@@ -432,6 +429,6 @@ export async function memorySearchDailyDb(params: {
   }
 
   return Array.from(merged.values())
-    .sort(sortMergedHits)
+    .sort(compareMemorySearchHits)
     .slice(0, limit);
 }

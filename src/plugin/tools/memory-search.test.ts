@@ -352,6 +352,105 @@ describe("memory_search tool exactTop1 metadata", () => {
     });
   });
 
+  it("uses durable importance to break equal hybrid RRF scores", async () => {
+    (resolveSemanticRuntimeProfileMock as any).mockReturnValue({
+      resolvedMemorySearch: {},
+      profile: {
+        configured: true,
+        enabled: true,
+        effective: true,
+        profileKey: "profile-1",
+        provider: "openai-compatible",
+        model: "text-embedding-3-small",
+      },
+    });
+    const high = {
+      corpus: "memory",
+      path: "db-memory/items/z-high.md",
+      id: "z-high",
+      kind: "fact",
+      importance: 90,
+      score: 0.8,
+      snippet: "high importance",
+    };
+    const low = {
+      corpus: "memory",
+      path: "db-memory/items/a-low.md",
+      id: "a-low",
+      kind: "fact",
+      importance: 10,
+      score: 0.8,
+      snippet: "low importance",
+    };
+    (memorySearchDbMock as any).mockResolvedValueOnce([high, low]);
+    (memorySearchSemanticDbMock as any).mockResolvedValueOnce([low, high]);
+    const { ctx, registerTool } = buildCtx();
+    ctx.cfg = { semantic: { enabled: true }, sessions: { search: { enabled: true }, visibility: "current" } };
+    registerMemorySearchTool({
+      ctx,
+      invalidatePromptMemory: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = materializeRegisteredTool(registerTool);
+
+    const result = await def.execute("toolcall-hybrid-importance", {
+      query: "equal hybrid rank",
+      corpus: "memory",
+    });
+
+    expect(result.details.results.map((hit: { id: string }) => hit.id)).toEqual(["z-high", "a-low"]);
+  });
+
+  it("keeps durable memory ahead of daily memory on equal hybrid RRF score", async () => {
+    (resolveSemanticRuntimeProfileMock as any).mockReturnValue({
+      resolvedMemorySearch: {},
+      profile: {
+        configured: true,
+        enabled: true,
+        effective: true,
+        profileKey: "profile-1",
+        provider: "openai-compatible",
+        model: "text-embedding-3-small",
+      },
+    });
+    (memorySearchDbMock as any).mockResolvedValueOnce([
+      {
+        corpus: "daily",
+        path: "memory/2026-07-15.md",
+        id: "daily-1",
+        kind: "daily-note",
+        score: 0.9,
+        snippet: "daily result",
+      },
+    ]);
+    (memorySearchSemanticDbMock as any).mockResolvedValueOnce([
+      {
+        corpus: "memory",
+        path: "db-memory/items/durable-1.md",
+        id: "durable-1",
+        kind: "fact",
+        importance: 1,
+        score: 0.9,
+        snippet: "durable result",
+      },
+    ]);
+    const { ctx, registerTool } = buildCtx();
+    ctx.cfg = { semantic: { enabled: true }, sessions: { search: { enabled: true }, visibility: "current" } };
+    registerMemorySearchTool({
+      ctx,
+      invalidatePromptMemory: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = materializeRegisteredTool(registerTool);
+
+    const result = await def.execute("toolcall-hybrid-durable", {
+      query: "equal cross-corpus rank",
+      corpus: "memory",
+    });
+
+    expect(result.details.results.map((hit: { id: string }) => hit.id)).toEqual(["durable-1", "daily-1"]);
+  });
+
   it("does not emit exactTop1 metadata for non-literal top-1", async () => {
     (memorySearchDbMock as any).mockResolvedValueOnce([
       {
