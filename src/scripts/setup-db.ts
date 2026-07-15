@@ -6,7 +6,10 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Client } from "pg";
 
-import { loadBundledSemanticMigrationsFromDisk } from "../migrations-fs.js";
+import {
+  loadBundledMigrationsFromDisk,
+  loadBundledSemanticMigrationsFromDisk,
+} from "../migrations-fs.js";
 import { applyMigrations } from "../migrations.js";
 import { resolveWorkspaceTargets } from "../workspace-targets.js";
 
@@ -845,8 +848,6 @@ async function ensureSemanticProvisioning(params: {
     if (params.schema) {
       await client.query(`SET search_path TO ${quoteIdentifier(params.schema)}, public`);
     }
-    await client.query("CREATE EXTENSION IF NOT EXISTS vector");
-    const migrations = await loadBundledSemanticMigrationsFromDisk();
     const poolLike = {
       query: async (text: string, values?: unknown[]) => client.query(text, values),
       connect: async () => ({
@@ -854,6 +855,16 @@ async function ensureSemanticProvisioning(params: {
         release: () => undefined,
       }),
     } as any;
+
+    // Semantic tables reference the base AnchorClaw schema, so a clean setup
+    // must establish that schema before applying the semantic migration set.
+    const baseMigrations = await loadBundledMigrationsFromDisk();
+    await applyMigrations({
+      pool: poolLike,
+      migrations: baseMigrations,
+    });
+    await client.query("CREATE EXTENSION IF NOT EXISTS vector");
+    const migrations = await loadBundledSemanticMigrationsFromDisk();
     return applyMigrations({
       pool: poolLike,
       migrations,

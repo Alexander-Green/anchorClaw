@@ -334,6 +334,9 @@ describe("runAnchorClawSetup", () => {
       expect(targetSql).toContain("CREATE TABLE IF NOT EXISTS semantic_schema_migrations");
       expect(targetSql).toContain("CREATE TABLE IF NOT EXISTS memory_item_embeddings");
       expect(targetSql).toContain("CREATE TABLE IF NOT EXISTS semantic_indexing_requests");
+      expect(targetSql.indexOf("CREATE TABLE memory_items")).toBeLessThan(
+        targetSql.indexOf("CREATE TABLE IF NOT EXISTS memory_item_embeddings"),
+      );
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;
