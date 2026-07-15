@@ -24,7 +24,7 @@ export type MemorySearchHit = {
   startLine?: number;
   endLine?: number;
   citation?: string;
-  updatedAt?: string;
+  updatedAt?: string | Date;
   relaxedQuery?: string;
 };
 

@@ -1,5 +1,12 @@
 import type { MemorySearchHit } from "./search.js";
 
+function normalizeUpdatedAt(value: unknown): string | undefined {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? undefined : value.toISOString();
+  }
+  return typeof value === "string" ? value : undefined;
+}
+
 export function compareMemorySearchHits(left: MemorySearchHit, right: MemorySearchHit): number {
   if (right.score !== left.score) {
     return right.score - left.score;
@@ -16,8 +23,10 @@ export function compareMemorySearchHits(left: MemorySearchHit, right: MemorySear
     if (importanceDifference !== 0) {
       return importanceDifference;
     }
-    if (left.updatedAt && right.updatedAt && left.updatedAt !== right.updatedAt) {
-      return right.updatedAt.localeCompare(left.updatedAt);
+    const leftUpdatedAt = normalizeUpdatedAt(left.updatedAt);
+    const rightUpdatedAt = normalizeUpdatedAt(right.updatedAt);
+    if (leftUpdatedAt && rightUpdatedAt && leftUpdatedAt !== rightUpdatedAt) {
+      return rightUpdatedAt.localeCompare(leftUpdatedAt);
     }
   }
 
