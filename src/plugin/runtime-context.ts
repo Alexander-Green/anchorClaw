@@ -5,7 +5,10 @@ import {
   createPostgresPool,
   type PostgresPool,
 } from "../postgres.js";
-import { loadBundledMigrationsFromDisk } from "../migrations-fs.js";
+import {
+  loadBundledMigrationsFromDisk,
+  loadBundledSemanticMigrationsFromDisk,
+} from "../migrations-fs.js";
 import { applyMigrations } from "../migrations.js";
 import { isTransientDbError } from "../db-errors.js";
 import { resolveAgentWorkspacePeerIds } from "../workspace-targets.js";
@@ -137,6 +140,26 @@ export function createPluginRuntimeContext(params: {
               params.api.logger.info(
                 `anchorclaw: applied migrations: ${result.applied.join(", ")}`,
               );
+            }
+            if (ctx.cfg?.semantic?.enabled === true) {
+              try {
+                const semanticMigrations = await loadBundledSemanticMigrationsFromDisk();
+                const semanticResult = await applyMigrations({
+                  pool: ctx.pool!,
+                  migrations: semanticMigrations,
+                  tableName: "semantic_schema_migrations",
+                });
+                if (semanticResult.applied.length > 0) {
+                  params.api.logger.info(
+                    `anchorclaw: applied semantic migrations: ${semanticResult.applied.join(", ")}`,
+                  );
+                }
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                params.api.logger.warn(
+                  `anchorclaw: semantic schema is unavailable; continuing with lexical memory (${message})`,
+                );
+              }
             }
           })();
           try {

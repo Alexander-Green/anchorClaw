@@ -323,7 +323,9 @@ describe("runAnchorClawSetup", () => {
       expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch provider: openai-compatible");
       expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch model: text-embedding-3-small");
       expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch apiKey: configured");
-      expect(consoleLogSpy).toHaveBeenCalledWith("- semantic schema: applied 0001, 0002");
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        "- semantic schema: prepared; migrations apply on gateway startup",
+      );
 
       const targetSql = pgState.clients
         .filter((client) => client.connectionString.endsWith("/anchorclaw"))
@@ -331,12 +333,8 @@ describe("runAnchorClawSetup", () => {
         .join("\n");
       expect(targetSql).toContain('SET search_path TO "memory", public');
       expect(targetSql).toContain("CREATE EXTENSION IF NOT EXISTS vector");
-      expect(targetSql).toContain("CREATE TABLE IF NOT EXISTS semantic_schema_migrations");
-      expect(targetSql).toContain("CREATE TABLE IF NOT EXISTS memory_item_embeddings");
-      expect(targetSql).toContain("CREATE TABLE IF NOT EXISTS semantic_indexing_requests");
-      expect(targetSql.indexOf("CREATE TABLE memory_items")).toBeLessThan(
-        targetSql.indexOf("CREATE TABLE IF NOT EXISTS memory_item_embeddings"),
-      );
+      expect(targetSql).not.toContain("CREATE TABLE IF NOT EXISTS semantic_schema_migrations");
+      expect(targetSql).not.toContain("CREATE TABLE IF NOT EXISTS memory_item_embeddings");
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;
@@ -440,7 +438,9 @@ describe("runAnchorClawSetup", () => {
         model: "ops-model",
       });
       expect(consoleLogSpy).toHaveBeenCalledWith("- memorySearch apiKey: configured");
-      expect(consoleLogSpy).toHaveBeenCalledWith("- semantic schema: applied 0001, 0002");
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        "- semantic schema: prepared; migrations apply on gateway startup",
+      );
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;

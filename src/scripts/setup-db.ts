@@ -6,11 +6,6 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Client } from "pg";
 
-import {
-  loadBundledMigrationsFromDisk,
-  loadBundledSemanticMigrationsFromDisk,
-} from "../migrations-fs.js";
-import { applyMigrations } from "../migrations.js";
 import { resolveWorkspaceTargets } from "../workspace-targets.js";
 
 export type AnchorClawSetupOptions = {
@@ -840,7 +835,7 @@ async function ensureSemanticProvisioning(params: {
   adminUrl: string;
   dbName: string;
   schema: string | undefined;
-}): Promise<{ applied: string[] }> {
+}): Promise<void> {
   const targetUrl = buildTargetConnectionUrl(params.adminUrl, params.dbName);
   const client = new Client({ connectionString: targetUrl });
   await client.connect();
@@ -848,28 +843,9 @@ async function ensureSemanticProvisioning(params: {
     if (params.schema) {
       await client.query(`SET search_path TO ${quoteIdentifier(params.schema)}, public`);
     }
-    const poolLike = {
-      query: async (text: string, values?: unknown[]) => client.query(text, values),
-      connect: async () => ({
-        query: async (text: string, values?: unknown[]) => client.query(text, values),
-        release: () => undefined,
-      }),
-    } as any;
-
-    // Semantic tables reference the base AnchorClaw schema, so a clean setup
-    // must establish that schema before applying the semantic migration set.
-    const baseMigrations = await loadBundledMigrationsFromDisk();
-    await applyMigrations({
-      pool: poolLike,
-      migrations: baseMigrations,
-    });
+    // Extension installation needs admin rights. Table migrations are applied
+    // by the gateway runtime through the configured app user after restart.
     await client.query("CREATE EXTENSION IF NOT EXISTS vector");
-    const migrations = await loadBundledSemanticMigrationsFromDisk();
-    return applyMigrations({
-      pool: poolLike,
-      migrations,
-      tableName: "semantic_schema_migrations",
-    });
   } finally {
     await client.end();
   }
@@ -1050,13 +1026,13 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     dbUser: options.dbUser,
     schema: options.schema,
   });
-  const semanticProvisioning = options.semanticResolvedEnabled
-    ? await ensureSemanticProvisioning({
-        adminUrl: options.adminUrl,
-        dbName: options.dbName,
-        schema: options.schema,
-      })
-    : undefined;
+  if (options.semanticResolvedEnabled) {
+    await ensureSemanticProvisioning({
+      adminUrl: options.adminUrl,
+      dbName: options.dbName,
+      schema: options.schema,
+    });
+  }
 
   let configUpdate: ReturnType<typeof updateOpenClawConfig> | undefined;
   if (!options.skipConfig) {
@@ -1118,27 +1094,15 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
         console.log(`- memorySearch baseUrl: ${options.semanticBaseUrl}`);
       }
       console.log(`- memorySearch apiKey: ${options.semanticApiKeyConfigured ? "configured" : "not configured"}`);
-      console.log(
-        `- semantic schema: ${semanticProvisioning && semanticProvisioning.applied.length > 0
-          ? `applied ${semanticProvisioning.applied.join(", ")}`
-          : "ready"}`,
-      );
+      console.log("- semantic schema: prepared; migrations apply on gateway startup");
     } else if (configUpdate) {
       console.warn("Warning: semantic settings were not written because openclaw.json was not found.");
-      console.log(
-        `- semantic schema: ${semanticProvisioning && semanticProvisioning.applied.length > 0
-          ? `applied ${semanticProvisioning.applied.join(", ")}`
-          : "ready"}`,
-      );
+      console.log("- semantic schema: prepared; migrations apply on gateway startup");
     }
   } else if (!options.skipConfig && options.semanticConfigEnabled === false && configUpdate?.updated) {
     console.log("- semantic: disabled");
   } else if (options.semanticResolvedEnabled) {
-    console.log(
-      `- semantic schema: ${semanticProvisioning && semanticProvisioning.applied.length > 0
-        ? `applied ${semanticProvisioning.applied.join(", ")}`
-        : "ready"}`,
-    );
+    console.log("- semantic schema: prepared; migrations apply on gateway startup");
   }
   if (!options.skipConfig && configUpdate?.updated) {
     if (configUpdate.sessionMemoryAfter === "disabled" && configUpdate.sessionMemoryBefore !== "disabled") {
