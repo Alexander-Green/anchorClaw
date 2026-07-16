@@ -236,6 +236,7 @@ upgrades, use the [Installation and Configuration Guide](./INSTALL.md).
   legacy import, identity, SSL, pool tuning, and manual PostgreSQL provisioning.
 - [Architecture](./ARCHITECTURE.md) - data model, runtime contracts, lifecycle,
   multi-agent routing, maintenance/extractor, and semantic enrichment.
+- [Changelog](./CHANGELOG.md) - release history and compatibility notes.
 - [TweetClaw source memory workflow](docs/integrations/tweetclaw.md) - community
   integration notes for TweetClaw/Xquik users. Those projects are maintained
   separately from AnchorClaw.

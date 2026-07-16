@@ -1,6 +1,6 @@
 {
   "name": "@alexandrgreen/anchorclaw",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "description": "OpenClaw Postgres-backed long-term memory plugin",
   "author": "Alexander Green",
   "license": "MIT",
@@ -22,6 +22,7 @@
     "README.md",
     "INSTALL.md",
     "ARCHITECTURE.md",
+    "CHANGELOG.md",
     "docs/integrations/",
     "package.json"
   ],
