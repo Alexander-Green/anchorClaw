@@ -1,6 +1,6 @@
 {
   "name": "@alexandrgreen/anchorclaw",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "OpenClaw Postgres-backed long-term memory plugin",
   "author": "Alexander Green",
   "license": "MIT",
@@ -57,8 +57,9 @@
       "./dist/index.js"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@alexandrgreen/anchorclaw",
       "npmSpec": "@alexandrgreen/anchorclaw",
-      "defaultChoice": "npm",
+      "defaultChoice": "clawhub",
       "minHostVersion": ">=2026.5.28"
     },
     "compat": {

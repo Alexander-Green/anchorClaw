@@ -1,8 +1,8 @@
 import type { OpenClawPluginApi } from "../api.js";
-import type {
-  LlmCompleteParams,
-  LlmCompleteResult,
-} from "openclaw/plugin-sdk";
+
+type RuntimeLlmComplete = OpenClawPluginApi["runtime"]["llm"]["complete"];
+type LlmCompleteParams = Parameters<RuntimeLlmComplete>[0];
+type LlmCompleteResult = Awaited<ReturnType<RuntimeLlmComplete>>;
 
 export type ExtractorCandidate = {
   content: string;

@@ -186,8 +186,10 @@ Requirements:
 Install AnchorClaw:
 
 ```bash
-openclaw plugins install @alexandrgreen/anchorclaw
+openclaw plugins install clawhub:@alexandrgreen/anchorclaw
 ```
+
+Use `npm:@alexandrgreen/anchorclaw` if you explicitly need the npm fallback.
 
 Verify that the plugin is active as the OpenClaw memory slot owner:
 

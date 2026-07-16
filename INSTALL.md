@@ -28,8 +28,10 @@ missing or unavailable.
 Install the plugin:
 
 ```bash
-openclaw plugins install @alexandrgreen/anchorclaw
+openclaw plugins install clawhub:@alexandrgreen/anchorclaw
 ```
+
+Use `npm:@alexandrgreen/anchorclaw` if you explicitly need the npm fallback.
 
 Verify that AnchorClaw is active as the memory slot owner:
 

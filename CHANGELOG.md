@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.2
+
+### Packaging
+
+- Added complete ClawHub install metadata and a human-readable plugin manifest
+  name.
+- Made ClawHub the preferred metadata-driven install source, with npm retained
+  as an explicit fallback.
+- Removed the deprecated root SDK type import from the extractor without
+  changing its runtime behavior.
+
 ## 0.1.1
 
 ### Packaging
