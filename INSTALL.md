@@ -3,11 +3,11 @@
 This guide keeps the operator details out of the main README. Start with
 [README.md](./README.md) if you want the product overview first.
 
-> Alpha migration notice:
+> Upgrade notice for configs created before `0.0.9`:
 > `maintenance.extractor.agentId` and
 > `plugins.entries.anchorclaw.config.workspaceDir` were removed starting in
 > `0.0.9`.
-> AnchorClaw is moving to an explicit multi-agent workspace model, so runtime
+> AnchorClaw uses an explicit multi-agent workspace model, so runtime
 > scope comes from OpenClaw agent context instead of one global plugin
 > workspace key.
 > See [ARCHITECTURE.md#multi-agent-workspace-model](./ARCHITECTURE.md#multi-agent-workspace-model).
@@ -18,7 +18,7 @@ This guide keeps the operator details out of the main README. Start with
 - Node.js for the plugin runtime
 - PostgreSQL
 
-AnchorClaw does not require embeddings for the MVP.
+AnchorClaw does not require embeddings for its core runtime.
 The runtime path remains SQL/FTS-first; the optional semantic layer enriches
 durable memory search and falls back to lexical retrieval if embeddings are
 missing or unavailable.
@@ -29,6 +29,18 @@ Install the plugin:
 
 ```bash
 openclaw plugins install @alexandrgreen/anchorclaw
+```
+
+Verify that AnchorClaw is active as the memory slot owner:
+
+```bash
+openclaw plugins inspect anchorclaw
+```
+
+If the plugin is installed but not active, enable it:
+
+```bash
+openclaw plugins enable anchorclaw
 ```
 
 Provision Postgres and write the required OpenClaw config:
@@ -62,6 +74,12 @@ When semantic is enabled during setup, setup also writes:
 
 - `plugins.entries.anchorclaw.config.semantic.enabled = true`
 - `agents.defaults.memorySearch`
+
+Setup installs the PostgreSQL `vector` extension with the admin connection.
+After the gateway restart, AnchorClaw applies the semantic table migrations with
+the configured app user, so the app user owns the AnchorClaw tables. This keeps
+the semantic path consistent with normal runtime migrations and does not require
+setup to rotate or re-enter an existing app password.
 
 Setup only manages `agents.defaults.memorySearch` in this first slice. Existing
 per-agent `agents.list[].memorySearch` overrides are preserved as-is.
@@ -345,10 +363,17 @@ Semantic opt-in example:
 }
 ```
 
+Do not enable the semantic config by hand without provisioning `vector` first.
+Run `openclaw anchorclaw setup --semantic-enabled ...` and restart the gateway.
+If the runtime finds semantic config without a ready extension or schema, it
+keeps lexical SQL/FTS retrieval available and reports the semantic problem in
+`memory_status` and logs.
+
 Current boundary:
 
-- this enables the optional semantic layer and provisions the separate semantic
-  schema when setup can reach Postgres with admin privileges;
+- setup enables the optional semantic layer, writes its OpenClaw config, and
+  provisions the PostgreSQL `vector` extension with admin privileges; the
+  restarted gateway then applies the separate semantic schema as the app user;
 - durable `memory_items` use hybrid SQL/FTS + vector retrieval when the active
   OpenClaw agent has a resolvable `memorySearch` provider/model;
 - daily memory and sessions remain lexical in this slice;

@@ -82,6 +82,10 @@ Import and migration:
 Schema management:
 
 - `schema_migrations`: applied migration history.
+- `semantic_schema_migrations`: applied optional semantic migration history.
+- setup uses its admin connection only to provision database resources and the
+  PostgreSQL `vector` extension. The configured app-user runtime owns and
+  applies both AnchorClaw table migration sets after gateway startup.
 
 Legacy cleanup:
 
@@ -92,7 +96,7 @@ Legacy cleanup:
 
 Durable memory is stored in `memory_items`.
 
-The MVP supports `fact` and `note` items. Writes use canonical upsert behavior
+The current release supports `fact` and `note` items. Writes use canonical upsert behavior
 through `(type, namespace, canonical_key)` so the system can update known facts
 instead of appending unlimited near-duplicates.
 
@@ -387,7 +391,7 @@ Operational implications:
 
 ## SQL-First Search
 
-AnchorClaw's MVP uses PostgreSQL full-text search for durable memory, daily
+AnchorClaw's current release uses PostgreSQL full-text search for durable memory, daily
 memory, and sessions indexing.
 
 This gives a deterministic baseline:
@@ -405,6 +409,9 @@ Current shape:
 
 - `memory_item_embeddings` is a derived sidecar index attached to durable
   `memory_items`;
+- semantic setup provisions `vector` and writes config first; after gateway
+  restart, runtime applies semantic migrations through the same app-user pool
+  that applies base migrations;
 - direct durable writes try to build the current agent/profile embedding after
   the DB commit;
 - `memory_search` combines SQL/FTS and exact cosine vector search for durable
@@ -453,7 +460,7 @@ Experimental:
 - tuning of maintenance windows and live promotion smoke validation;
 - semantic/vector recall layer.
 
-Known MVP limits:
+Known current-release limits:
 
 - sessions corpus is lexical-only;
 - `corpus="wiki"` is not implemented by AnchorClaw itself;
