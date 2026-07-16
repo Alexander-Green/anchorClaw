@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3
+
+### Packaging
+
+- Refined the marketplace package summary to describe AnchorClaw as
+  production-grade PostgreSQL memory for OpenClaw agents.
+
 ## 0.1.2
 
 ### Packaging
