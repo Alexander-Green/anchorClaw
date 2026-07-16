@@ -13,7 +13,7 @@ export function registerMemoryForgetTool({ ctx, invalidatePromptMemory, ensureSt
     name: "memory_forget",
     label: "Memory Forget",
     description:
-      "Soft-delete a durable memory item stored in AnchorClaw/Postgres.\n\nMVP rules:\n- Prefer passing lookup=db-memory/items/<uuid>.md (from memory_search or memory_store).\n- Alternatively pass id=<uuid>.",
+      "Soft-delete a durable memory item stored in AnchorClaw/Postgres.\n\nRules:\n- Prefer passing lookup=db-memory/items/<uuid>.md (from memory_search or memory_store).\n- Alternatively pass id=<uuid>.",
     parameters: {
       type: "object",
       additionalProperties: false,

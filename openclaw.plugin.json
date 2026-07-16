@@ -53,12 +53,12 @@
     },
     "semantic": {
       "label": "Semantic Layer",
-      "help": "Reserved opt-in settings for AnchorClaw semantic/vector retrieval. Disabled by default; SQL/FTS remains the active path until the semantic layer is implemented.",
+      "help": "Optional pgvector-backed semantic enrichment for durable memory search. Disabled by default; SQL/FTS remains available as the source-of-truth retrieval path.",
       "advanced": true
     },
     "semantic.enabled": {
       "label": "Semantic Enabled",
-      "help": "Opt AnchorClaw into the future semantic layer. OpenClaw memorySearch provider config alone does not enable AnchorClaw semantic retrieval.",
+      "help": "Enable AnchorClaw hybrid lexical and semantic retrieval. OpenClaw memorySearch provider config alone does not enable this layer.",
       "advanced": true
     },
     "identity": {

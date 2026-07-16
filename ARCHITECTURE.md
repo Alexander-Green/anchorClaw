@@ -303,7 +303,8 @@ DB workspace scopes, even when agent names look related.
 
 ## Multi-Agent Workspace Model
 
-AnchorClaw is moving away from the old single-plugin-workspace model.
+AnchorClaw uses a multi-agent workspace model instead of the old
+single-plugin-workspace model.
 
 The old bridge looked like this:
 
@@ -381,6 +382,12 @@ This model means:
 - preferred: `identity.externalId` from plugin config
 - fallback: `sha256(normalized OS username)`
 
+`user_id` is an AnchorClaw deployment identity, not an automatic Telegram,
+Discord, or other channel sender id. Multiple channel users routed to the same
+resolved workspace under the same `identity.externalId` intentionally share the
+same memory scope. Per-user isolation therefore requires OpenClaw routing those
+users to distinct agent workspaces, or separate AnchorClaw deployment identities.
+
 Operational implications:
 
 - set `identity.externalId` for Docker and production;
@@ -399,7 +406,7 @@ This gives a deterministic baseline:
 - no embedding provider required;
 - no vector database required;
 - predictable lexical matches;
-- stable fallback path for future hybrid retrieval.
+- stable lexical fallback when optional hybrid retrieval is unavailable.
 
 ## Semantic Enrichment Layer
 
@@ -412,13 +419,26 @@ Current shape:
 - semantic setup provisions `vector` and writes config first; after gateway
   restart, runtime applies semantic migrations through the same app-user pool
   that applies base migrations;
+- the active agent's `agents.list[].memorySearch` override defines its embedding
+  profile when present, otherwise `agents.defaults.memorySearch` is used;
+- provider, model, endpoint, and dimensions contribute to a stable profile key,
+  so embeddings produced by different effective profiles do not overwrite or
+  masquerade as one another;
 - direct durable writes try to build the current agent/profile embedding after
   the DB commit;
 - `memory_search` combines SQL/FTS and exact cosine vector search for durable
   `memory_items` when semantic is enabled;
+- hybrid ranking uses equal-weight reciprocal rank fusion (`k=60`) over the
+  lexical and semantic result lists; a durable item present in both lists gains
+  both contributions, while items available from only one side remain eligible;
+- raw FTS and cosine scores are not added together because they use different
+  scales; after the fused score, deterministic ordering prefers durable memory,
+  then durable importance, update time, and stable path order;
 - missing or stale embeddings are handled demand-first: search attempts a small
   inline indexing batch, then queues bounded maintenance work if backlog
   remains;
+- queued semantic work is processed only by enabled, non-dry-run maintenance;
+  pending embeddings never remove the lexical search path;
 - failure mode that falls back to lexical search without breaking tool APIs;
 - semantic near-duplicate assistance can be added here for extractor and direct
   writes, but it should remain optional and never replace deterministic baseline
@@ -454,15 +474,20 @@ Implemented and runtime-oriented:
 - controlled pre-compaction flush inbox and DB drain;
 - maintenance foundation over DB daily windows.
 
-Experimental:
+Implemented with explicit operational limits:
 
 - extractor-driven promotion from daily memory into durable memory;
-- tuning of maintenance windows and live promotion smoke validation;
-- semantic/vector recall layer.
+- semantic/vector recall for durable `memory_items` with lexical degradation;
+- demand-first semantic indexing with a persistent maintenance queue.
 
 Known current-release limits:
 
 - sessions corpus is lexical-only;
+- daily memory is lexical-only;
+- semantic search uses exact cosine retrieval without an approximate HNSW/IVFFlat
+  index; this favors simple, deterministic behavior for the current data scale;
+- extractor precision and retrieval weights remain tuning surfaces, not storage
+  or migration correctness dependencies;
 - `corpus="wiki"` is not implemented by AnchorClaw itself;
 - item types beyond `fact` and `note` are deferred until explicit injection and
   write policy are defined.

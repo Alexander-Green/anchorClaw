@@ -1,7 +1,7 @@
 import type { PostgresPool } from "../postgres.js";
 import { queryPromptDailyEntries as queryDailyPromptEntries } from "./daily.js";
 
-// MVP: prompt injection only supports fact/note (MEMORY.md role).
+// Prompt injection currently supports fact/note items (the MEMORY.md role).
 type MemoryItemType = "fact" | "note";
 
 export type PromptMemoryItem = {
@@ -172,7 +172,7 @@ export function buildPromptMemorySection(params: {
   lines.push("");
 
   const policy = params.policy ?? {
-    // MVP default policy: focus on facts and notes; keep other types opt-in explicitly.
+    // Default policy: focus on facts and notes; keep other types explicitly opt-in.
     maxItemsByType: { fact: 6, note: 4 },
     defaultMaxItemChars: 1_200,
   };

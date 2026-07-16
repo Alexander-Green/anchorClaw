@@ -3,7 +3,7 @@ import type { PostgresPool } from "../postgres.js";
 import { upsertMemoryItemEmbedding } from "../semantic/indexing.js";
 import { buildSemanticEmbedding } from "../semantic/runtime.js";
 
-// MVP: keep types aligned with the OpenClaw `MEMORY.md` role.
+// Keep item types aligned with the OpenClaw `MEMORY.md` role.
 // Future: add explicit durable types (profile/config/skill/summary/automation) behind a clear policy.
 type MemoryItemType = "fact" | "note";
 type MemoryItemSource = "user" | "agent" | "migration" | "system" | "integration";

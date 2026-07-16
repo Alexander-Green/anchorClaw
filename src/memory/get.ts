@@ -284,7 +284,7 @@ export async function memoryGetFromDb(params: {
   }
 
   if (parsed.kind === "export") {
-    // MVP: export is generated from Postgres on demand. It is a convenience snapshot, not the runtime source of truth.
+    // Export is generated from Postgres on demand. It is a convenience snapshot, not the runtime source of truth.
     const result = await params.pool.query<{
       id: string;
       type: string;

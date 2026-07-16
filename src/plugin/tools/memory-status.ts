@@ -60,7 +60,7 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
     name: "memory_status",
     label: "Memory Status",
     description:
-      "Return runtime health state for AnchorClaw memory operations.\n\nMVP rules:\n- Diagnostics only: use for operator health/debug checks.\n- Do not use this tool for fact lookup, retrieval ranking, or answer selection.\n- It reports SDK degraded state without exposing secrets.",
+      "Return runtime health state for AnchorClaw memory operations.\n\nRules:\n- Diagnostics only: use for operator health/debug checks.\n- Do not use this tool for fact lookup, retrieval ranking, or answer selection.\n- It reports SDK degraded state without exposing secrets.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -68,7 +68,7 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
         check: {
           type: "boolean",
           description:
-            "When true, performs active health checks (database connectivity/schema + sessions dir accessibility).",
+            "When true, performs active health checks for database/schema, sessions accessibility, and the configured semantic provider.",
         },
       },
     },

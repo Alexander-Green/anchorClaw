@@ -16,7 +16,7 @@ export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegis
     name: "memory_get",
     label: "Memory Get",
     description:
-      "Read memory content by path.\n\nMVP rules:\n- Pass lookup as a synthetic DB path returned by memory_search/memory_store (e.g. db-memory/items/<uuid>.md), or sessions/<agentId>/<file>, or MEMORY.md (virtual snapshot), or memory/YYYY-MM-DD.md (DB-backed daily memory).\n- OpenClaw-compatible aliases: you may pass { path, from, lines } instead of { lookup, fromLine, lineCount }.\n- Content is returned as a bounded excerpt (use fromLine/lineCount to paginate).",
+      "Read memory content by path.\n\nRules:\n- Pass lookup as a synthetic DB path returned by memory_search/memory_store (e.g. db-memory/items/<uuid>.md), or sessions/<agentId>/<file>, or MEMORY.md (virtual snapshot), or memory/YYYY-MM-DD.md (DB-backed daily memory).\n- OpenClaw-compatible aliases: you may pass { path, from, lines } instead of { lookup, fromLine, lineCount }.\n- Content is returned as a bounded excerpt (use fromLine/lineCount to paginate).",
     parameters: {
       type: "object",
       additionalProperties: false,

@@ -81,7 +81,12 @@ the configured app user, so the app user owns the AnchorClaw tables. This keeps
 the semantic path consistent with normal runtime migrations and does not require
 setup to rotate or re-enter an existing app password.
 
-Setup only manages `agents.defaults.memorySearch` in this first slice. Existing
+Setup treats the selected database as an AnchorClaw application database. It
+sets the app user as database owner and grants the privileges needed for runtime
+migrations. Use a dedicated database rather than pointing setup at a shared
+application database whose ownership must remain unchanged.
+
+Setup manages only `agents.defaults.memorySearch`. Existing
 per-agent `agents.list[].memorySearch` overrides are preserved as-is.
 
 Setup rewrites `anchorclaw.config.postgres`; if you use SSL or custom pool
@@ -93,8 +98,12 @@ AnchorClaw's runtime/tool layer.
 
 ## Skip Config Mode
 
-If you run setup with `--skip-config`, add this manually to
-`~/.openclaw/openclaw.json`:
+`--skip-config` means setup provisions PostgreSQL only. It does not select the
+memory slot, enable the plugin, write the Postgres or semantic config, enable
+prompt injection, or disable OpenClaw's bundled file-based session-memory hook.
+The operator must manage all of those OpenClaw settings manually.
+
+In particular, add this hook override to `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -193,6 +202,10 @@ By default, setup runs in interactive mode and prompts for:
 - if semantic is enabled: `provider`, `model`, optional `baseUrl`, and optional
   `apiKey`, using existing `agents.defaults.memorySearch` values as prompt
   defaults when present
+- which resolved workspace scope maintenance and the extractor should process,
+  or whether background maintenance should remain disabled
+- when an app password was entered and the app user already exists, whether to
+  rotate that user's password
 
 Non-interactive example:
 
@@ -254,7 +267,7 @@ Semantic merge rules:
   `agents.defaults.memorySearch` value;
 - if a semantic flag is provided, it overrides the existing default value;
 - after merge, `provider` and `model` must exist or setup fails fast;
-- `baseUrl` is optional in the first slice;
+- `baseUrl` is optional;
 - `apiKey` is optional and is reported only as `configured` or
   `not configured` in setup output;
 - existing `memorySearch` config does not auto-enable AnchorClaw semantic by
@@ -265,7 +278,10 @@ Useful flags:
 
 - `--skip-config`: keep `~/.openclaw/openclaw.json` unchanged
 - `--schema-none`: use PostgreSQL default `search_path`
-- `--db-password <pass>`: set app user password explicitly
+- `--db-password <pass>`: set the password for a new app user, or provide the
+  replacement value used together with `--rotate-db-password`
+- `--rotate-db-password`: allow setup to replace an existing app user's password
+  and update the managed OpenClaw Postgres config with that value
 - `--maintenance-workspace-scope <mode>`: write maintenance scope into config;
   supported values are `default-agent` and `all-agent-workspaces`
 - `--semantic-enabled`: enable `plugins.entries.anchorclaw.config.semantic.enabled`
@@ -281,16 +297,54 @@ Defaults when omitted:
 - `--admin-url`: `postgres://localhost/postgres`
 - `--db-name`: `anchorclaw`
 - `--db-user`: `anchorclaw`
-- `--db-password`: auto-generated
+- `--db-password`: auto-generated for a new app user; an existing user's password
+  is preserved unless `--rotate-db-password` is passed
 - `--schema`: `memory`
 - config update: enabled
 
 Safety behavior:
 
 - idempotent setup for existing database, user, and schema;
-- no destructive operations on existing databases or schemas;
+- no database, schema, or table drops;
+- the selected database is assigned to the configured app user and receives the
+  grants required for runtime migrations;
+- an existing app user's password and the corresponding config value are left
+  unchanged unless password rotation is explicitly requested;
 - fail-fast on schema conflicts that look AnchorClaw-related but have no
   `schema_migrations`.
+
+## Upgrade an Existing SQL-Only Installation to Semantic
+
+An existing SQL/FTS-only installation does not need a new database or a full
+reinstall. Rerun setup against the same dedicated database and enable semantic:
+
+```bash
+openclaw anchorclaw setup \
+  --admin-url postgres://postgres:password@localhost/postgres \
+  --db-name anchorclaw \
+  --db-user anchorclaw \
+  --schema memory \
+  --semantic-enabled \
+  --semantic-provider openai-compatible \
+  --semantic-model text-embedding-3-small \
+  --semantic-base-url http://127.0.0.1:1234/v1 \
+  --non-interactive
+```
+
+The existing `maintenance.workspaceScope` is preserved when the scope flag is
+omitted. If the old config has no scope, add either
+`--maintenance-workspace-scope default-agent` or
+`--maintenance-workspace-scope all-agent-workspaces` explicitly.
+
+For an existing app user, setup preserves its database password and leaves the
+password already present in `openclaw.json` unchanged. If that password is
+missing or must change, either update the Postgres config yourself or explicitly
+pass both `--db-password <value>` and `--rotate-db-password`.
+
+Setup provisions the `vector` extension and writes semantic config. Restart the
+gateway afterwards; runtime then applies the separate semantic migrations using
+the configured app-user connection. Existing durable items remain valid and
+their derived embeddings are filled on demand and through maintenance.
 
 ## Common Config Overrides
 
@@ -379,6 +433,9 @@ Current boundary:
 - daily memory and sessions remain lexical in this slice;
 - missing/stale embeddings are built on demand: search tries a small inline
   batch first, then queues bounded maintenance indexing when backlog remains;
+- queued semantic indexing is drained in the background only while
+  `maintenance.enabled=true` and `maintenance.dryRun=false`; lexical search
+  remains available while embeddings are pending;
 - if semantic provider/schema/runtime is unavailable, AnchorClaw keeps lexical
   SQL/FTS retrieval working and reports the semantic problem in
   `memory_status`, tool details, or logs.
@@ -405,6 +462,13 @@ The maintenance extractor reads stable, versioned windows from immutable
 `memory_items`. `maintenance.extractor.maxCharsPerRun` controls how many stable
 windows fit into one LLM call; changing it does not make completed blocks
 pending again.
+
+Setup enables maintenance and the extractor with `dryRun=false` when a workspace
+scope is selected. New eligible `memory_log` windows can therefore produce LLM
+extractor calls on the configured interval. Choose `disable maintenance` during
+interactive setup, or set `maintenance.enabled=false`, if those background calls
+are not wanted yet. Completed extraction windows are recorded and are not sent
+again solely because another scheduler interval elapsed.
 
 Daily content is passed to the extractor as explicitly delimited untrusted
 data, separate from the system extraction policy. This is defence in depth
@@ -512,9 +576,9 @@ tables from shared `public` schema objects.
 If you prefer manual provisioning:
 
 ```sql
-CREATE DATABASE anchorclaw;
 CREATE USER anchorclaw WITH PASSWORD 'change-me';
-GRANT CONNECT ON DATABASE anchorclaw TO anchorclaw;
+CREATE DATABASE anchorclaw OWNER anchorclaw;
+GRANT CONNECT, CREATE ON DATABASE anchorclaw TO anchorclaw;
 ```
 
 Then connect to `anchorclaw` and run:
@@ -525,6 +589,19 @@ GRANT USAGE, CREATE ON SCHEMA memory TO anchorclaw;
 ALTER DEFAULT PRIVILEGES IN SCHEMA memory GRANT ALL ON TABLES TO anchorclaw;
 ALTER DEFAULT PRIVILEGES IN SCHEMA memory GRANT ALL ON SEQUENCES TO anchorclaw;
 ```
+
+For semantic retrieval, a PostgreSQL administrator must also run this in the
+`anchorclaw` database before semantic config is enabled:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+The app user can then apply both the base and semantic AnchorClaw table
+migrations when the gateway starts. If you manually provision an existing
+database instead of creating a dedicated one, make sure the app user has the
+same ownership and `CREATE` privileges without changing ownership that other
+applications rely on.
 
 After that, configure the plugin `postgres` fields in `openclaw.json` and
 restart the gateway.
