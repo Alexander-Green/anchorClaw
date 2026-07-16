@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1
+
+### Packaging
+
+- Added the required OpenClaw build metadata for ClawHub external code-plugin
+  publishing.
+- Aligned the lockfile package version and OpenClaw peer minimum with the
+  published package contract.
+
 ## 0.1.0
 
 ### Highlights
