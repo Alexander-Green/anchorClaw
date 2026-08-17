@@ -7,6 +7,7 @@ import { resolveSessionsSearchState } from "../config.js";
 import { createFlushInboxPlanResolver } from "./flush-inbox.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 import type { SessionIndexBootstrapTarget } from "./session-delta.js";
+import { resolveSessionSearchMode } from "./session-search-mode.js";
 
 export function registerAnchorClawMemoryCapability(params: {
   ctx: PluginRuntimeContext;
@@ -59,9 +60,16 @@ export function registerAnchorClawMemoryCapability(params: {
       const hasMemorySearch = Boolean(params?.availableTools?.has?.("memory_search"));
       const hasMemoryGet = Boolean(params?.availableTools?.has?.("memory_get"));
       const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
-      const sessionsCorpusNote = sessionsSearch.effective
-        ? 'corpus="sessions" is available subject to configured visibility scope.'
-        : null;
+      const sessionSearchMode = resolveSessionSearchMode(api);
+      const hasNativeSessionsSearch = Boolean(params?.availableTools?.has?.("sessions_search"));
+      const sessionsCorpusNote =
+        sessionSearchMode === "native-openclaw"
+          ? hasNativeSessionsSearch
+            ? "Use sessions_search for exact recall from past OpenClaw conversations; use sessions_history for surrounding context."
+            : null
+          : sessionsSearch.effective
+            ? 'corpus="sessions" is available subject to configured visibility scope.'
+            : null;
 
       let toolGuidance = "";
       if (hasMemorySearch && hasMemoryGet) {

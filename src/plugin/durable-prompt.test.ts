@@ -49,7 +49,7 @@ beforeEach(() => {
 });
 
 describe("registerDurablePromptHook", () => {
-  it("injects durable memory on continuation turns using hook workspace context", async () => {
+  it("injects durable memory into system context on continuation turns", async () => {
     const { getPromptMemoryLines, hook } = buildHarness();
 
     const result = await hook(
@@ -62,8 +62,9 @@ describe("registerDurablePromptHook", () => {
     );
 
     expect(result).toEqual({
-      prependContext: `durable:${path.resolve("/agents/ops")}`,
+      prependSystemContext: `durable:${path.resolve("/agents/ops")}`,
     });
+    expect(result).not.toHaveProperty("prependContext");
     expect(getPromptMemoryLines).toHaveBeenCalledWith({
       workspaceDir: path.resolve("/agents/ops"),
       agentId: "ops",
@@ -97,8 +98,9 @@ describe("registerDurablePromptHook", () => {
 
     expect(getPromptMemoryLines).not.toHaveBeenCalled();
     expect(result).toEqual({
-      prependContext: expect.stringContaining("durable memory is unavailable"),
+      prependSystemContext: expect.stringContaining("durable memory is unavailable"),
     });
+    expect(result).not.toHaveProperty("prependContext");
     expect(api.logger.warn).toHaveBeenCalledWith(
       "anchorclaw: durable prompt injection failed (runtime_workspace_unavailable)",
     );

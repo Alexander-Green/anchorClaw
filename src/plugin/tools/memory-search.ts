@@ -2,6 +2,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-runti
 import { resolveUserAndWorkspaceScope } from "../../identity.js";
 import { scanLegacyWorkspace } from "../../importer.js";
 import { resolveSessionsSearchState } from "../../config.js";
+import { resolveSessionSearchMode } from "../session-search-mode.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { compareMemorySearchHits } from "../../memory/ranking.js";
 import {
@@ -315,11 +316,27 @@ export function registerMemorySearchTool({
   ensureStartupBootstrap,
 }: ToolRegistrationParams) {
   const api = ctx.api;
+  const registeredSessionSearchMode = resolveSessionSearchMode(api);
+  const sessionsDescription =
+    registeredSessionSearchMode === "native-openclaw"
+      ? "Session transcripts are owned by OpenClaw: corpus=sessions redirects to sessions_search, while corpus=all covers AnchorClaw memory only; use sessions_search and sessions_history for conversations."
+      : "corpus=sessions uses the legacy Postgres-backed sessions index and is opt-in via sessions.search.enabled=true.";
   api.registerTool((toolCtx: OpenClawPluginToolContext) => ({
     name: "memory_search",
     label: "Memory Search",
-    description:
-      "Search memory.\n\nBehavior contract:\n- corpus defaults to \"memory\" (durable items plus DB-backed daily memory).\n- For corpus=\"memory\", retrieval starts with lexical Postgres FTS (tsquery/ts_rank). When AnchorClaw semantic is enabled and the active OpenClaw agent has memorySearch provider/model, durable memory_items also use vector semantic retrieval.\n- corpus=\"daily\" searches DB-backed daily memory only.\n- corpus=\"sessions\" uses Postgres-backed sessions index (DB-first), returns paths like sessions/<agentId>/<session>.jsonl, and is opt-in via sessions.search.enabled=true.\n- Semantic retrieval only covers durable memory_items, not daily or sessions.\n- Results contain synthetic paths. Use memory_get to read them.\n- If the top result is an exact literal match, content includes \"Top exact match: <value>\" and details.meta.exactTop1/exactTop1Value.\n- Do not claim semantic/vector retrieval unless details.meta.semantic.enabled is true.",
+    description: [
+      "Search memory.",
+      "",
+      "Behavior contract:",
+      '- corpus defaults to "memory" (durable items plus DB-backed daily memory).',
+      '- For corpus="memory", retrieval starts with lexical Postgres FTS (tsquery/ts_rank). When AnchorClaw semantic is enabled and the active OpenClaw agent has memorySearch provider/model, durable memory_items also use vector semantic retrieval.',
+      '- corpus="daily" searches DB-backed daily memory only.',
+      `- ${sessionsDescription}`,
+      "- Semantic retrieval only covers durable memory_items, not daily or sessions.",
+      "- Results contain synthetic paths. Use memory_get to read them.",
+      '- If the top result is an exact literal match, content includes "Top exact match: <value>" and details.meta.exactTop1/exactTop1Value.',
+      "- Do not claim semantic/vector retrieval unless details.meta.semantic.enabled is true.",
+    ].join("\n"),
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -335,6 +352,45 @@ export function registerMemorySearchTool({
       },
     },
     async execute(_toolCallId: string, params: unknown) {
+      const record = (params ?? {}) as any;
+      const query = typeof record.query === "string" ? String(record.query) : "";
+      const corpus = typeof record.corpus === "string" ? String(record.corpus) : "memory";
+      const maxResults = typeof record.maxResults === "number" ? (record.maxResults as number) : undefined;
+      const minScore = typeof record.minScore === "number" ? (record.minScore as number) : undefined;
+      const trimmedCorpus = corpus.trim();
+      const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
+      const sessionSearchMode = registeredSessionSearchMode;
+      if (sessionSearchMode === "native-openclaw" && trimmedCorpus === "sessions") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "anchorclaw: session transcripts are managed by OpenClaw. Retry this query with sessions_search; use sessions_history to read a matching conversation.",
+            },
+          ],
+          details: {
+            disabled: true,
+            error: "sessions source managed by OpenClaw",
+            query,
+            results: [],
+            count: 0,
+            replacementTools: ["sessions_search", "sessions_history"],
+            meta: {
+              retrievalMode: "native_openclaw",
+              queryMode: classifyQueryMode(query),
+              semantic: false,
+              sessions: {
+                configured: sessionsSearch.configured,
+                effective: false,
+                mode: sessionSearchMode,
+                visibility: sessionsSearch.visibility,
+                reason: "native_openclaw",
+                replacementTool: "sessions_search",
+              },
+            },
+          },
+        };
+      }
       if (
         (ctx.durableState?.overall === "pending" ||
           (ctx.durableState?.overall === "blocked" &&
@@ -362,12 +418,6 @@ export function registerMemorySearchTool({
       }
       const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
-      const record = (params ?? {}) as any;
-      const query = typeof record.query === "string" ? String(record.query) : "";
-      const corpus = typeof record.corpus === "string" ? String(record.corpus) : "memory";
-      const maxResults = typeof record.maxResults === "number" ? (record.maxResults as number) : undefined;
-      const minScore = typeof record.minScore === "number" ? (record.minScore as number) : undefined;
-      const trimmedCorpus = corpus.trim();
       if (trimmedCorpus === "wiki") {
         return {
           content: [
@@ -380,9 +430,9 @@ export function registerMemorySearchTool({
           details: { disabled: true, error: "corpus=wiki not implemented" },
         };
       }
-      const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
       const sessionsVisibility = sessionsSearch.visibility;
-      const sessionsEnabled = sessionsSearch.effective;
+      const sessionsEnabled =
+        sessionsSearch.effective && sessionSearchMode === "legacy-anchorclaw";
       let hits: any[] = [];
       let retrievalMode:
         | "fts_memory"
@@ -475,7 +525,8 @@ export function registerMemorySearchTool({
                   recommendedAction: "stop_not_found",
                   sessions: {
                     configured: sessionsSearch.configured,
-                    effective: sessionsSearch.effective,
+                    effective: sessionsEnabled,
+                    mode: sessionSearchMode,
                     visibility: sessionsSearch.visibility,
                     ...(sessionsSearch.reason ? { reason: sessionsSearch.reason } : {}),
                   },
@@ -753,7 +804,11 @@ export function registerMemorySearchTool({
               });
             })()
           : null;
-      const text = legacyImportWarning ? `${visible}\n\n${legacyImportWarning}` : visible;
+      const nativeSessionsAllNote =
+        trimmedCorpus === "all" && sessionSearchMode === "native-openclaw"
+          ? "Note: corpus=all covers AnchorClaw memory only on this OpenClaw version. Use sessions_search separately for conversation transcripts."
+          : null;
+      const text = [visible, legacyImportWarning, nativeSessionsAllNote].filter(Boolean).join("\n\n");
       return {
         content: [
           {
@@ -775,9 +830,14 @@ export function registerMemorySearchTool({
             ...(legacyImportWarning ? { legacyImportWarning } : {}),
             sessions: {
               configured: sessionsSearch.configured,
-              effective: sessionsSearch.effective,
+              effective: sessionsEnabled,
+              mode: sessionSearchMode,
               visibility: sessionsSearch.visibility,
-              ...(sessionsSearch.reason ? { reason: sessionsSearch.reason } : {}),
+              ...(sessionSearchMode === "native-openclaw"
+                ? { reason: "native_openclaw", replacementTool: "sessions_search" }
+                : sessionsSearch.reason
+                  ? { reason: sessionsSearch.reason }
+                  : {}),
             },
           },
           ...(ctx.sdkHealth.degraded

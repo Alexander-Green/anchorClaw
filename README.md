@@ -70,8 +70,9 @@ search come before semantic similarity.
 - **Operational visibility**: health, migration state, import state, semantic
   queues, and degraded behavior are visible through `memory_status`, tool
   details, PostgreSQL, and logs.
-- **Optional sessions search**: transcript indexing is DB-first, opt-in, and
-  constrained by agent/workspace visibility.
+- **Version-aware sessions search**: legacy OpenClaw hosts can use the opt-in
+  Postgres transcript index; OpenClaw `>=2026.8.1-beta.1` owns session recall
+  through its native `sessions_search` and SQLite index.
 
 ## How It Works
 

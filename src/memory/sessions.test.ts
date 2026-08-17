@@ -9,10 +9,10 @@ const { buildSessionEntry, listSessionFilesForAgent, sessionPathForFile } = vi.h
   sessionPathForFile: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
-  buildSessionEntry,
-  listSessionFilesForAgent,
-  sessionPathForFile,
+vi.mock("./legacy-session-files.js", () => ({
+  buildLegacySessionEntry: buildSessionEntry,
+  listLegacySessionFilesForAgent: listSessionFilesForAgent,
+  legacySessionPathForFile: sessionPathForFile,
 }));
 
 import { isSessionFileForAgent, memoryGetSessionFile, memorySearchSessions } from "./sessions.js";
@@ -53,7 +53,7 @@ describe("sessions corpus (MVP)", () => {
     expect(res).toBeNull();
   });
 
-  it("reads sessions/<agentId>/<file> through SDK buildSessionEntry and sessionPathForFile", async () => {
+  it("reads sessions/<agentId>/<file> through the frozen legacy transcript adapter", async () => {
     await withTempEnvDir("OPENCLAW_STATE_DIR", "anchorclaw-test-state-", async (stateDir) => {
       const agentId = "main";
       const fileName = "session.jsonl";

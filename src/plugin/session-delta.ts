@@ -15,8 +15,9 @@ import {
   RUNTIME_WORKSPACE_UNAVAILABLE,
 } from "./runtime-workspace.js";
 import type { PendingSessionDelta } from "./types.js";
-import { sessionPathForFile } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { legacySessionPathForFile } from "../memory/legacy-session-files.js";
 import fs from "node:fs/promises";
+import { resolveSessionSearchMode } from "./session-search-mode.js";
 
 const SESSION_DELTA_DEBOUNCE_MS = 5_000;
 const SESSION_DELTA_RETRY_BASE_DELAY_MS = 2_000;
@@ -48,6 +49,7 @@ export function createSessionDeltaRuntime(params: {
   ctx: PluginRuntimeContext;
 }): SessionDeltaRuntime {
   const { api, ctx } = params;
+  const sessionSearchMode = resolveSessionSearchMode(api);
 
   const buildTargetKey = (target: Pick<PendingSessionDelta, "workspaceDir" | "agentId">): string =>
     `${target.workspaceDir}\u0000${target.agentId}`;
@@ -83,6 +85,9 @@ export function createSessionDeltaRuntime(params: {
   };
 
   const ensureSessionsIndexBootstrapped = async (target?: SessionIndexBootstrapTarget) => {
+    if (sessionSearchMode === "native-openclaw") {
+      return;
+    }
     if (!ctx.cfg) {
       return;
     }
@@ -335,6 +340,9 @@ export function createSessionDeltaRuntime(params: {
   };
 
   const ensureSessionDeltaListener = () => {
+    if (sessionSearchMode === "native-openclaw") {
+      return;
+    }
     if (!ctx.cfg || ctx.sessionDelta.closed || ctx.sessionDelta.unsubscribe) {
       return;
     }
@@ -362,7 +370,7 @@ export function createSessionDeltaRuntime(params: {
       if (!sessionFile) {
         return null;
       }
-      const lookup = normalizeSessionLookupPath(sessionPathForFile(sessionFile));
+      const lookup = normalizeSessionLookupPath(legacySessionPathForFile(sessionFile));
       const pathAgentId = lookup ? resolveSessionAgentId(lookup) : null;
       const eventAgentId =
         typeof update.agentId === "string" && update.agentId.trim() ? update.agentId.trim() : null;

@@ -43,11 +43,11 @@ vi.mock("../memory/sessions.js", () => ({
   isSessionFileForAgent,
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-qmd")>();
+vi.mock("../memory/legacy-session-files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../memory/legacy-session-files.js")>();
   return {
     ...actual,
-    sessionPathForFile,
+    legacySessionPathForFile: sessionPathForFile,
   };
 });
 
@@ -143,6 +143,23 @@ afterEach(() => {
 });
 
 describe("session index bootstrap scope", () => {
+  it("does not bootstrap or subscribe when modern OpenClaw owns session search", async () => {
+    const { api, ctx } = buildRuntime();
+    api.runtime.version = "2026.8.1-beta.1";
+    const modernRuntime = createSessionDeltaRuntime({ api, ctx });
+
+    await modernRuntime.ensureSessionsIndexBootstrapped({
+      workspaceDir: "/work/main",
+      agentId: "main",
+    });
+    modernRuntime.ensureSessionDeltaListener();
+
+    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+    expect(syncVisibleSessionsIndexDb).not.toHaveBeenCalled();
+    expect(api.runtime.events.onSessionTranscriptUpdate).not.toHaveBeenCalled();
+    modernRuntime.cleanupSessionDelta();
+  });
+
   it("bootstraps separate agent workspaces independently and dedupes repeat calls", async () => {
     const { runtime } = buildRuntime();
 

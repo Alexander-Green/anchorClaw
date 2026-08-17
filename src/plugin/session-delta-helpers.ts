@@ -4,9 +4,9 @@ import {
   type AnchorClawConfig,
 } from "../config.js";
 import {
-  isSessionArchiveArtifactName,
-  isUsageCountedSessionTranscriptFileName,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+  isLegacySessionArchiveArtifactName,
+  isLegacyUsageCountedSessionTranscriptFileName,
+} from "../memory/legacy-session-files.js";
 import fs, { type FileHandle } from "node:fs/promises";
 import type { SessionDeltaThresholds } from "./types.js";
 
@@ -15,8 +15,8 @@ const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 export function isSessionArchiveArtifactPath(sessionFile: string): boolean {
   const fileName = sessionFile.replaceAll("\\", "/").split("/").pop() ?? "";
   return (
-    isSessionArchiveArtifactName(fileName) &&
-    isUsageCountedSessionTranscriptFileName(fileName)
+    isLegacySessionArchiveArtifactName(fileName) &&
+    isLegacyUsageCountedSessionTranscriptFileName(fileName)
   );
 }
 

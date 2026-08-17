@@ -16,28 +16,28 @@
   "uiHints": {
     "sessions": {
       "label": "Sessions",
-      "help": "Sessions corpus indexing and visibility settings",
+      "help": "Legacy sessions corpus settings; modern OpenClaw uses native sessions_search.",
       "advanced": true
     },
     "sessions.search": {
       "label": "Sessions Search",
-      "help": "Opt in to the Postgres-backed sessions search corpus.",
+      "help": "Opt in to legacy Postgres-backed sessions search on OpenClaw versions before 2026.8.1-beta.1.",
       "advanced": true
     },
     "sessions.search.enabled": {
       "label": "Sessions Search Enabled",
-      "help": "Expose and maintain the sessions corpus. Disabled by default.",
+      "help": "Expose and maintain the legacy sessions corpus. Ignored when modern OpenClaw owns session search.",
       "advanced": true
     },
     "sessions.visibility": {
       "label": "Sessions Visibility",
       "placeholder": "current",
-      "help": "Visibility scope for sessions corpus: current (default), off, or visible (requires visibility guard support).",
+      "help": "Legacy sessions visibility: current (default), off, or visible. Modern OpenClaw applies native session-tool visibility.",
       "advanced": true
     },
     "sessions.sync": {
       "label": "Sessions Delta Sync",
-      "help": "Thresholds controlling when transcript updates trigger sessions index sync.",
+      "help": "Legacy-only thresholds controlling transcript index sync.",
       "advanced": true
     },
     "sessions.sync.deltaBytes": {

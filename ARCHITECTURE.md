@@ -35,10 +35,11 @@ Corpus behavior:
 - `memory_search()` and `memory_search(corpus="memory")` search durable memory
   plus DB-owned daily memory.
 - `memory_search(corpus="daily")` searches only daily memory.
-- `memory_search(corpus="sessions")` works only when
-  `sessions.search.enabled=true`.
-- `memory_search(corpus="all")` adds sessions only when sessions search is
-  explicitly enabled.
+- On legacy OpenClaw hosts, `memory_search(corpus="sessions")` works only when
+  `sessions.search.enabled=true`, and `corpus="all"` includes that legacy
+  corpus only when enabled.
+- On OpenClaw `>=2026.8.1-beta.1`, raw transcript recall is delegated to the
+  native `sessions_search` and `sessions_history` tools.
 - `corpus="wiki"` is a stub for now; use the `memory-wiki` integration where
   available.
 
@@ -47,8 +48,8 @@ Read behavior:
 - `memory_get("MEMORY.md")` returns a virtual snapshot generated from
   Postgres.
 - `memory_get("memory/YYYY-MM-DD.md")` resolves from Postgres only.
-- `memory_get("sessions/<agentId>/<file>")` is DB-first when sessions search is
-  enabled, with file fallback only on `index_miss`.
+- On legacy hosts, `memory_get("sessions/<agentId>/<file>")` is DB-first when
+  sessions search is enabled, with file fallback only on `index_miss`.
 
 ## Data Model
 
@@ -160,8 +161,11 @@ stub by default so OpenClaw bootstrap does not duplicate memory in prompts.
 
 ## Sessions Corpus
 
-Sessions search is opt-in. When `sessions.search.enabled=true`, AnchorClaw uses
-Postgres-backed lexical indexing for transcript search.
+Sessions search is version-aware. On OpenClaw versions older than
+`2026.8.1-beta.1`, it is opt-in and AnchorClaw uses a frozen JSONL
+adapter plus Postgres lexical indexing. On newer hosts, OpenClaw owns active
+transcript storage, visibility, redaction, and SQLite full-text search;
+AnchorClaw does not index the sessions corpus.
 
 Implemented behavior:
 
@@ -468,7 +472,8 @@ Implemented and runtime-oriented:
 - virtual `MEMORY.md`;
 - DB-only daily memory paths;
 - explicit legacy import CLI;
-- sessions search as opt-in lexical corpus;
+- legacy sessions search as an opt-in lexical corpus, with native OpenClaw
+  hand-off on `>=2026.8.1-beta.1`;
 - setup path that does not patch workspace `AGENTS.md`;
 - DB-backed `/new` and `/reset` session capture;
 - controlled pre-compaction flush inbox and DB drain;
@@ -482,7 +487,7 @@ Implemented with explicit operational limits:
 
 Known current-release limits:
 
-- sessions corpus is lexical-only;
+- the legacy sessions corpus is lexical-only;
 - daily memory is lexical-only;
 - semantic search uses exact cosine retrieval without an approximate HNSW/IVFFlat
   index; this favors simple, deterministic behavior for the current data scale;

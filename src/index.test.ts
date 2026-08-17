@@ -302,17 +302,17 @@ vi.mock("./identity-policy.js", () => ({
   getIdentityStartupWarning: getIdentityWarning,
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
-  listSessionFilesForAgent: vi.fn(async () => []),
-  sessionPathForFile: vi.fn((value: string) => {
+vi.mock("./memory/legacy-session-files.js", () => ({
+  listLegacySessionFilesForAgent: vi.fn(async () => []),
+  legacySessionPathForFile: vi.fn((value: string) => {
     const normalized = value.replaceAll("\\", "/");
     const match = normalized.match(/\/agents\/([^/]+)\/sessions\/([^/]+)$/);
     return match
       ? `sessions/${match[1]}/${match[2]}`
       : `sessions/${normalized.split("/").filter(Boolean).at(-1) ?? ""}`;
   }),
-  isSessionArchiveArtifactName,
-  isUsageCountedSessionTranscriptFileName,
+  isLegacySessionArchiveArtifactName: isSessionArchiveArtifactName,
+  isLegacyUsageCountedSessionTranscriptFileName: isUsageCountedSessionTranscriptFileName,
 }));
 
 import plugin from "./index.js";
@@ -735,6 +735,197 @@ describe("phase2 session delta listener", () => {
     expect(api.logger.info).toHaveBeenCalledWith(
       "anchorclaw: daily startup prompt injection skipped (messages=1)",
     );
+  });
+
+  it("honors startupContext.enabled without querying AnchorClaw storage", async () => {
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
+    type HookCall = [
+      string,
+      (event: unknown, context?: unknown) => Promise<unknown>,
+      { name?: string }?,
+    ];
+    const hookCalls = (api.on.mock.calls as unknown as HookCall[]);
+    const call = hookCalls.find(
+      (row) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-daily-startup-injection",
+    );
+
+    const result = await call?.[1](
+      { prompt: "fresh turn", messages: [] },
+      {
+        runtimeConfig: {
+          plugins: { slots: { memory: "anchorclaw" } },
+          agents: {
+            defaults: { startupContext: { enabled: false } },
+            list: [{ id: "main", default: true, workspace: "/tmp/work" }],
+          },
+        },
+        agentId: "main",
+        workspaceDir: "/tmp/work",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(queryPromptDailyEntries).not.toHaveBeenCalled();
+    expect(buildPromptDailySection).not.toHaveBeenCalled();
+  });
+
+  it("honors supported startupContext day and character limits", async () => {
+    queryPromptDailyEntries.mockResolvedValueOnce([
+      {
+        id: "daily-1",
+        path: "memory/2026-08-17.md",
+        logicalDate: "2026-08-17",
+        content: "daily context",
+        sourceKind: "memory_log",
+        createdAt: "2026-08-17T10:00:00.000Z",
+        updatedAt: "2026-08-17T10:00:00.000Z",
+      },
+    ] as any);
+    buildPromptDailySection.mockReturnValueOnce(["daily context"]);
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
+    type HookCall = [
+      string,
+      (event: unknown, context?: unknown) => Promise<unknown>,
+      { name?: string }?,
+    ];
+    const hookCalls = (api.on.mock.calls as unknown as HookCall[]);
+    const call = hookCalls.find(
+      (row) => row[0] === "before_prompt_build" && row[2]?.name === "anchorclaw-daily-startup-injection",
+    );
+
+    await call?.[1](
+      { prompt: "fresh turn", messages: [] },
+      {
+        runtimeConfig: {
+          plugins: { slots: { memory: "anchorclaw" } },
+          agents: {
+            defaults: {
+              userTimezone: "UTC",
+              startupContext: {
+                dailyMemoryDays: 5,
+                maxFileChars: 2_345,
+                maxTotalChars: 6_789,
+              },
+            },
+            list: [{ id: "main", default: true, workspace: "/tmp/work" }],
+          },
+        },
+        agentId: "main",
+        workspaceDir: "/tmp/work",
+      },
+    );
+
+    expect(queryPromptDailyEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ logicalDates: expect.arrayContaining([expect.any(String)]) }),
+    );
+    const queryCalls = queryPromptDailyEntries.mock.calls as unknown as Array<[
+      { logicalDates: string[] },
+    ]>;
+    expect(queryCalls[0]?.[0].logicalDates).toHaveLength(5);
+    expect(buildPromptDailySection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxEntryChars: 2_345,
+        maxSessionCaptureEntryChars: 2_345,
+        maxTotalChars: 6_789,
+      }),
+    );
+  });
+
+  it("keeps durable and daily memory in distinct prompt roles without duplicate injection", async () => {
+    const promptItemsMock = queryPromptItems as unknown as {
+      mockResolvedValueOnce: (items: Array<{
+        id: string;
+        type: string;
+        title: string | null;
+        content: string;
+        importance: number;
+        updatedAt: string;
+      }>) => void;
+    };
+    const dailyEntriesMock = queryPromptDailyEntries as unknown as {
+      mockResolvedValueOnce: (entries: Array<{
+        id: string;
+        path: string;
+        logicalDate: string;
+        content: string;
+        sourceKind: string;
+        createdAt: string;
+        updatedAt: string;
+      }>) => void;
+    };
+    promptItemsMock.mockResolvedValueOnce([
+      {
+        id: "fact-1",
+        type: "fact",
+        title: "Durable canary",
+        content: "DURABLE_PARITY_CANARY",
+        importance: 100,
+        updatedAt: "2026-08-17T10:00:00.000Z",
+      },
+    ]);
+    buildPromptSection.mockReturnValue(["DURABLE_PARITY_CANARY"]);
+    dailyEntriesMock.mockResolvedValueOnce([
+      {
+        id: "daily-1",
+        path: "memory/2026-08-17.md",
+        logicalDate: "2026-08-17",
+        content: "DAILY_PARITY_CANARY",
+        sourceKind: "memory_log",
+        createdAt: "2026-08-17T10:00:00.000Z",
+        updatedAt: "2026-08-17T10:00:00.000Z",
+      },
+    ]);
+    buildPromptDailySection.mockReturnValue(["DAILY_PARITY_CANARY"]);
+
+    const { api, runServiceStart } = buildApi();
+    await registerAndWaitStartup({ api, runServiceStart });
+    type HookCall = [
+      string,
+      (event: unknown, context?: unknown) => Promise<Record<string, string> | undefined>,
+      { name?: string }?,
+    ];
+    const hookCalls = api.on.mock.calls as unknown as HookCall[];
+    const durableHook = hookCalls.find((row) => row[2]?.name === "anchorclaw-durable-injection")?.[1];
+    const dailyHook = hookCalls.find((row) => row[2]?.name === "anchorclaw-daily-startup-injection")?.[1];
+    const hookContext = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/work",
+    };
+
+    const firstTurnDurable = await durableHook?.({ messages: [] }, hookContext);
+    const firstTurnDaily = await dailyHook?.({ messages: [] }, hookContext);
+    expect(firstTurnDurable).toEqual({ prependSystemContext: "DURABLE_PARITY_CANARY" });
+    expect(firstTurnDaily).toEqual({ prependContext: "DAILY_PARITY_CANARY" });
+    expect(firstTurnDurable).not.toHaveProperty("prependContext");
+    expect(firstTurnDaily).not.toHaveProperty("prependSystemContext");
+
+    const continuationDurable = await durableHook?.(
+      { messages: [{ role: "user", content: "continue" }] },
+      hookContext,
+    );
+    const continuationDaily = await dailyHook?.(
+      { messages: [{ role: "user", content: "continue" }] },
+      hookContext,
+    );
+    expect(continuationDurable).toEqual({ prependSystemContext: "DURABLE_PARITY_CANARY" });
+    expect(continuationDaily).toBeUndefined();
+    expect(queryPromptItems).toHaveBeenCalledTimes(1);
+    expect(queryPromptDailyEntries).toHaveBeenCalledTimes(1);
+
+    const firstTurnProjection = [
+      firstTurnDurable?.prependSystemContext,
+      firstTurnDaily?.prependContext,
+    ].join("\n");
+    expect(firstTurnProjection.match(/DURABLE_PARITY_CANARY/g)).toHaveLength(1);
+    expect(firstTurnProjection.match(/DAILY_PARITY_CANARY/g)).toHaveLength(1);
+
+    const capability = registerMemoryCapability.mock.calls[0]?.[1];
+    const guidance = capability.promptBuilder({ availableTools: new Set<string>() }).join("\n");
+    expect(guidance).not.toContain("DURABLE_PARITY_CANARY");
+    expect(guidance).not.toContain("DAILY_PARITY_CANARY");
   });
 
   it("passes session-capture entries into a dedicated startup prompt section", async () => {

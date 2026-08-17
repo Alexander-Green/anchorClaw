@@ -1,16 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  buildSessionEntry as buildSessionEntryFromSdk,
-  listSessionFilesForAgent,
-  sessionPathForFile,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveStateDir as resolveStateDirFromSdk } from "openclaw/plugin-sdk/state-paths";
 
 import type { MemorySearchHit } from "./search.js";
 import { type MemoryReadResult } from "./read-file-shared.js";
 import type { MemoryLimits } from "./limits.js";
+import {
+  buildLegacySessionEntry,
+  legacySessionPathForFile,
+  listLegacySessionFilesForAgent,
+} from "./legacy-session-files.js";
 
 /**
  * Thin async wrapper for OpenClaw SDK resolver.
@@ -231,7 +231,7 @@ export async function memoryGetSessionFile(params: {
   const effectiveAgentId = parsed.agentId ?? params.currentAgentId ?? "main";
   const sessionsDir = await resolveSessionsDirForAgent(effectiveAgentId);
   const absPath = path.join(sessionsDir, parsed.fileName);
-  const entry = await buildSessionEntryFromSdk(absPath);
+  const entry = await buildLegacySessionEntry(absPath);
   if (!entry) {
     return null;
   }
@@ -239,7 +239,7 @@ export async function memoryGetSessionFile(params: {
   return buildIndexedSessionReadResult({
     lines: renderedLines,
     lineMap: entry.lineMap,
-    relPath: sessionPathForFile(absPath),
+    relPath: legacySessionPathForFile(absPath),
     from: params.fromLine,
     lineCount: params.lineCount,
     defaultLines: params.defaultLines,
@@ -259,11 +259,11 @@ export async function memorySearchSessions(params: {
   }
   const limit = clampInteger(params.maxResults, 1, params.maxResults);
   const agentId = params.agentId?.trim() ? params.agentId : "main";
-  const sessionFiles = await listSessionFilesForAgent(agentId);
+  const sessionFiles = await listLegacySessionFilesForAgent(agentId);
 
   const entries: Array<{ absPath: string; mtimeMs: number; content: string; lineMap: number[] }> = [];
   for (const absPath of sessionFiles) {
-    const built = await buildSessionEntryFromSdk(absPath);
+    const built = await buildLegacySessionEntry(absPath);
     if (!built) {
       continue;
     }
@@ -297,7 +297,7 @@ export async function memorySearchSessions(params: {
       const startLine = entry.lineMap[contentIndex] ?? contentIndex + 1;
       hits.push({
         corpus: "sessions",
-        path: sessionPathForFile(entry.absPath),
+        path: legacySessionPathForFile(entry.absPath),
         kind: "session",
         score: 1,
         snippet,

@@ -12,10 +12,10 @@ const {
   resolveSessionsDirForAgent: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
-  listSessionFilesForAgent,
-  buildSessionEntry,
-  sessionPathForFile,
+vi.mock("./legacy-session-files.js", () => ({
+  listLegacySessionFilesForAgent: listSessionFilesForAgent,
+  buildLegacySessionEntry: buildSessionEntry,
+  legacySessionPathForFile: sessionPathForFile,
 }));
 
 vi.mock("./sessions.js", () => ({

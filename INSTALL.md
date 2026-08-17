@@ -442,9 +442,10 @@ Current boundary:
   SQL/FTS retrieval working and reports the semantic problem in
   `memory_status`, tool details, or logs.
 
-`sessions.search.enabled` controls whether the sessions corpus is exposed.
-`sessions.visibility` controls which indexed transcripts an agent can search
-and read:
+On OpenClaw versions older than `2026.8.1-beta.1`,
+`sessions.search.enabled` controls whether AnchorClaw's legacy sessions corpus
+is exposed. `sessions.visibility` controls which indexed transcripts an agent
+can search and read:
 
 - `current`: expose only the requesting agent's sessions;
 - `visible`: also expose sessions of agents that share the same resolved
@@ -454,6 +455,10 @@ and read:
 `sessions.sync.deltaBytes` and `sessions.sync.deltaMessages` control when
 transcript deltas trigger a targeted sessions reindex. Transcript events are
 always routed to the workspace resolved for their owning OpenClaw agent.
+
+On OpenClaw `>=2026.8.1-beta.1`, these legacy settings are accepted for config
+compatibility but AnchorClaw does not crawl or index active transcripts. Use
+OpenClaw's native `sessions_search` and `sessions_history` tools instead.
 
 `maintenance.enabled` starts the background maintenance scheduler. The
 required `maintenance.workspaceScope` selects which resolved OpenClaw

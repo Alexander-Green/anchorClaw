@@ -1,4 +1,5 @@
 import type { OpenClawPluginApi } from "../api.js";
+import type { OpenClawConfig as OpenClawRuntimeConfig } from "openclaw/plugin-sdk/health";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import {
   buildStartupMemoryDateStamps,
@@ -15,20 +16,63 @@ import {
 const DAILY_STARTUP_MAX_TOTAL_CHARS = 2_800;
 const DAILY_STARTUP_MAX_PATH_CHARS = 80;
 const DAILY_STARTUP_MAX_ENTRY_CHARS = 1_200;
-const DAILY_STARTUP_MAX_SESSION_CAPTURE_ENTRY_CHARS = 1_200;
 const DAILY_STARTUP_MAX_DAILY_ENTRIES = 4;
 const DAILY_STARTUP_MAX_SESSION_CAPTURES = 4;
 const PROMPT_DEBUG_PREVIEW_MAX_CHARS = 1_500;
 
-function resolveRuntimeTimezone(api: OpenClawPluginApi, hookContext?: any): string | undefined {
-  const currentConfig =
+type DailyPromptEvent = {
+  messages?: unknown;
+};
+
+type DailyPromptHookContext = {
+  runtimeConfig?: unknown;
+  getRuntimeConfig?: () => unknown;
+  workspaceDir?: string;
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+};
+
+function asRuntimeConfig(value: unknown): OpenClawRuntimeConfig | undefined {
+  return value && typeof value === "object" ? (value as OpenClawRuntimeConfig) : undefined;
+}
+
+function resolveRuntimeConfig(
+  api: OpenClawPluginApi,
+  hookContext?: DailyPromptHookContext,
+): OpenClawRuntimeConfig | undefined {
+  return asRuntimeConfig(
     hookContext?.runtimeConfig ??
     (typeof hookContext?.getRuntimeConfig === "function"
       ? hookContext.getRuntimeConfig()
-      : typeof (api as any)?.runtime?.config?.current === "function"
-        ? (api as any).runtime.config.current()
-        : undefined);
-  const raw = (currentConfig as any)?.agents?.defaults?.userTimezone;
+      : typeof api.runtime?.config?.current === "function"
+        ? api.runtime.config.current()
+        : undefined)
+  );
+}
+
+function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = typeof value === "number" ? value : Number.NaN;
+  return Math.min(max, Math.max(min, Number.isFinite(numeric) ? Math.trunc(numeric) : fallback));
+}
+
+function resolveStartupContextSettings(runtimeConfig?: OpenClawRuntimeConfig): {
+  enabled: boolean;
+  dailyMemoryDays: number;
+  maxEntryChars: number;
+  maxTotalChars: number;
+} {
+  const startupContext = runtimeConfig?.agents?.defaults?.startupContext;
+  return {
+    enabled: startupContext?.enabled !== false,
+    dailyMemoryDays: clampInteger(startupContext?.dailyMemoryDays, STARTUP_DAILY_MEMORY_DAYS, 1, 14),
+    maxEntryChars: clampInteger(startupContext?.maxFileChars, DAILY_STARTUP_MAX_ENTRY_CHARS, 1, 10_000),
+    maxTotalChars: clampInteger(startupContext?.maxTotalChars, DAILY_STARTUP_MAX_TOTAL_CHARS, 1, 50_000),
+  };
+}
+
+function resolveRuntimeTimezone(runtimeConfig?: OpenClawRuntimeConfig): string | undefined {
+  const raw = runtimeConfig?.agents?.defaults?.userTimezone;
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
@@ -39,7 +83,7 @@ export function registerDailyPromptHook(params: {
 }) {
   const { api, ctx, ensureStartupBootstrap } = params;
   const debugPromptLogEnabled = ctx.cfg?.debug?.promptLogEnabled === true;
-  const handler = async (event: any, hookContext?: any) => {
+  const handler = async (event: DailyPromptEvent, hookContext?: DailyPromptHookContext) => {
     if (ctx.disabledReason || !ctx.cfg) {
       return undefined;
     }
@@ -54,6 +98,15 @@ export function registerDailyPromptHook(params: {
         api.logger.info(
           `anchorclaw: daily startup prompt injection skipped (messages=${messageCount === null ? "non_array" : messageCount})`,
         );
+      }
+      return undefined;
+    }
+
+    const runtimeConfig = resolveRuntimeConfig(api, hookContext);
+    const startupContext = resolveStartupContextSettings(runtimeConfig);
+    if (!startupContext.enabled) {
+      if (debugPromptLogEnabled) {
+        api.logger.info("anchorclaw: daily startup prompt injection disabled by startupContext");
       }
       return undefined;
     }
@@ -74,8 +127,7 @@ export function registerDailyPromptHook(params: {
       }
       const workspaceTarget = resolveRuntimeWorkspaceTarget({
         api,
-        runtimeConfig: hookContext?.runtimeConfig,
-        getRuntimeConfig: hookContext?.getRuntimeConfig,
+        runtimeConfig,
         workspaceDir: hookContext?.workspaceDir,
         agentId: hookContext?.agentId,
         sessionKey: hookContext?.sessionKey,
@@ -97,8 +149,8 @@ export function registerDailyPromptHook(params: {
         userId: scope.userId,
         workspaceId: scope.workspaceId,
         logicalDates: buildStartupMemoryDateStamps({
-          timezone: resolveRuntimeTimezone(api, hookContext),
-          dailyMemoryDays: STARTUP_DAILY_MEMORY_DAYS,
+          timezone: resolveRuntimeTimezone(runtimeConfig),
+          dailyMemoryDays: startupContext.dailyMemoryDays,
         }),
         maxSluggedPerDay: STARTUP_MAX_SLUGGED_FILES_PER_DAY,
       });
@@ -111,10 +163,10 @@ export function registerDailyPromptHook(params: {
 
       const lines = buildPromptDailySection({
         entries,
-        maxTotalChars: DAILY_STARTUP_MAX_TOTAL_CHARS,
+        maxTotalChars: startupContext.maxTotalChars,
         maxPathChars: DAILY_STARTUP_MAX_PATH_CHARS,
-        maxEntryChars: DAILY_STARTUP_MAX_ENTRY_CHARS,
-        maxSessionCaptureEntryChars: DAILY_STARTUP_MAX_SESSION_CAPTURE_ENTRY_CHARS,
+        maxEntryChars: startupContext.maxEntryChars,
+        maxSessionCaptureEntryChars: startupContext.maxEntryChars,
         maxDailyEntries: DAILY_STARTUP_MAX_DAILY_ENTRIES,
         maxSessionCaptures: DAILY_STARTUP_MAX_SESSION_CAPTURES,
       });
@@ -146,12 +198,11 @@ export function registerDailyPromptHook(params: {
     }
   };
 
-  const onAny = (api as any).on;
-  if (typeof onAny !== "function") {
+  if (typeof api.on !== "function") {
     return;
   }
 
-  onAny("before_prompt_build", handler, {
+  api.on("before_prompt_build", handler, {
     name: "anchorclaw-daily-startup-injection",
   });
   if (debugPromptLogEnabled) {

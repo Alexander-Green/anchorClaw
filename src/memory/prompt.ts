@@ -341,11 +341,14 @@ export function buildPromptDailySection(params: {
       const nextBody = isSessionCapture
         ? trimStartupPromptContentFromTail(entry.content, bodyChars)
         : trimStartupPromptContent(entry.content, bodyChars);
+      // Match OpenClaw's quoted startup-memory handling: untrusted memory must not
+      // be able to close the fenced block that contains it.
+      const escapedBody = nextBody.replaceAll("```", "\\`\\`\\`");
       const blockLines = [
         `[Untrusted daily memory: ${safeLabel}]`,
         "BEGIN_QUOTED_NOTES",
         "```text",
-        nextBody,
+        escapedBody,
         "```",
         "END_QUOTED_NOTES",
         "",

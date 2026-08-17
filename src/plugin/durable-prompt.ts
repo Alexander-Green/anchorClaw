@@ -11,6 +11,13 @@ const DURABLE_MEMORY_UNAVAILABLE_NOTICE = [
   "Do not treat missing durable memory as proof that no memory exists.",
 ].join("\n");
 
+type DurablePromptHookContext = {
+  workspaceDir?: unknown;
+  agentId?: unknown;
+  sessionKey?: unknown;
+  sessionId?: unknown;
+};
+
 export function registerDurablePromptHook(params: {
   api: OpenClawPluginApi;
   ctx: PluginRuntimeContext;
@@ -18,7 +25,7 @@ export function registerDurablePromptHook(params: {
   ensureStartupBootstrap?: () => Promise<void>;
 }) {
   const { api, ctx, getPromptMemoryLines, ensureStartupBootstrap } = params;
-  const handler = async (_event: unknown, hookContext?: any) => {
+  const handler = async (_event: unknown, hookContext?: DurablePromptHookContext) => {
     if (ctx.disabledReason || !ctx.cfg) {
       return undefined;
     }
@@ -37,10 +44,7 @@ export function registerDurablePromptHook(params: {
       } else {
         await ctx.ensureReady();
       }
-      const runtimeConfig =
-        typeof (api as any)?.runtime?.config?.current === "function"
-          ? (api as any).runtime.config.current()
-          : undefined;
+      const runtimeConfig = api.runtime.config.current();
       const workspaceTarget = resolveRuntimeWorkspaceTargetFromScope({
         runtimeConfig,
         workspaceDir: hookContext?.workspaceDir,
@@ -56,22 +60,21 @@ export function registerDurablePromptHook(params: {
         return undefined;
       }
       return {
-        prependContext: lines.join("\n"),
+        prependSystemContext: lines.join("\n"),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       api.logger.warn(`anchorclaw: durable prompt injection failed (${message})`);
       return {
-        prependContext: DURABLE_MEMORY_UNAVAILABLE_NOTICE,
+        prependSystemContext: DURABLE_MEMORY_UNAVAILABLE_NOTICE,
       };
     }
   };
 
-  const onAny = (api as any).on;
-  if (typeof onAny !== "function") {
+  if (typeof api.on !== "function") {
     return;
   }
-  onAny("before_prompt_build", handler, {
+  api.on("before_prompt_build", handler, {
     name: "anchorclaw-durable-injection",
   });
 }

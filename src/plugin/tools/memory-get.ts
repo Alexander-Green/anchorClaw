@@ -4,6 +4,7 @@ import { resolveSessionsSearchState } from "../../config.js";
 import { memoryGetFromDb } from "../../memory/get.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { canAccessSessionPathByVisibility } from "../../memory/sessions-visibility.js";
+import { resolveSessionSearchMode } from "../session-search-mode.js";
 import {
   ensureToolRuntimeReady,
   resolveRuntimeToolWorkspace,
@@ -12,11 +13,23 @@ import {
 
 export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegistrationParams) {
   const api = ctx.api;
+  const registeredSessionSearchMode = resolveSessionSearchMode(api);
+  const sessionsDescription =
+    registeredSessionSearchMode === "legacy-anchorclaw"
+      ? "Legacy OpenClaw sessions/<agentId>/<file> paths are also accepted when sessions search is enabled."
+      : "Use OpenClaw sessions_search and sessions_history for conversation transcripts.";
   api.registerTool((toolCtx: OpenClawPluginToolContext) => ({
     name: "memory_get",
     label: "Memory Get",
-    description:
-      "Read memory content by path.\n\nRules:\n- Pass lookup as a synthetic DB path returned by memory_search/memory_store (e.g. db-memory/items/<uuid>.md), or sessions/<agentId>/<file>, or MEMORY.md (virtual snapshot), or memory/YYYY-MM-DD.md (DB-backed daily memory).\n- OpenClaw-compatible aliases: you may pass { path, from, lines } instead of { lookup, fromLine, lineCount }.\n- Content is returned as a bounded excerpt (use fromLine/lineCount to paginate).",
+    description: [
+      "Read memory content by path.",
+      "",
+      "Rules:",
+      "- Pass lookup as a synthetic DB path returned by memory_search/memory_store (e.g. db-memory/items/<uuid>.md), MEMORY.md (virtual snapshot), or memory/YYYY-MM-DD.md (DB-backed daily memory).",
+      `- ${sessionsDescription}`,
+      "- OpenClaw-compatible aliases: you may pass { path, from, lines } instead of { lookup, fromLine, lineCount }.",
+      "- Content is returned as a bounded excerpt (use fromLine/lineCount to paginate).",
+    ].join("\n"),
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -31,6 +44,39 @@ export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegis
       },
     },
     async execute(_toolCallId: string, params: unknown) {
+      const record = (params ?? {}) as any;
+      const lookup =
+        typeof record.lookup === "string" && record.lookup.trim()
+          ? String(record.lookup)
+          : typeof record.path === "string" && record.path.trim()
+            ? String(record.path)
+            : "";
+      const fromLine = typeof record.fromLine === "number" ? record.fromLine : record.from;
+      const lineCount = typeof record.lineCount === "number" ? record.lineCount : record.lines;
+      if (!lookup.trim()) {
+        return {
+          content: [{ type: "text", text: "anchorclaw: memory_get requires lookup (or path)" }],
+          details: { disabled: true, error: "lookup required" },
+        };
+      }
+      if (
+        registeredSessionSearchMode === "native-openclaw" &&
+        lookup.trim().startsWith("sessions/")
+      ) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "anchorclaw: session transcripts are managed by OpenClaw; use sessions_search and sessions_history",
+            },
+          ],
+          details: {
+            disabled: true,
+            error: "sessions source managed by OpenClaw",
+            replacementTools: ["sessions_search", "sessions_history"],
+          },
+        };
+      }
       const unavailable = await ensureToolRuntimeReady(ctx, ensureStartupBootstrap);
       if (unavailable) return unavailable;
       await ctx.ensureReady();
@@ -53,21 +99,6 @@ export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegis
         configuredExternalId: ctx.cfg?.identity?.externalId,
       });
       const limits = resolveMemoryLimits(ctx.cfg!);
-      const record = (params ?? {}) as any;
-      const lookup =
-        typeof record.lookup === "string" && record.lookup.trim()
-          ? String(record.lookup)
-          : typeof record.path === "string" && record.path.trim()
-            ? String(record.path)
-            : "";
-      const fromLine = typeof record.fromLine === "number" ? record.fromLine : record.from;
-      const lineCount = typeof record.lineCount === "number" ? record.lineCount : record.lines;
-      if (!lookup.trim()) {
-        return {
-          content: [{ type: "text", text: "anchorclaw: memory_get requires lookup (or path)" }],
-          details: { disabled: true, error: "lookup required" },
-        };
-      }
       const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
       const sessionsVisibility = sessionsSearch.visibility;
       if (!sessionsSearch.effective && lookup.trim().startsWith("sessions/")) {

@@ -93,6 +93,44 @@ beforeEach(() => {
 });
 
 describe("createAnchorClawMemorySearchManager.sync", () => {
+  it("hands session search to modern OpenClaw without touching the legacy index", async () => {
+    const runtime = {
+      ...buildRuntime(),
+      version: "2026.8.1-beta.1",
+    };
+    const progress = vi.fn();
+    const manager = createAnchorClawMemorySearchManager({
+      api: { runtime } as any,
+      cfg: {
+        postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+        sessions: { search: { enabled: true }, visibility: "current" },
+      } as any,
+      ensureReady: async () => undefined,
+      getPool: () => ({ query: vi.fn() }) as any,
+      agentId: "main",
+    });
+
+    await expect(manager.search("needle", { sources: ["sessions"] })).resolves.toEqual([]);
+    await manager.sync?.({ progress });
+
+    expect(memorySearchSessionsIndexDb).not.toHaveBeenCalled();
+    expect(syncSessionsIndexDb).not.toHaveBeenCalled();
+    expect(syncVisibleSessionsIndexDb).not.toHaveBeenCalled();
+    expect(progress).toHaveBeenCalledWith({
+      completed: 1,
+      total: 1,
+      label: "sessions managed by OpenClaw",
+    });
+    expect(manager.status()).toMatchObject({
+      sources: ["memory"],
+      custom: {
+        sessionsSearchEffective: false,
+        sessionsSearchMode: "native-openclaw",
+        sessionsSearchReason: "native_openclaw",
+      },
+    });
+  });
+
   it("in visible visibility syncs only agents that share the resolved workspace", async () => {
     const manager = createAnchorClawMemorySearchManager({
       api: {

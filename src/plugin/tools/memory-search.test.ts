@@ -633,6 +633,84 @@ describe("memory_search tool exactTop1 metadata", () => {
     expect(memorySearchSessionsMock).not.toHaveBeenCalled();
   });
 
+  it("redirects sessions corpus to native OpenClaw search on modern hosts", async () => {
+    const { ctx, registerTool } = buildCtx();
+    ctx.api.runtime.version = "2026.8.1-beta.1";
+    ctx.durableState = {
+      overall: "blocked",
+      migrations: "failed",
+      reason: "migrations_failed: database unavailable",
+    };
+    ctx.startupCriticalFailure = "migrations_failed: database unavailable";
+    ctx.ensureReady.mockRejectedValue(new Error("database unavailable"));
+    const ensureSessionsIndexBootstrapped = vi.fn(async () => undefined);
+    const ensureStartupBootstrap = vi.fn(async () => {
+      throw new Error("bootstrap must not run");
+    });
+    registerMemorySearchTool({
+      ctx,
+      invalidatePromptMemory: vi.fn(),
+      ensureSessionsIndexBootstrapped,
+      ensureStartupBootstrap,
+    });
+    const def = materializeRegisteredTool(registerTool);
+
+    const result = await def.execute("toolcall-native-sessions", {
+      query: "needle",
+      corpus: "sessions",
+    });
+
+    expect(def.description).toContain("use sessions_search and sessions_history");
+    expect(result.content[0].text).toContain("Retry this query with sessions_search");
+    expect(result.content[0].text).not.toContain("No results found");
+    expect(result.details.meta.sessions).toMatchObject({
+      configured: true,
+      effective: false,
+      mode: "native-openclaw",
+      reason: "native_openclaw",
+      replacementTool: "sessions_search",
+    });
+    expect(ensureStartupBootstrap).not.toHaveBeenCalled();
+    expect(ctx.ensureReady).not.toHaveBeenCalled();
+    expect(ctx.getPool).not.toHaveBeenCalled();
+    expect(resolveScopeMock).not.toHaveBeenCalled();
+    expect(ensureSessionsIndexBootstrapped).not.toHaveBeenCalled();
+    expect(memorySearchSessionsIndexDbMock).not.toHaveBeenCalled();
+    expect(memorySearchSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("makes native session exclusion explicit for corpus=all", async () => {
+    (memorySearchDbMock as any).mockResolvedValueOnce([
+      {
+        corpus: "memory",
+        path: "db-memory/items/1.md",
+        id: "1",
+        title: "saved fact",
+        kind: "note",
+        score: 1.2,
+        snippet: "saved fact",
+      },
+    ] as any[]);
+    const { ctx, registerTool } = buildCtx();
+    ctx.api.runtime.version = "2026.8.1-beta.1";
+    registerMemorySearchTool({
+      ctx,
+      invalidatePromptMemory: vi.fn(),
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+    const def = materializeRegisteredTool(registerTool);
+
+    const result = await def.execute("toolcall-native-all", { query: "saved", corpus: "all" });
+
+    expect(result.content[0].text).toContain("corpus=all covers AnchorClaw memory only");
+    expect(result.content[0].text).toContain("Use sessions_search separately");
+    expect(result.details.meta.sessions).toMatchObject({
+      mode: "native-openclaw",
+      reason: "native_openclaw",
+      replacementTool: "sessions_search",
+    });
+  });
+
   it("excludes sessions from corpus=all when opt-in is disabled", async () => {
     (memorySearchDbMock as any).mockResolvedValueOnce([
       {

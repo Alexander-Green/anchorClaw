@@ -3,6 +3,7 @@ import { resolveSessionsDirForAgent } from "../../memory/sessions.js";
 import {
   resolveSessionsSearchState,
 } from "../../config.js";
+import { resolveSessionSearchMode } from "../session-search-mode.js";
 import { scanLegacyWorkspace } from "../../importer.js";
 import {
   inspectSemanticSchema,
@@ -264,8 +265,20 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
         }
 
         const sessionsSearch = resolveSessionsSearchState(ctx.cfg);
+        const sessionSearchMode = resolveSessionSearchMode(api);
         const sessionsVisibility = sessionsSearch.visibility;
-        const sessionsEnabled = sessionsSearch.effective;
+        const sessionsEnabled =
+          sessionsSearch.effective && sessionSearchMode === "legacy-anchorclaw";
+        if (sessionSearchMode === "native-openclaw") {
+          base.sessions = {
+            enabled: false,
+            searchEnabled: sessionsSearch.configured,
+            effectiveEnabled: false,
+            mode: sessionSearchMode,
+            visibility: sessionsVisibility,
+            reasonCode: "native_openclaw",
+          };
+        } else {
         try {
           const target = getWorkspaceTarget();
           const agentId = target.agentId;
@@ -290,7 +303,8 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
           base.sessions = {
             enabled: sessionsEnabled,
             searchEnabled: sessionsSearch.configured,
-            effectiveEnabled: sessionsSearch.effective,
+            effectiveEnabled: sessionsEnabled,
+            mode: sessionSearchMode,
             visibility: sessionsVisibility,
             ...(sessionsSearch.reason ? { reasonCode: sessionsSearch.reason } : {}),
             stateDir,
@@ -303,11 +317,13 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
           base.sessions = {
             enabled: sessionsEnabled,
             searchEnabled: sessionsSearch.configured,
-            effectiveEnabled: sessionsSearch.effective,
+            effectiveEnabled: sessionsEnabled,
+            mode: sessionSearchMode,
             visibility: sessionsVisibility,
             ...(sessionsSearch.reason ? { reasonCode: sessionsSearch.reason } : {}),
             error: error instanceof Error ? error.message : String(error),
           };
+        }
         }
 
         try {

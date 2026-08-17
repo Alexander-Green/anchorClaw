@@ -76,8 +76,9 @@ export type MemoryStatusCheckResult = {
     enabled: boolean;
     searchEnabled?: boolean;
     effectiveEnabled?: boolean;
+    mode?: "legacy-anchorclaw" | "native-openclaw";
     visibility: "off" | "current" | "visible";
-    reasonCode?: "search_disabled" | "visibility_off";
+    reasonCode?: "search_disabled" | "visibility_off" | "native_openclaw";
     stateDir?: string;
     agentSessionsDir?: string;
     exists?: boolean;

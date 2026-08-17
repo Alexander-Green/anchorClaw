@@ -22,6 +22,7 @@ import {
   resolveAgentWorkspacePeerIds,
   resolveWorkspaceTargets,
 } from "../workspace-targets.js";
+import { resolveSessionSearchMode } from "../plugin/session-search-mode.js";
 
 type MemorySource = "memory" | "sessions";
 
@@ -150,8 +151,10 @@ export function createAnchorClawMemorySearchManager(
 ): MemorySearchManager {
   const { api, cfg } = params;
   const sessionsSearch = resolveSessionsSearchState(cfg);
+  const sessionSearchMode = resolveSessionSearchMode(api);
   const sessionsVisibility = sessionsSearch.visibility;
-  const sessionsEnabled = sessionsSearch.effective;
+  const sessionsEnabled =
+    sessionsSearch.effective && sessionSearchMode === "legacy-anchorclaw";
   const semanticLayer = resolveSemanticLayerState(cfg);
   const resolveSemanticMemorySearch = () =>
     resolveAgentMemorySearchConfig({
@@ -458,8 +461,13 @@ export function createAnchorClawMemorySearchManager(
           limits,
           sessionsMaxFileBytes: limits.sessionsMaxFileBytes,
           sessionsSearchConfigured: sessionsSearch.configured,
-          sessionsSearchEffective: sessionsSearch.effective,
-          ...(sessionsSearch.reason ? { sessionsSearchReason: sessionsSearch.reason } : {}),
+          sessionsSearchEffective: sessionsEnabled,
+          sessionsSearchMode: sessionSearchMode,
+          ...(sessionSearchMode === "native-openclaw"
+            ? { sessionsSearchReason: "native_openclaw" }
+            : sessionsSearch.reason
+              ? { sessionsSearchReason: sessionsSearch.reason }
+              : {}),
           sessionsVisibility,
           semanticConfigured: semanticLayer.configured,
           semanticEnabled: semanticLayer.enabled,
@@ -480,6 +488,16 @@ export function createAnchorClawMemorySearchManager(
     },
 
     async sync(syncParams) {
+      if (sessionSearchMode === "native-openclaw") {
+        if (typeof syncParams?.progress === "function") {
+          syncParams.progress({
+            completed: 1,
+            total: 1,
+            label: "sessions managed by OpenClaw",
+          });
+        }
+        return;
+      }
       if (!sessionsEnabled) {
         if (typeof syncParams?.progress === "function") {
           syncParams.progress({ completed: 1, total: 1, label: "sessions disabled" });

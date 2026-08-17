@@ -132,12 +132,16 @@ function buildSourceMessage(params: {
   fileHash: string;
   transcript: string;
 }): string {
+  const safeTranscript = params.transcript.replaceAll(
+    /(?:BEGIN|END)_UNTRUSTED_DAILY_MEMORY/g,
+    "[AnchorClaw escaped a source boundary token]",
+  );
   return [
     `Source path: ${params.sourcePath}`,
     `Transcript hash: ${params.fileHash}`,
     "",
     "BEGIN_UNTRUSTED_DAILY_MEMORY",
-    params.transcript,
+    safeTranscript,
     "END_UNTRUSTED_DAILY_MEMORY",
   ].join("\n");
 }

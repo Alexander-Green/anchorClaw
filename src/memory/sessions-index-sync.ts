@@ -1,12 +1,12 @@
 import type { PostgresPool } from "../postgres.js";
 import path from "node:path";
-import {
-  buildSessionEntry,
-  listSessionFilesForAgent,
-  sessionPathForFile,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { resolveSessionsDirForAgent } from "./sessions.js";
 import { normalizeSessionLookupPath } from "./sessions-index.js";
+import {
+  buildLegacySessionEntry,
+  legacySessionPathForFile,
+  listLegacySessionFilesForAgent,
+} from "./legacy-session-files.js";
 
 function splitIndexedLines(content: string): string[] {
   return content.split("\n");
@@ -91,7 +91,7 @@ export async function syncSessionsIndexDb(params: {
     sessionFiles: params.sessionFiles,
     agentId: params.agentId,
   });
-  const allFiles = targetFiles ?? (await listSessionFilesForAgent(params.agentId));
+  const allFiles = targetFiles ?? (await listLegacySessionFilesForAgent(params.agentId));
   const activePaths = new Set<string>();
 
   let indexedFiles = 0;
@@ -99,7 +99,7 @@ export async function syncSessionsIndexDb(params: {
   let skippedFiles = 0;
 
   for (const absPath of allFiles) {
-    const entry = await buildSessionEntry(absPath);
+    const entry = await buildLegacySessionEntry(absPath);
     if (!entry) {
       skippedFiles += 1;
       continue;
@@ -169,7 +169,7 @@ export async function syncSessionsIndexDb(params: {
           entry.size,
           lines.length,
           JSON.stringify({
-            sdkPath: sessionPathForFile(absPath),
+            sdkPath: legacySessionPathForFile(absPath),
             generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
             generatedByCronRun: entry.generatedByCronRun === true,
           }),
