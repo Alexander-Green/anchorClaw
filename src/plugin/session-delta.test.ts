@@ -64,6 +64,7 @@ function buildRuntime(params?: {
   agents?: Array<{ id: string; default?: boolean; workspace: string }>;
   deltaBytes?: number;
   deltaMessages?: number;
+  subscribe?: (handler: (update: unknown) => void) => () => void;
 }) {
   const agents = params?.agents ?? [
     { id: "main", default: true, workspace: "/work/main" },
@@ -82,10 +83,12 @@ function buildRuntime(params?: {
         current: () => ({ agents: { list: agents } }),
       },
       events: {
-        onSessionTranscriptUpdate: vi.fn((handler: (update: unknown) => void) => {
-          api.__sessionTranscriptHandler = handler;
-          return vi.fn();
-        }),
+        onSessionTranscriptUpdate:
+          params?.subscribe ??
+          vi.fn((handler: (update: unknown) => void) => {
+            api.__sessionTranscriptHandler = handler;
+            return vi.fn();
+          }),
       },
     },
   } as any;
@@ -226,6 +229,87 @@ describe("session index bootstrap scope", () => {
 });
 
 describe("session delta retry", () => {
+  it("keeps the newer runtime active when the older overlapping runtime cleans up", async () => {
+    const unsubscribe = vi.fn();
+    let listener: ((update: unknown) => void) | undefined;
+    const subscribe = vi.fn((handler: (update: unknown) => void) => {
+      listener = handler;
+      return unsubscribe;
+    });
+    const first = buildRuntime({ subscribe });
+    const second = buildRuntime({ subscribe });
+
+    first.runtime.ensureSessionDeltaListener();
+    second.runtime.ensureSessionDeltaListener();
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    listener?.({ sessionFile: "/tmp/sessions/main/new-owner.jsonl" });
+    await Promise.resolve();
+    expect(second.api.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("new-owner.jsonl"),
+    );
+    expect(first.api.logger.info).not.toHaveBeenCalled();
+
+    first.runtime.cleanupSessionDelta();
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    listener?.({ sessionFile: "/tmp/sessions/main/still-active.jsonl" });
+    await Promise.resolve();
+    expect(second.api.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("still-active.jsonl"),
+    );
+
+    second.runtime.cleanupSessionDelta();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the older runtime if the newer overlapping runtime cleans up first", async () => {
+    const unsubscribe = vi.fn();
+    let listener: ((update: unknown) => void) | undefined;
+    const subscribe = vi.fn((handler: (update: unknown) => void) => {
+      listener = handler;
+      return unsubscribe;
+    });
+    const first = buildRuntime({ subscribe });
+    const second = buildRuntime({ subscribe });
+
+    first.runtime.ensureSessionDeltaListener();
+    second.runtime.ensureSessionDeltaListener();
+    second.runtime.cleanupSessionDelta();
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
+    listener?.({ sessionFile: "/tmp/sessions/main/fallback-owner.jsonl" });
+    await Promise.resolve();
+    expect(first.api.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("fallback-owner.jsonl"),
+    );
+    expect(second.api.logger.info).not.toHaveBeenCalled();
+
+    first.runtime.cleanupSessionDelta();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a stale listener entry left by an older hot-loaded module", () => {
+    const staleUnsubscribe = vi.fn();
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn((_handler: (update: unknown) => void) => unsubscribe);
+    const registryKey = Symbol.for("@alexandrgreen/anchorclaw.sessionDeltaListenerRegistry");
+    const registry = Reflect.get(globalThis, registryKey) as WeakMap<object, object>;
+    registry.set(subscribe, {
+      owner: {},
+      unsubscribe: staleUnsubscribe,
+    });
+    const current = buildRuntime({ subscribe });
+
+    current.runtime.ensureSessionDeltaListener();
+
+    expect(staleUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    current.runtime.cleanupSessionDelta();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   it("requeues a failed target and retries it without a new transcript event", async () => {
     syncSessionsIndexDb
       .mockRejectedValueOnce(new Error("db down"))
@@ -265,5 +349,6 @@ describe("session delta retry", () => {
     expect(ctx.sessionDelta.pendingByPath.size).toBe(0);
     expect(ctx.sessionDelta.retryAttemptsByTarget.size).toBe(0);
     expect(ctx.sessionDelta.timer).toBeNull();
+    runtime.cleanupSessionDelta();
   });
 });

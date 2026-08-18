@@ -22,6 +22,33 @@ import { resolveSessionSearchMode } from "./session-search-mode.js";
 const SESSION_DELTA_DEBOUNCE_MS = 5_000;
 const SESSION_DELTA_RETRY_BASE_DELAY_MS = 2_000;
 const SESSION_DELTA_RETRY_MAX_DELAY_MS = 30_000;
+const SESSION_DELTA_LISTENER_REGISTRY_KEY = Symbol.for(
+  "@alexandrgreen/anchorclaw.sessionDeltaListenerRegistry",
+);
+
+type SessionTranscriptSubscribe = OpenClawPluginApi["runtime"]["events"]["onSessionTranscriptUpdate"];
+type SessionTranscriptUpdate = {
+  sessionFile?: unknown;
+  sessionKey?: unknown;
+  agentId?: unknown;
+};
+type SharedSessionDeltaListener = {
+  consumers: Map<object, (update: SessionTranscriptUpdate) => void>;
+  unsubscribe: () => void;
+};
+
+function resolveSharedSessionDeltaListeners(): WeakMap<
+  SessionTranscriptSubscribe,
+  SharedSessionDeltaListener
+> {
+  const existing = Reflect.get(globalThis, SESSION_DELTA_LISTENER_REGISTRY_KEY) as unknown;
+  if (existing instanceof WeakMap) {
+    return existing as WeakMap<SessionTranscriptSubscribe, SharedSessionDeltaListener>;
+  }
+  const created = new WeakMap<SessionTranscriptSubscribe, SharedSessionDeltaListener>();
+  Reflect.set(globalThis, SESSION_DELTA_LISTENER_REGISTRY_KEY, created);
+  return created;
+}
 
 function resolveSessionAgentId(lookup: string): string | null {
   const parts = lookup.split("/").filter(Boolean);
@@ -50,6 +77,8 @@ export function createSessionDeltaRuntime(params: {
 }): SessionDeltaRuntime {
   const { api, ctx } = params;
   const sessionSearchMode = resolveSessionSearchMode(api);
+  const listenerOwner = {};
+  const sharedSessionDeltaListeners = resolveSharedSessionDeltaListeners();
 
   const buildTargetKey = (target: Pick<PendingSessionDelta, "workspaceDir" | "agentId">): string =>
     `${target.workspaceDir}\u0000${target.agentId}`;
@@ -349,7 +378,7 @@ export function createSessionDeltaRuntime(params: {
     if (!resolveSessionsSearchState(ctx.cfg).effective) {
       return;
     }
-    const subscribe = (api as any)?.runtime?.events?.onSessionTranscriptUpdate;
+    const subscribe = api.runtime.events?.onSessionTranscriptUpdate;
     if (typeof subscribe !== "function") {
       api.logger.warn("anchorclaw: runtime.events.onSessionTranscriptUpdate unavailable; sessions delta sync disabled");
       return;
@@ -361,11 +390,9 @@ export function createSessionDeltaRuntime(params: {
         api.logger.warn(`anchorclaw: ignored session delta update ${reason} (${key}) [count=${next}]`);
       }
     };
-    const resolveSessionDeltaTarget = async (update: {
-      sessionFile?: unknown;
-      sessionKey?: unknown;
-      agentId?: unknown;
-    }): Promise<PendingSessionDelta | null> => {
+    const resolveSessionDeltaTarget = async (
+      update: SessionTranscriptUpdate,
+    ): Promise<PendingSessionDelta | null> => {
       const sessionFile = typeof update.sessionFile === "string" ? update.sessionFile.trim() : "";
       if (!sessionFile) {
         return null;
@@ -420,11 +447,7 @@ export function createSessionDeltaRuntime(params: {
         ...(workspaceTarget.sessionKey ? { sessionKey: workspaceTarget.sessionKey } : {}),
       };
     };
-    ctx.sessionDelta.unsubscribe = subscribe((update: {
-      sessionFile?: unknown;
-      sessionKey?: unknown;
-      agentId?: unknown;
-    }) => {
+    const consumeUpdate = (update: SessionTranscriptUpdate) => {
       if (ctx.sessionDelta.closed) {
         return;
       }
@@ -443,7 +466,41 @@ export function createSessionDeltaRuntime(params: {
         );
         scheduleSessionDeltaSync(target);
       })();
-    });
+    };
+    let sharedListener = sharedSessionDeltaListeners.get(subscribe);
+    if (sharedListener && !(sharedListener.consumers instanceof Map)) {
+      try {
+        sharedListener.unsubscribe();
+      } catch (error) {
+        api.logger.warn(
+          `anchorclaw: failed to replace stale transcript listener (${error instanceof Error ? error.message : String(error)})`,
+        );
+      } finally {
+        sharedSessionDeltaListeners.delete(subscribe);
+        sharedListener = undefined;
+      }
+    }
+    if (!sharedListener) {
+      const consumers = new Map<object, (update: SessionTranscriptUpdate) => void>();
+      const unsubscribe = subscribe((update: SessionTranscriptUpdate) => {
+        const activeConsumer = Array.from(consumers.values()).at(-1);
+        activeConsumer?.(update);
+      });
+      sharedListener = { consumers, unsubscribe };
+      sharedSessionDeltaListeners.set(subscribe, sharedListener);
+    }
+    sharedListener.consumers.set(listenerOwner, consumeUpdate);
+    ctx.sessionDelta.unsubscribe = () => {
+      const activeListener = sharedSessionDeltaListeners.get(subscribe);
+      if (!activeListener || !activeListener.consumers.delete(listenerOwner)) {
+        return;
+      }
+      if (activeListener.consumers.size > 0) {
+        return;
+      }
+      sharedSessionDeltaListeners.delete(subscribe);
+      activeListener.unsubscribe();
+    };
   };
 
   const cleanupSessionDelta = () => {
