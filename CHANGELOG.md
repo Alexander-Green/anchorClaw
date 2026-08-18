@@ -14,6 +14,9 @@
 - Honored OpenClaw startup-context controls for enablement, daily-memory days,
   per-entry characters, and total characters while preserving the same
   defaults on older supported hosts.
+- Preserved real session-index line ranges in search citations and allowed
+  `memory_get` to read the `path#Lx` / `path#Lx-Ly` citations returned by
+  `memory_search`.
 
 ### Compatibility
 

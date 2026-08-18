@@ -58,7 +58,7 @@ describe("memory_get tool", () => {
     const def = factory({});
 
     const result = await def.execute("toolcall-native-get", {
-      lookup: "sessions/main/session.jsonl",
+      lookup: "sessions/main/session.jsonl#L5-L8",
     });
 
     expect(result.content[0].text).toContain("use sessions_search and sessions_history");

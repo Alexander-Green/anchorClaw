@@ -5,6 +5,7 @@ import { memoryGetFromDb } from "../../memory/get.js";
 import { resolveMemoryLimits } from "../../memory/limits.js";
 import { canAccessSessionPathByVisibility } from "../../memory/sessions-visibility.js";
 import { resolveSessionSearchMode } from "../session-search-mode.js";
+import { parseMemoryLookupReference } from "./memory-lookup-reference.js";
 import {
   ensureToolRuntimeReady,
   resolveRuntimeToolWorkspace,
@@ -26,6 +27,7 @@ export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegis
       "",
       "Rules:",
       "- Pass lookup as a synthetic DB path returned by memory_search/memory_store (e.g. db-memory/items/<uuid>.md), MEMORY.md (virtual snapshot), or memory/YYYY-MM-DD.md (DB-backed daily memory).",
+      "- A memory_search citation suffix such as #L5 or #L5-L8 is accepted and used as the default excerpt location.",
       `- ${sessionsDescription}`,
       "- OpenClaw-compatible aliases: you may pass { path, from, lines } instead of { lookup, fromLine, lineCount }.",
       "- Content is returned as a bounded excerpt (use fromLine/lineCount to paginate).",
@@ -45,15 +47,19 @@ export function registerMemoryGetTool({ ctx, ensureStartupBootstrap }: ToolRegis
     },
     async execute(_toolCallId: string, params: unknown) {
       const record = (params ?? {}) as any;
-      const lookup =
+      const rawLookup =
         typeof record.lookup === "string" && record.lookup.trim()
           ? String(record.lookup)
           : typeof record.path === "string" && record.path.trim()
             ? String(record.path)
             : "";
-      const fromLine = typeof record.fromLine === "number" ? record.fromLine : record.from;
-      const lineCount = typeof record.lineCount === "number" ? record.lineCount : record.lines;
-      if (!lookup.trim()) {
+      const lookupReference = parseMemoryLookupReference(rawLookup);
+      const lookup = lookupReference.lookup;
+      const explicitFromLine = typeof record.fromLine === "number" ? record.fromLine : record.from;
+      const explicitLineCount = typeof record.lineCount === "number" ? record.lineCount : record.lines;
+      const fromLine = typeof explicitFromLine === "number" ? explicitFromLine : lookupReference.fromLine;
+      const lineCount = typeof explicitLineCount === "number" ? explicitLineCount : lookupReference.lineCount;
+      if (!lookup) {
         return {
           content: [{ type: "text", text: "anchorclaw: memory_get requires lookup (or path)" }],
           details: { disabled: true, error: "lookup required" },

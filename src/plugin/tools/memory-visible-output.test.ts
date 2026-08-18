@@ -92,4 +92,37 @@ describe("memory search visible output", () => {
 
     expect(visible).toContain("Entry type: session capture from /new or /reset.");
   });
+
+  it("preserves the indexed line range in visible and structured citations", () => {
+    const params = {
+      hits: [
+        {
+          corpus: "sessions",
+          path: "sessions/main/session.jsonl",
+          snippet: "matching transcript excerpt",
+          score: 0.9,
+          startLine: 5,
+          endLine: 8,
+        },
+      ],
+      retrievalMode: "sessions_index",
+      queryMode: "contextual" as const,
+      exactTop1: false,
+      exactTop1Value: null,
+      recommendedAction: "inspect_top" as const,
+      provider: "anchorclaw",
+      model: "postgres-fts",
+    };
+
+    const visible = formatSearchLikeVisibleOutput(params);
+    const details = buildSearchLikeDetailsEnvelope(params);
+
+    expect(visible).toContain("sessions/main/session.jsonl#L5-L8");
+    expect(details.results[0]).toMatchObject({
+      path: "sessions/main/session.jsonl",
+      startLine: 5,
+      endLine: 8,
+      citation: "sessions/main/session.jsonl#L5-L8",
+    });
+  });
 });

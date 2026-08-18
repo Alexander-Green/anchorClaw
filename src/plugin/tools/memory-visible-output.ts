@@ -8,7 +8,27 @@ type Hit = {
   title?: string;
   canonicalKey?: string;
   sourceKind?: string;
+  startLine?: number;
+  endLine?: number;
 };
+
+function positiveLineNumber(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+function resolveHitLineRange(hit: Hit): { startLine: number; endLine: number } {
+  const startLine = positiveLineNumber(hit.startLine, 1);
+  return {
+    startLine,
+    endLine: Math.max(startLine, positiveLineNumber(hit.endLine, startLine)),
+  };
+}
+
+function formatCitation(path: string, startLine: number, endLine: number): string {
+  if (!path) return "";
+  const range = startLine === endLine ? `#L${startLine}` : `#L${startLine}-L${endLine}`;
+  return `${path}${range}`;
+}
 
 export function formatSearchLikeVisibleOutput(params: {
   hits: Hit[];
@@ -37,9 +57,8 @@ export function formatSearchLikeVisibleOutput(params: {
     const corpus = typeof hit.corpus === "string" ? hit.corpus : "memory";
     const canonicalKey = typeof hit.canonicalKey === "string" ? hit.canonicalKey : "";
     const sourceKind = typeof hit.sourceKind === "string" ? hit.sourceKind : "";
-    const startLine = 1;
-    const endLine = 1;
-    const citation = path ? `${path}#L${startLine}` : "";
+    const { startLine, endLine } = resolveHitLineRange(hit);
+    const citation = formatCitation(path, startLine, endLine);
     const notes: string[] = [];
     if (corpus === "daily") {
       notes.push("Scope: date-specific daily memory.");
@@ -72,7 +91,7 @@ export function formatSearchLikeVisibleOutput(params: {
     lines.push(`Top exact match: ${params.exactTop1Value}`);
   }
   for (const [index, result] of results.entries()) {
-    const label = result.citation ? `${result.path}#L${result.startLine}` : result.path;
+    const label = result.citation || result.path;
     const corpusLabel = result.corpus === "daily" ? "daily DB entry" : result.corpus;
     lines.push("");
     lines.push(`${index + 1}. [${corpusLabel}] ${label} (score ${result.score.toFixed(3)})`);
@@ -115,9 +134,8 @@ export function buildSearchLikeDetailsEnvelope(params: {
     const corpus = typeof hit.corpus === "string" ? hit.corpus : "memory";
     const canonicalKey = typeof hit.canonicalKey === "string" ? hit.canonicalKey : "";
     const sourceKind = typeof hit.sourceKind === "string" ? hit.sourceKind : "";
-    const startLine = 1;
-    const endLine = 1;
-    const citation = path ? `${path}#L${startLine}` : "";
+    const { startLine, endLine } = resolveHitLineRange(hit);
+    const citation = formatCitation(path, startLine, endLine);
     const notes: string[] = [];
     if (corpus === "daily") {
       notes.push("Scope: date-specific daily memory.");
