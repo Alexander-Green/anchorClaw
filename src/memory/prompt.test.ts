@@ -116,42 +116,12 @@ describe("buildPromptMemorySection", () => {
         {
           id: "s1",
           path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
-          content: "assistant: long recap ".repeat(80),
-          sourceKind: "session_memory",
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-      ],
-      maxTotalChars: 1_400,
-      maxPathChars: 80,
-      maxEntryChars: 300,
-      maxSessionCaptureEntryChars: 120,
-      maxDailyEntries: 4,
-      maxSessionCaptures: 2,
-    });
-    const text = lines.join("\n");
-
-    expect(text).toContain("[Untrusted daily memory: memory/2026-06-03.md]");
-    expect(text).toContain("memory/2026-06-03.md");
-    expect(text).toContain("[Untrusted daily memory: recent-session-capture-1]");
-    expect(text).not.toContain("memory/2026-06-03-0915-a1b2c3d4-session-capture.md");
-    expect(text).toContain("assistant: long recap");
-    expect(text).not.toContain("assistant: long recap ".repeat(20));
-  });
-
-  it("keeps the tail of session captures in startup prompt excerpts", () => {
-    const lines = buildPromptDailySection({
-      entries: [
-        {
-          id: "s1",
-          path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
           content: [
-            "old context 1 ".repeat(8).trim(),
-            "old context 2 ".repeat(8).trim(),
-            "old context 3 ".repeat(8).trim(),
-            "SESSION_MARKER_20260603_GAMMA",
-            "ORDER_MARKER_20260603_DELTA",
-            "assistant: acknowledged both markers",
+            "### Conversation Summary",
+            "user: earlier question",
+            "assistant: earlier answer",
+            "user: latest question",
+            "assistant: latest concise recap",
           ].join("\n"),
           sourceKind: "session_memory",
           createdAt: new Date().toISOString(),
@@ -161,18 +131,53 @@ describe("buildPromptMemorySection", () => {
       maxTotalChars: 1_400,
       maxPathChars: 80,
       maxEntryChars: 300,
-      maxSessionCaptureEntryChars: 140,
+      maxSessionCaptureEntryChars: 70,
+      maxDailyEntries: 4,
+      maxSessionCaptures: 2,
+    });
+    const text = lines.join("\n");
+
+    expect(text).toContain("[Untrusted daily memory: memory/2026-06-03.md]");
+    expect(text).toContain("memory/2026-06-03.md");
+    expect(text).toContain("[Untrusted daily memory: recent-session-capture-1]");
+    expect(text).not.toContain("memory/2026-06-03-0915-a1b2c3d4-session-capture.md");
+    expect(text).toContain("assistant: latest concise recap");
+    expect(text).not.toContain("earlier question");
+  });
+
+  it("keeps complete recent messages from sanitized session captures", () => {
+    const lines = buildPromptDailySection({
+      entries: [
+        {
+          id: "s1",
+          path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
+          content: [
+            "### Conversation Summary",
+            `user: ${"old context ".repeat(20).trim()}`,
+            "assistant: NO_REPLY",
+            "user: SESSION_MARKER_20260603_GAMMA",
+            "assistant: acknowledged ORDER_MARKER_20260603_DELTA",
+          ].join("\n"),
+          sourceKind: "session_memory",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      maxTotalChars: 1_400,
+      maxPathChars: 80,
+      maxEntryChars: 300,
+      maxSessionCaptureEntryChars: 150,
       maxDailyEntries: 4,
       maxSessionCaptures: 2,
     });
     const text = lines.join("\n");
 
     expect(text).toContain("[Untrusted daily memory: recent-session-capture-1]");
-    expect(text).toContain("...[earlier session capture truncated]...");
+    expect(text).toContain("...[earlier session messages omitted]...");
     expect(text).toContain("SESSION_MARKER_20260603_GAMMA");
     expect(text).toContain("ORDER_MARKER_20260603_DELTA");
-    expect(text).toContain("assistant: acknowledged both markers");
-    expect(text).not.toContain("old context 1");
+    expect(text).not.toContain("NO_REPLY");
+    expect(text).not.toContain("old context");
   });
 
   it("fits a fresh session capture into the remaining startup budget after a large daily entry", () => {
@@ -190,12 +195,11 @@ describe("buildPromptMemorySection", () => {
           id: "s1",
           path: "memory/2026-06-03-0915-a1b2c3d4-session-capture.md",
           content: [
-            "older recap 1",
-            "older recap 2",
-            "older recap 3",
-            "SESSION_MARKER_20260603_GAMMA",
-            "ORDER_MARKER_20260603_DELTA",
-            "assistant: acknowledged both markers",
+            "### Conversation Summary",
+            "user: older recap 1",
+            "assistant: older recap 2",
+            "user: SESSION_MARKER_20260603_GAMMA",
+            "assistant: acknowledged ORDER_MARKER_20260603_DELTA",
           ].join("\n"),
           sourceKind: "session_memory",
           createdAt: new Date().toISOString(),
@@ -216,6 +220,6 @@ describe("buildPromptMemorySection", () => {
     expect(text).toContain("[Untrusted daily memory: recent-session-capture-1]");
     expect(text).toContain("SESSION_MARKER_20260603_GAMMA");
     expect(text).toContain("ORDER_MARKER_20260603_DELTA");
-    expect(text).toContain("assistant: acknowledged both markers");
+    expect(text).toContain("assistant: acknowledged ORDER_MARKER_20260603_DELTA");
   });
 });

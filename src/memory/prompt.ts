@@ -1,5 +1,10 @@
 import type { PostgresPool } from "../postgres.js";
 import { queryPromptDailyEntries as queryDailyPromptEntries } from "./daily.js";
+import {
+  parseStoredSessionCaptureMessages,
+  selectRecentSessionCaptureMessages,
+  type SessionCaptureMessage,
+} from "./session-capture-content.js";
 
 // Prompt injection currently supports fact/note items (the MEMORY.md role).
 type MemoryItemType = "fact" | "note";
@@ -109,25 +114,6 @@ function trimStartupPromptContent(value: string, maxChars: number): string {
   }
   const headBudget = Math.max(0, maxChars - marker.length);
   return `${trimmed.slice(0, headBudget)}${marker}`;
-}
-
-function trimStartupPromptContentFromTail(value: string, maxChars: number): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= maxChars) {
-    return trimmed;
-  }
-  if (maxChars <= 0) {
-    return "";
-  }
-  const marker = "...[earlier session capture truncated]...\n";
-  if (marker.length >= maxChars) {
-    return marker.slice(0, maxChars);
-  }
-  const tailBudget = Math.max(0, maxChars - marker.length);
-  const rawTail = trimmed.slice(Math.max(0, trimmed.length - tailBudget));
-  const newlineIndex = rawTail.indexOf("\n");
-  const tail = newlineIndex >= 0 ? rawTail.slice(newlineIndex + 1) : rawTail;
-  return `${marker}${tail}`;
 }
 
 function sanitizePromptLabel(value: string): string {
@@ -324,8 +310,11 @@ export function buildPromptDailySection(params: {
 
   for (const entry of params.entries) {
     const isSessionCapture = entry.sourceKind === "session_memory";
+    const sessionCaptureMessages: SessionCaptureMessage[] | null = isSessionCapture
+      ? parseStoredSessionCaptureMessages(entry.content)
+      : null;
     if (isSessionCapture) {
-      if (renderedSessionCaptures >= maxSessionCaptures) {
+      if (renderedSessionCaptures >= maxSessionCaptures || sessionCaptureMessages?.length === 0) {
         continue;
       }
     } else if (renderedDailyEntries >= maxDailyEntries) {
@@ -339,8 +328,14 @@ export function buildPromptDailySection(params: {
 
     const renderBlock = (bodyChars: number) => {
       const nextBody = isSessionCapture
-        ? trimStartupPromptContentFromTail(entry.content, bodyChars)
+        ? selectRecentSessionCaptureMessages({
+            messages: sessionCaptureMessages ?? [],
+            maxChars: bodyChars,
+          })
         : trimStartupPromptContent(entry.content, bodyChars);
+      if (!nextBody) {
+        return null;
+      }
       // Match OpenClaw's quoted startup-memory handling: untrusted memory must not
       // be able to close the fenced block that contains it.
       const escapedBody = nextBody.replaceAll("```", "\\`\\`\\`");
@@ -360,6 +355,9 @@ export function buildPromptDailySection(params: {
     };
 
     let rendered = renderBlock(isSessionCapture ? maxSessionCaptureEntryChars : params.maxEntryChars);
+    if (!rendered) {
+      continue;
+    }
     if (used + rendered.block.length > params.maxTotalChars) {
       const remainingBudget = params.maxTotalChars - used;
       let low = 1;
@@ -369,7 +367,9 @@ export function buildPromptDailySection(params: {
       while (low <= high) {
         const mid = Math.floor((low + high) / 2);
         const candidate = renderBlock(mid);
-        if (candidate.block.length <= remainingBudget) {
+        if (!candidate) {
+          low = mid + 1;
+        } else if (candidate.block.length <= remainingBudget) {
           bestFit = candidate;
           low = mid + 1;
         } else {

@@ -3,6 +3,10 @@ import path from "node:path";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveUserAndWorkspaceScope } from "../identity.js";
 import { appendDailyBlockTx, resolveDailyLogicalDate } from "../memory/daily.js";
+import {
+  normalizeSessionCaptureMessages,
+  type SessionCaptureMessage,
+} from "../memory/session-capture-content.js";
 import type { PostgresPool } from "../postgres.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 import {
@@ -15,7 +19,8 @@ const SESSION_CAPTURE_SOURCE_TYPE = "session-capture";
 const SESSION_CAPTURE_SOURCE_KIND = "session_memory";
 const SESSION_CAPTURE_ROOT = path.posix.join(".anchorclaw", "session-capture");
 const SESSION_CAPTURE_MAX_MESSAGES = 15;
-const SESSION_CAPTURE_MAX_MESSAGE_CHARS = 1_200;
+// Leave room for the role prefix inside OpenClaw's default 1,200-char startup-file budget.
+const SESSION_CAPTURE_MAX_MESSAGE_CHARS = 1_000;
 const SESSION_CAPTURE_MAX_BLOCK_CHARS = 16_000;
 
 type BeforeResetEvent = {
@@ -29,11 +34,6 @@ type BeforeResetHookContext = {
   agentId?: unknown;
   sessionKey?: unknown;
   sessionId?: unknown;
-};
-
-type NormalizedSessionMessage = {
-  role: string;
-  content: string;
 };
 
 export type SessionCaptureResult =
@@ -78,79 +78,6 @@ function truncateText(value: string, maxChars: number): string {
     return value;
   }
   return `${value.slice(0, Math.max(0, maxChars - 20)).trimEnd()}\n[truncated]`;
-}
-
-function stringifyMessagePart(value: unknown): string {
-  if (!value || typeof value !== "object") {
-    return "";
-  }
-  const part = value as Record<string, unknown>;
-  const text =
-    nonEmptyString(part.text) ??
-    nonEmptyString(part.content) ??
-    nonEmptyString(part.value);
-  if (text) {
-    return text;
-  }
-  return "";
-}
-
-function extractMessageContent(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    for (const part of value) {
-      const text = stringifyMessagePart(part);
-      if (text) {
-        return text;
-      }
-    }
-    return "";
-  }
-  if (value && typeof value === "object") {
-    return stringifyMessagePart(value);
-  }
-  return "";
-}
-
-function hasInterSessionUserProvenance(message: Record<string, unknown>): boolean {
-  if (message.role !== "user") {
-    return false;
-  }
-  const provenance = message.provenance;
-  if (!provenance || typeof provenance !== "object") {
-    return false;
-  }
-  return (provenance as Record<string, unknown>).kind === "inter_session";
-}
-
-function normalizeSessionMessages(messages: unknown): NormalizedSessionMessage[] {
-  if (!Array.isArray(messages)) {
-    return [];
-  }
-
-  const normalized: NormalizedSessionMessage[] = [];
-  for (const raw of messages) {
-    if (!raw || typeof raw !== "object") {
-      continue;
-    }
-    const message = raw as Record<string, unknown>;
-    const role = nonEmptyString(message.role) ?? nonEmptyString(message.type);
-    if (role !== "user" && role !== "assistant") {
-      continue;
-    }
-    if (hasInterSessionUserProvenance(message)) {
-      continue;
-    }
-    const content = truncateText(extractMessageContent(message.content).trim(), SESSION_CAPTURE_MAX_MESSAGE_CHARS);
-    if (!content || content.startsWith("/")) {
-      continue;
-    }
-    normalized.push({ role, content });
-  }
-
-  return normalized.slice(-SESSION_CAPTURE_MAX_MESSAGES);
 }
 
 function resolveRuntimeTimezone(api: OpenClawPluginApi): string | undefined {
@@ -223,7 +150,7 @@ function formatSessionCaptureBlock(params: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
-  messages: NormalizedSessionMessage[];
+  messages: SessionCaptureMessage[];
 }): string {
   const lines = [
     `## Session Capture - ${params.capturedAtIso}`,
@@ -341,7 +268,11 @@ export async function captureBeforeResetSessionMemory(params: {
     return { status: "disabled" };
   }
 
-  const messages = normalizeSessionMessages(params.event?.messages);
+  const messages = normalizeSessionCaptureMessages({
+    messages: params.event?.messages,
+    maxMessages: SESSION_CAPTURE_MAX_MESSAGES,
+    maxMessageChars: SESSION_CAPTURE_MAX_MESSAGE_CHARS,
+  });
   if (messages.length === 0) {
     return { status: "empty" };
   }

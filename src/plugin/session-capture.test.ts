@@ -119,6 +119,13 @@ describe("session capture", () => {
           },
           { role: "user", content: "Remember the C0.2 canary." },
           { role: "assistant", content: [{ type: "text", text: "I will keep it in daily memory." }] },
+          {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            content: "I will keep it in daily memory.",
+          },
+          { role: "assistant", content: "NO_REPLY" },
         ],
       },
     });
@@ -159,6 +166,13 @@ describe("session capture", () => {
         "session_memory",
       ]),
     );
+    const dailyInsert = (clientQuery.mock.calls as unknown[][]).find(([sql]) =>
+      String(sql).includes("INSERT INTO memory_daily_entries"),
+    );
+    const dailyInsertArgs = Array.isArray(dailyInsert?.[1]) ? dailyInsert[1] : [];
+    const storedContent = String(dailyInsertArgs[4] ?? "");
+    expect(storedContent).not.toContain("NO_REPLY");
+    expect(storedContent.match(/I will keep it in daily memory\./gu)).toHaveLength(1);
   });
 
   it("keeps only the last 15 user/assistant messages", async () => {
