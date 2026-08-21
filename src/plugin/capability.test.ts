@@ -266,4 +266,59 @@ describe("registerAnchorClawMemoryCapability prompt guidance", () => {
     expect(flushPlan.relativePath).toMatch(/flush-2026-06-02T10-11-12-345Z-[0-9a-f-]{36}\.md$/u);
     expect(flushPlan.prompt).toContain("Pre-compaction memory flush.");
   });
+
+  function buildPromptWithHost(params: {
+    version?: string;
+    allowConversationAccess?: boolean;
+  }): string {
+    const hooks =
+      params.allowConversationAccess === undefined
+        ? {}
+        : { allowConversationAccess: params.allowConversationAccess };
+    const ctx = {
+      api: {
+        runtime: {
+          ...(params.version === undefined ? {} : { version: params.version }),
+          config: { current: () => ({ plugins: { entries: { anchorclaw: { hooks } } } }) },
+        },
+      },
+      disabledReason: null,
+      durableState: { overall: "ready", cleanup: "not_needed" },
+      sdkHealth: { degraded: false },
+      cfg: {},
+      ensureReady: vi.fn(async () => undefined),
+      getPool: vi.fn(() => ({ query: vi.fn() })),
+    } as any;
+
+    registerAnchorClawMemoryCapability({
+      ctx,
+      ensureSessionsIndexBootstrapped: vi.fn(async () => undefined),
+    });
+
+    const capabilityDef = registerMemoryCapabilityMock.mock.calls[0]?.[1];
+    return (
+      capabilityDef.promptBuilder({
+        availableTools: new Set(["memory_search", "memory_get"]),
+        citationsMode: "inline",
+      }) as string[]
+    ).join("\n");
+  }
+
+  it("warns the agent through the capability channel when the host blocks prompt injection", () => {
+    const text = buildPromptWithHost({ version: "2026.8.1-beta.2" });
+
+    expect(text).toContain("AnchorClaw long-term memory is NOT being injected into this prompt");
+    expect(text).toContain("plugins.entries.anchorclaw.hooks.allowConversationAccess");
+    expect(text).toContain("anchorclaw update");
+  });
+
+  it("stays quiet when the flag is granted or the host predates the gate", () => {
+    const marker = "NOT being injected into this prompt";
+
+    expect(
+      buildPromptWithHost({ version: "2026.8.1-beta.2", allowConversationAccess: true }),
+    ).not.toContain(marker);
+    expect(buildPromptWithHost({ version: "2026.7.1" })).not.toContain(marker);
+    expect(buildPromptWithHost({})).not.toContain(marker);
+  });
 });

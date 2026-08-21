@@ -723,8 +723,12 @@ describe("runAnchorClawSetup", () => {
 
       const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
       expect(cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection).toBe(true);
+      expect(cfg.plugins.entries.anchorclaw.hooks.allowConversationAccess).toBe(true);
       expect(consoleLogSpy).toHaveBeenCalledWith(
         "- hooks.allowPromptInjection: enabled for DB-backed daily startup injection",
+      );
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        "- hooks.allowConversationAccess: enabled; OpenClaw >= 2026.7.2-beta.6 blocks before_prompt_build without it",
       );
     } finally {
       if (previousHome === undefined) {

@@ -8,6 +8,10 @@ import { createFlushInboxPlanResolver } from "./flush-inbox.js";
 import type { PluginRuntimeContext } from "./runtime-context.js";
 import type { SessionIndexBootstrapTarget } from "./session-delta.js";
 import { resolveSessionSearchMode } from "./session-search-mode.js";
+import {
+  formatConversationAccessRemedy,
+  resolveConversationAccessState,
+} from "./conversation-access.js";
 
 export function registerAnchorClawMemoryCapability(params: {
   ctx: PluginRuntimeContext;
@@ -34,6 +38,19 @@ export function registerAnchorClawMemoryCapability(params: {
         cleanup: "not_needed",
         reason: null,
       };
+
+      // Memory capabilities are not gated by hooks.allowConversationAccess, so this notice
+      // still reaches the agent on hosts where that gate has silently killed the
+      // before_prompt_build injection. It is the only channel left in that state.
+      const conversationAccessNotice = resolveConversationAccessState(api).blocked
+        ? [
+            "[AnchorClaw long-term memory is NOT being injected into this prompt: the OpenClaw host blocked its before_prompt_build hook.]",
+            "Durable and daily memory are unavailable this turn even though the plugin is installed and healthy.",
+            `Tell the user how to fix it if memory comes up: ${formatConversationAccessRemedy()}`,
+            "Use memory_search and memory_get to retrieve memory explicitly until it is fixed.",
+            "",
+          ]
+        : [];
 
       const sdkNotice = ctx.sdkHealth.degraded
         ? [
@@ -92,6 +109,7 @@ export function registerAnchorClawMemoryCapability(params: {
       return [
         "AnchorClaw memory is active. Treat AnchorClaw/Postgres as the primary memory backend.",
         "",
+        ...conversationAccessNotice,
         ...durableNotice,
         ...(toolGuidance ? ["## Memory Search", toolGuidance, citationsLine, ""] : []),
         "## Memory Writes",

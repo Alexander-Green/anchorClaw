@@ -4,6 +4,7 @@ import {
   resolveSessionsSearchState,
 } from "../../config.js";
 import { resolveSessionSearchMode } from "../session-search-mode.js";
+import { resolveConversationAccessState } from "../conversation-access.js";
 import { scanLegacyWorkspace } from "../../importer.js";
 import {
   inspectSemanticSchema,
@@ -81,6 +82,9 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
         return unavailable;
       }
       const promptInjectionAllowed = isPromptInjectionAllowed(api, toolCtx);
+      // The host can block before_prompt_build independently of allowPromptInjection,
+      // so "allowed" alone would report memory injection as working when it is not.
+      const conversationAccessBlocked = resolveConversationAccessState(api).blocked;
       const resolveSemanticRuntimeConfig = () =>
         toolCtx.runtimeConfig ??
         (typeof toolCtx.getRuntimeConfig === "function" ? toolCtx.getRuntimeConfig() : undefined) ??
@@ -124,7 +128,7 @@ export function registerMemoryStatusTool({ ctx, ensureStartupBootstrap }: ToolRe
           injectionMode: "first_turn",
           promptInjectionAllowed,
           startupPromptEnabled: true,
-          startupPromptEffective: promptInjectionAllowed,
+          startupPromptEffective: promptInjectionAllowed && !conversationAccessBlocked,
           readCompatibilityPath: "db-only",
           importMode: "canonical_table",
         },

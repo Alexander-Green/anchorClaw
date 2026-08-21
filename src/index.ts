@@ -10,6 +10,7 @@ import {
 } from "./plugin/runtime-context.js";
 import { createPromptMemoryRuntime } from "./plugin/prompt-cache.js";
 import { registerAnchorClawMemoryCapability } from "./plugin/capability.js";
+import { warnIfConversationAccessBlocked } from "./plugin/conversation-access.js";
 import { registerDurablePromptHook } from "./plugin/durable-prompt.js";
 import { registerDailyPromptHook } from "./plugin/daily-prompt.js";
 import { registerAnchorClawFlushInboxHook } from "./plugin/flush-inbox.js";
@@ -22,6 +23,7 @@ import { registerAnchorClawSessionCaptureHook } from "./plugin/session-capture.j
 import { registerAnchorClawTools } from "./plugin/tools/index.js";
 import { runAnchorClawSetup } from "./scripts/setup-db.js";
 import { runAnchorClawImport } from "./scripts/import-legacy.js";
+import { runAnchorClawUpdate } from "./scripts/update-config.js";
 
 export default definePluginEntry({
   id: "anchorclaw",
@@ -117,6 +119,15 @@ export default definePluginEntry({
               keepFiles: opts.keepFiles,
               nonInteractive: opts.nonInteractive,
             });
+          });
+        anchorclaw
+          .command("update")
+          .description(
+            "Reconcile openclaw.json with what this AnchorClaw build needs from the host (no database access)",
+          )
+          .option("--dry-run", "Report what would change without writing openclaw.json")
+          .action((opts: { dryRun?: boolean }) => {
+            runAnchorClawUpdate({ dryRun: opts.dryRun });
           });
       }, { commands: ["anchorclaw"] });
     }
@@ -214,6 +225,7 @@ export default definePluginEntry({
       ctx,
       ensureSessionsIndexBootstrapped,
     });
+    warnIfConversationAccessBlocked(api);
     registerDurablePromptHook({ api, ctx, getPromptMemoryLines, ensureStartupBootstrap });
     registerDailyPromptHook({ api, ctx, ensureStartupBootstrap });
     registerAnchorClawFlushInboxHook({ api, ctx });

@@ -1764,6 +1764,36 @@ describe("phase2 session delta listener", () => {
     expect(healthy.details.sdk.degraded).toBe(false);
   });
 
+  it("reports startupPromptEffective=false when the host gate blocks the injection hook", async () => {
+    parseCfg.mockReturnValue({
+      postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },
+      sessions: { search: { enabled: true }, visibility: "visible" },
+      identity: { externalId: "test" },
+      workspaceDir: "/tmp/work",
+    });
+    const { api, runServiceStart } = buildApi();
+    api.runtime.version = "2026.8.1-beta.2";
+    api.runtime.config.current = () => ({
+      plugins: {
+        slots: { memory: "anchorclaw" },
+        entries: { anchorclaw: { hooks: { allowPromptInjection: true } } },
+      },
+      agents: { list: [{ id: "main", default: true, workspace: "/tmp/work" }] },
+    });
+    await registerAndWaitStartup({ api, runServiceStart });
+
+    const statusRegistration = findRegisteredTool(api, "memory_status");
+    const blocked = await statusRegistration.execute("toolcall-status-gate", {});
+
+    expect(blocked.details.daily.promptInjectionAllowed).toBe(true);
+    expect(blocked.details.daily.startupPromptEffective).toBe(false);
+    expect(
+      api.logger.warn.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes("allowConversationAccess"),
+      ),
+    ).toBe(true);
+  });
+
   it("reports resolved semantic memorySearch source/provider/model via memory_status", async () => {
     parseCfg.mockReturnValue({
       postgres: { host: "localhost", database: "anchorclaw", user: "postgres" },

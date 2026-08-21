@@ -2,8 +2,26 @@
 
 ## 0.1.4
 
+### Added
+
+- `anchorclaw update`: reconciles `openclaw.json` with what the installed build
+  needs from the host. Unlike `anchorclaw setup` it never connects to Postgres,
+  so it needs no superuser credentials. Run it after upgrading OpenClaw or
+  AnchorClaw. `--dry-run` reports without writing.
+
 ### Fixed
 
+- **Upgrading to OpenClaw `>=2026.7.2-beta.6` silently disabled memory
+  injection.** That release moved `before_prompt_build` into
+  `CONVERSATION_HOOK_NAMES`, so the host refuses to register the hook for
+  non-bundled plugins unless
+  `plugins.entries.anchorclaw.hooks.allowConversationAccess` is explicitly
+  `true`. The refusal only produced a registry diagnostic, so durable and daily
+  memory stopped reaching the prompt with no visible error. `anchorclaw setup`
+  and `anchorclaw update` now write the flag, the plugin logs a warning at
+  startup when it is missing, `memory_status` no longer reports
+  `startupPromptEffective: true` in that state, and the memory capability tells
+  the agent directly, since capabilities are not subject to that gate.
 - Restored durable-memory projection to the system prompt on every turn instead
   of prepending it to the current user prompt. This preserves the original
   memory-capability semantics while retaining multi-agent workspace routing.

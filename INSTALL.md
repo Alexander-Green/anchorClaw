@@ -65,6 +65,7 @@ By default, setup updates `~/.openclaw/openclaw.json` with:
 - `plugins.entries.anchorclaw.enabled = true`
 - `plugins.entries.anchorclaw.config.postgres`
 - `plugins.entries.anchorclaw.hooks.allowPromptInjection = true`
+- `plugins.entries.anchorclaw.hooks.allowConversationAccess = true`
 - `hooks.internal.entries["session-memory"].enabled = false`
 
 Setup preserves unrelated top-level `anchorclaw.config` keys such as
@@ -97,6 +98,59 @@ settings, add those overrides after setup.
 Setup does not mutate workspace `AGENTS.md`. Existing OpenClaw instructions
 that mention `MEMORY.md` or `memory/YYYY-MM-DD.md` remain compatible through
 AnchorClaw's runtime/tool layer.
+
+## Upgrading
+
+Run this after every OpenClaw or AnchorClaw upgrade, then restart the gateway:
+
+```bash
+openclaw anchorclaw update
+openclaw gateway restart
+```
+
+`update` reconciles the last three settings in the list above and reports each
+change. It is idempotent, it never connects to PostgreSQL, and it leaves the
+Postgres, maintenance, extractor, and semantic sections untouched. Use
+`--dry-run` to preview.
+
+Prefer `update` over re-running `setup` on an existing install: `setup` always
+opens an admin connection to PostgreSQL, and its interactive defaults can
+re-enable a maintenance scheduler you deliberately turned off.
+
+### Why This Is Required From OpenClaw 2026.7.2-beta.6
+
+That release added `before_prompt_build` to the host's `CONVERSATION_HOOK_NAMES`
+set. The current stable `latest` (`2026.7.1-2`) does not have it yet, so this
+affects the beta channel today and the stable channel once the `2026.7.2` line
+ships. From then on the host refuses to register the hook for any non-bundled
+plugin, AnchorClaw included, unless the plugin entry explicitly sets:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "anchorclaw": {
+        "hooks": { "allowConversationAccess": true }
+      }
+    }
+  }
+}
+```
+
+The host records the refusal as a registry diagnostic only. Nothing fails
+loudly: the plugin still loads, the tools still work, and only the automatic
+injection of durable and daily memory into the prompt goes away. Older hosts
+ignore the flag, so setting it is safe in both directions.
+
+When AnchorClaw detects this state it warns in the gateway log at startup,
+reports `daily.startupPromptEffective: false` from `memory_status`, and tells
+the agent through the memory capability, which the host does not gate.
+
+To inspect the host's own view of the refusal:
+
+```bash
+openclaw plugins doctor
+```
 
 ## Skip Config Mode
 

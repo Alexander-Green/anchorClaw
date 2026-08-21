@@ -1,12 +1,17 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Client } from "pg";
 
 import { resolveWorkspaceTargets } from "../workspace-targets.js";
+import { reconcileHostCompatConfig } from "./host-compat-config.js";
+import {
+  asRecord,
+  readOpenClawConfigRecord,
+  resolveOpenClawConfigPath,
+  writeOpenClawConfigRecord,
+} from "./openclaw-config-file.js";
 
 export type AnchorClawSetupOptions = {
   adminUrl?: string;
@@ -96,54 +101,9 @@ function generatePassword(length = 24): string {
   return Array.from(bytes, (byte) => chars[byte % chars.length]).join("");
 }
 
-function normalizeEnvPath(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
-    return undefined;
-  }
-  return trimmed;
-}
-
 function normalizeOptionalInput(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
-}
-
-function resolveSafeOsHomedir(): string | undefined {
-  try {
-    return normalizeEnvPath(homedir());
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveOsHomeDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return normalizeEnvPath(env.HOME) ?? normalizeEnvPath(env.USERPROFILE) ?? resolveSafeOsHomedir();
-}
-
-function resolveOpenClawHomeDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const explicitHome = normalizeEnvPath(env.OPENCLAW_HOME);
-  if (!explicitHome) {
-    return resolveOsHomeDir(env);
-  }
-  if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
-    const osHome = resolveOsHomeDir(env);
-    return osHome ? explicitHome.replace(/^~(?=$|[\\/])/, osHome) : undefined;
-  }
-  return explicitHome;
-}
-
-function resolveOpenClawConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  const explicitPath = normalizeEnvPath(env.OPENCLAW_CONFIG_PATH);
-  if (explicitPath) {
-    return resolve(explicitPath);
-  }
-  const explicitDir = normalizeEnvPath(env.OPENCLAW_CONFIG_DIR);
-  if (explicitDir) {
-    return resolve(explicitDir, "openclaw.json");
-  }
-  const home = resolveOpenClawHomeDir(env) ?? ".";
-  return resolve(home, ".openclaw", "openclaw.json");
 }
 
 function normalizeMaintenanceWorkspaceScopeMode(
@@ -163,14 +123,6 @@ function normalizeMaintenanceWorkspaceScopeMode(
 
 function scopeConfigFromMode(mode: "default-agent" | "all-agent-workspaces"): MaintenanceWorkspaceScopeConfig {
   return { mode };
-}
-
-function readOpenClawConfigRecord(): Record<string, any> | undefined {
-  const cfgPath = resolveOpenClawConfigPath();
-  if (!existsSync(cfgPath)) {
-    return undefined;
-  }
-  return JSON.parse(readFileSync(cfgPath, "utf-8")) as Record<string, any>;
 }
 
 function normalizeAgentIdList(value: unknown): string[] | undefined {
@@ -398,24 +350,29 @@ function ensureNonInteractiveMaintenanceScopeDecision(params: {
   );
 }
 
-function readPromptInjectionConfigState(cfg: Record<string, any>): PromptInjectionConfigState {
+function readHookFlagConfigState(
+  cfg: Record<string, any>,
+  flag: "allowPromptInjection" | "allowConversationAccess",
+): PromptInjectionConfigState {
   const hooks = cfg.plugins?.entries?.anchorclaw?.hooks;
   if (!hooks || typeof hooks !== "object") {
     return "unset";
   }
-  if (hooks.allowPromptInjection === false) {
+  if (hooks[flag] === false) {
     return "disabled";
   }
-  if (hooks.allowPromptInjection === true) {
+  if (hooks[flag] === true) {
     return "enabled";
   }
   return "unset";
 }
 
-function asRecord(value: unknown): Record<string, any> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, any>)
-    : {};
+function readPromptInjectionConfigState(cfg: Record<string, any>): PromptInjectionConfigState {
+  return readHookFlagConfigState(cfg, "allowPromptInjection");
+}
+
+function readConversationAccessConfigState(cfg: Record<string, any>): PromptInjectionConfigState {
+  return readHookFlagConfigState(cfg, "allowConversationAccess");
 }
 
 function readSessionMemoryHookConfigState(cfg: Record<string, any>): SessionMemoryHookConfigState {
@@ -870,6 +827,8 @@ function updateOpenClawConfig(params: {
   updated: boolean;
   promptInjectionBefore: PromptInjectionConfigState;
   promptInjectionAfter: PromptInjectionConfigState;
+  conversationAccessBefore: PromptInjectionConfigState;
+  conversationAccessAfter: PromptInjectionConfigState;
   sessionMemoryBefore: SessionMemoryHookConfigState;
   sessionMemoryAfter: SessionMemoryHookConfigState;
 } {
@@ -880,6 +839,8 @@ function updateOpenClawConfig(params: {
       updated: false,
       promptInjectionBefore: "unset",
       promptInjectionAfter: "unset",
+      conversationAccessBefore: "unset",
+      conversationAccessAfter: "unset",
       sessionMemoryBefore: "unset",
       sessionMemoryAfter: "unset",
     };
@@ -888,6 +849,7 @@ function updateOpenClawConfig(params: {
   const raw = readFileSync(cfgPath, "utf-8");
   const cfg = JSON.parse(raw) as Record<string, any>;
   const promptInjectionBefore = readPromptInjectionConfigState(cfg);
+  const conversationAccessBefore = readConversationAccessConfigState(cfg);
   const sessionMemoryBefore = readSessionMemoryHookConfigState(cfg);
   const parsedAdmin = new URL(params.adminUrl);
   const host = parsedAdmin.hostname || "localhost";
@@ -982,30 +944,23 @@ function updateOpenClawConfig(params: {
     delete nextMaintenanceConfig.workspaceScope;
   }
   cfg.plugins.entries.anchorclaw.config.maintenance = nextMaintenanceConfig;
-  cfg.plugins.entries.anchorclaw.hooks ??= {};
-  cfg.plugins.entries.anchorclaw.hooks.allowPromptInjection = true;
 
-  const hooks = asRecord(cfg.hooks);
-  cfg.hooks = hooks;
-  const internalHooks = asRecord(hooks.internal);
-  hooks.internal = internalHooks;
-  const internalEntries = asRecord(internalHooks.entries);
-  internalHooks.entries = internalEntries;
-  const sessionMemoryEntry = asRecord(internalEntries["session-memory"]);
-  internalEntries["session-memory"] = {
-    ...sessionMemoryEntry,
-    enabled: false,
-  };
+  // Shared with `anchorclaw update` so that new installs and upgraded installs
+  // never end up with different host-side settings.
+  reconcileHostCompatConfig(cfg);
 
   const promptInjectionAfter = readPromptInjectionConfigState(cfg);
+  const conversationAccessAfter = readConversationAccessConfigState(cfg);
   const sessionMemoryAfter = readSessionMemoryHookConfigState(cfg);
 
-  writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+  writeOpenClawConfigRecord(cfgPath, cfg);
   return {
     path: cfgPath,
     updated: true,
     promptInjectionBefore,
     promptInjectionAfter,
+    conversationAccessBefore,
+    conversationAccessAfter,
     sessionMemoryBefore,
     sessionMemoryAfter,
   };
@@ -1110,6 +1065,14 @@ export async function runAnchorClawSetup(opts: AnchorClawSetupOptions = {}): Pro
     }
     if (configUpdate.promptInjectionAfter === "enabled" && configUpdate.promptInjectionBefore !== "enabled") {
       console.log("- hooks.allowPromptInjection: enabled for DB-backed daily startup injection");
+    }
+    if (
+      configUpdate.conversationAccessAfter === "enabled" &&
+      configUpdate.conversationAccessBefore !== "enabled"
+    ) {
+      console.log(
+        "- hooks.allowConversationAccess: enabled; OpenClaw >= 2026.7.2-beta.6 blocks before_prompt_build without it",
+      );
     }
     if (options.maintenanceEnabled && options.extractorEnabled) {
       const scopeLabel = formatMaintenanceWorkspaceScope(options.maintenanceWorkspaceScope);

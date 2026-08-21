@@ -229,6 +229,26 @@ Setup can optionally configure a semantic provider and provision PostgreSQL
 the restarted gateway applies AnchorClaw's semantic table migrations through
 the configured app user.
 
+### After Upgrading OpenClaw or AnchorClaw
+
+New host versions can require config that an existing install does not have
+yet. Reconcile it and restart:
+
+```bash
+openclaw anchorclaw update
+openclaw gateway restart
+```
+
+`update` only touches `openclaw.json`. It never connects to PostgreSQL, so it
+needs no admin credentials, and it leaves database, maintenance, and semantic
+settings alone. Add `--dry-run` to see the changes first.
+
+This matters most for OpenClaw `>= 2026.7.2-beta.6`, which refuses AnchorClaw's
+prompt-injection hook unless
+`plugins.entries.anchorclaw.hooks.allowConversationAccess` is `true`. Without
+it, long-term memory stops reaching the prompt and nothing appears to be
+broken. See [Installation and Configuration](./INSTALL.md).
+
 For non-interactive setup, Docker identity, semantic providers, SSL, pool
 tuning, import selectors, manual provisioning, and SQL-only-to-semantic
 upgrades, use the [Installation and Configuration Guide](./INSTALL.md).

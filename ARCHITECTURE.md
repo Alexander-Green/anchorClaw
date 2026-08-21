@@ -30,6 +30,14 @@ Active tools:
 - `memory_forget`: soft-deletes durable items.
 - `memory_status`: reports runtime and operator diagnostics.
 
+CLI commands:
+
+- `anchorclaw setup`: provisions PostgreSQL and writes the initial config.
+  Requires an admin database connection.
+- `anchorclaw import`: migrates legacy `MEMORY.md` and daily files.
+- `anchorclaw update`: reconciles host-side settings in `openclaw.json` after an
+  upgrade. Config only, no database access.
+
 Corpus behavior:
 
 - `memory_search()` and `memory_search(corpus="memory")` search durable memory
@@ -158,6 +166,28 @@ File-like compatibility:
 
 After legacy migration, the physical `MEMORY.md` becomes an HTML-comment-only
 stub by default so OpenClaw bootstrap does not duplicate memory in prompts.
+
+### Host Hook Policy and the Two Injection Channels
+
+AnchorClaw reaches the prompt through two independent host mechanisms, and the
+host gates them differently:
+
+| Channel | Registered via | Gated by |
+|---|---|---|
+| Durable and daily memory content | `api.on("before_prompt_build", ...)` | `hooks.allowPromptInjection`, and `hooks.allowConversationAccess` from `2026.7.2-beta.6` |
+| Static capability guidance and notices | `registerMemoryCapability` | not gated |
+
+Up to OpenClaw `2026.7.2-beta.5`, `before_prompt_build` belonged only to the host's
+`PROMPT_INJECTION_HOOK_NAMES` set, so `allowConversationAccess` did not apply to
+it. `2026.7.2-beta.6` also added it to `CONVERSATION_HOOK_NAMES`, where the host
+blocks registration for non-bundled plugins unless the flag is explicitly true.
+The current stable `latest` (`2026.7.1-2`) is not affected yet; the beta channel is.
+
+The asymmetry is load-bearing. When the gate closes, the hook channel is gone
+but the capability channel still works, so AnchorClaw uses it to tell the agent
+that memory injection is currently disabled and how to restore it. See
+`src/plugin/conversation-access.ts` for the version threshold and detection, and
+`src/scripts/host-compat-config.ts` for the settings `setup` and `update` share.
 
 ## Sessions Corpus
 
