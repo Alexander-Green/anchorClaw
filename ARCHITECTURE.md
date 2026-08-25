@@ -209,10 +209,19 @@ Implemented behavior:
 
 Visibility modes:
 
-- `current`: each agent can search and read only its own indexed sessions.
+- `current`: AnchorClaw admits indexed sessions owned by the requesting agent.
 - `visible`: an agent can also search indexed sessions of agents that resolve
-  to the same workspace, subject to OpenClaw's visibility guard.
+  to the same workspace.
 - `off`: disable sessions indexing/listener behavior.
+
+These modes define AnchorClaw's maximum candidate scope. Every sessions hit is
+then checked by OpenClaw's independent `tools.sessions.visibility` guard, so
+effective access is the intersection of both policies. In particular, host
+`tree` can hide an unrelated session of the same agent; host `agent` permits
+all sessions of that agent. Cross-agent access additionally requires host
+`all` and an allowing `tools.agentToAgent` policy, while AnchorClaw still
+enforces the shared-workspace boundary. The plugin never widens the host's
+configured session visibility.
 
 The transcript listener is a global OpenClaw event fan-out. Each update is
 routed by its event/path agent identity to that agent's resolved workspace.

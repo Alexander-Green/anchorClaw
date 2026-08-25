@@ -32,7 +32,7 @@
     "sessions.visibility": {
       "label": "Sessions Visibility",
       "placeholder": "current",
-      "help": "Legacy sessions visibility: current (default), off, or visible. Modern OpenClaw applies native session-tool visibility.",
+      "help": "Legacy AnchorClaw scope: current (same agent), visible (same workspace), or off. Final access is also limited by OpenClaw tools.sessions.visibility and agent-to-agent policy.",
       "advanced": true
     },
     "sessions.sync": {

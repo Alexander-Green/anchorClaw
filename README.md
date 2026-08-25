@@ -71,8 +71,10 @@ search come before semantic similarity.
   queues, and degraded behavior are visible through `memory_status`, tool
   details, PostgreSQL, and logs.
 - **Version-aware sessions search**: legacy OpenClaw hosts can use the opt-in
-  Postgres transcript index; OpenClaw `>=2026.8.1-beta.1` owns session recall
-  through its native `sessions_search` and SQLite index.
+  Postgres transcript index, with AnchorClaw's configured scope intersected
+  with OpenClaw's `tools.sessions.visibility` security guard; OpenClaw
+  `>=2026.8.1-beta.1` owns session recall through its native `sessions_search`
+  and SQLite index.
 
 ## How It Works
 

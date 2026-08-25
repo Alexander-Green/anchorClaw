@@ -501,10 +501,19 @@ On OpenClaw versions older than `2026.8.1-beta.1`,
 is exposed. `sessions.visibility` controls which indexed transcripts an agent
 can search and read:
 
-- `current`: expose only the requesting agent's sessions;
+- `current`: allow indexed sessions owned by the requesting agent;
 - `visible`: also expose sessions of agents that share the same resolved
-  workspace, subject to OpenClaw's visibility guard;
+  workspace;
 - `off`: disable sessions indexing/listener behavior.
+
+This AnchorClaw scope is an upper bound, not a replacement for OpenClaw's
+session-tools security policy. Final access is the intersection with
+`tools.sessions.visibility` and, for another agent, `tools.agentToAgent`. On
+OpenClaw `2026.5.28`, the host default is `tree`, so an unrelated prior session
+of the same agent can still be hidden. Set `tools.sessions.visibility: "agent"`
+when every session owned by that agent should be searchable. Cross-agent access
+with AnchorClaw `visible` additionally requires host visibility `all` and an
+allowing agent-to-agent policy; the shared-workspace restriction still applies.
 
 `sessions.sync.deltaBytes` and `sessions.sync.deltaMessages` control when
 transcript deltas trigger a targeted sessions reindex. Transcript events are
