@@ -259,6 +259,21 @@ export function registerAnchorClawFlushInboxHook(params: {
     return undefined;
   };
 
+  const onAny = (api as any).on;
+  if (typeof onAny === "function") {
+    try {
+      onAny("after_compaction", handler, {
+        name: "anchorclaw-flush-inbox-drain",
+      });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      api.logger.debug?.(
+        `anchorclaw: typed after_compaction hook registration failed, trying legacy registerHook (${message})`,
+      );
+    }
+  }
+
   const registerHookAny = (api as any).registerHook;
   if (typeof registerHookAny !== "function") {
     return;

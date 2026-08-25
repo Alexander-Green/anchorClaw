@@ -23,7 +23,11 @@ vi.mock("node:fs/promises", () => ({
   unlink: unlinkMock,
 }));
 
-import { createFlushInboxPlanResolver, drainFlushInbox } from "./flush-inbox.js";
+import {
+  createFlushInboxPlanResolver,
+  drainFlushInbox,
+  registerAnchorClawFlushInboxHook,
+} from "./flush-inbox.js";
 
 function fileDirent(name: string) {
   return {
@@ -252,5 +256,65 @@ describe("flush inbox", () => {
         sessionKey: undefined,
       }),
     );
+  });
+
+  describe("registerAnchorClawFlushInboxHook", () => {
+    function baseCtx() {
+      return { disabledReason: undefined, cfg: {} } as any;
+    }
+
+    it("registers after_compaction via the typed api.on and never touches legacy registerHook", () => {
+      const onMock = vi.fn();
+      const registerHookMock = vi.fn();
+      const api = { on: onMock, registerHook: registerHookMock } as any;
+
+      registerAnchorClawFlushInboxHook({ api, ctx: baseCtx() });
+
+      expect(onMock).toHaveBeenCalledWith(
+        "after_compaction",
+        expect.any(Function),
+        expect.objectContaining({ name: "anchorclaw-flush-inbox-drain" }),
+      );
+      expect(registerHookMock).not.toHaveBeenCalled();
+    });
+
+    it("falls back to legacy registerHook when api.on is unavailable", () => {
+      const registerHookMock = vi.fn();
+      const api = { registerHook: registerHookMock } as any;
+
+      registerAnchorClawFlushInboxHook({ api, ctx: baseCtx() });
+
+      expect(registerHookMock).toHaveBeenCalledWith(
+        "after_compaction",
+        expect.any(Function),
+        expect.objectContaining({ name: "anchorclaw-flush-inbox-drain" }),
+      );
+    });
+
+    it("falls back to legacy registerHook when the typed api.on throws", () => {
+      const onMock = vi.fn(() => {
+        throw new Error("unknown typed hook");
+      });
+      const registerHookMock = vi.fn();
+      const api = {
+        on: onMock,
+        registerHook: registerHookMock,
+        logger: { debug: vi.fn() },
+      } as any;
+
+      registerAnchorClawFlushInboxHook({ api, ctx: baseCtx() });
+
+      expect(onMock).toHaveBeenCalledTimes(1);
+      expect(registerHookMock).toHaveBeenCalledWith(
+        "after_compaction",
+        expect.any(Function),
+        expect.objectContaining({ name: "anchorclaw-flush-inbox-drain" }),
+      );
+    });
+
+    it("does nothing when neither api.on nor registerHook is available", () => {
+      const api = {} as any;
+      expect(() => registerAnchorClawFlushInboxHook({ api, ctx: baseCtx() })).not.toThrow();
+    });
   });
 });

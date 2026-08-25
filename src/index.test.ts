@@ -652,12 +652,12 @@ describe("tool registration", () => {
     expect(registerMaintenanceLifecycleMock).not.toHaveBeenCalled();
   });
 
-  it("registers after_compaction hook for flush inbox drain", () => {
+  it("registers after_compaction hook for flush inbox drain via typed api.on", () => {
     const { api } = buildApi();
 
     (plugin as any).register(api);
 
-    const calls = (api.registerHook as any).mock.calls;
+    const calls = (api.on as any).mock.calls;
     const hasFlushHook = calls.some(
       (call: any[]) =>
         call[0] === "after_compaction" &&
@@ -665,6 +665,11 @@ describe("tool registration", () => {
         (call[2] === undefined || call[2]?.name === "anchorclaw-flush-inbox-drain"),
     );
     expect(hasFlushHook).toBe(true);
+    expect(api.registerHook).not.toHaveBeenCalledWith(
+      "after_compaction",
+      expect.any(Function),
+      expect.anything(),
+    );
   });
 
   it("registers before_reset hook for DB-backed session capture", () => {
