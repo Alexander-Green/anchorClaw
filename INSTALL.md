@@ -520,8 +520,10 @@ transcript deltas trigger a targeted sessions reindex. Transcript events are
 always routed to the workspace resolved for their owning OpenClaw agent.
 
 On OpenClaw `>=2026.8.1-beta.1`, these legacy settings are accepted for config
-compatibility but AnchorClaw does not crawl or index active transcripts. Use
-OpenClaw's native `sessions_search` and `sessions_history` tools instead.
+compatibility but AnchorClaw does not crawl or index active transcripts, and
+does not map `sessions.visibility` onto the host policy. Use OpenClaw's native
+`sessions_search` and `sessions_history` tools instead; their access is
+controlled solely by `tools.sessions.visibility` (default: `tree`).
 
 `maintenance.enabled` starts the background maintenance scheduler. The
 required `maintenance.workspaceScope` selects which resolved OpenClaw

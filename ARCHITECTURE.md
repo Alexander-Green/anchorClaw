@@ -223,6 +223,12 @@ all sessions of that agent. Cross-agent access additionally requires host
 enforces the shared-workspace boundary. The plugin never widens the host's
 configured session visibility.
 
+On OpenClaw `>=2026.8.1-beta.1`, transcript recall is native: AnchorClaw
+accepts `sessions.*` only for backward-compatible configuration, does not
+index active transcripts, and does not map its legacy scope to the host. Native
+`sessions_search` and `sessions_history` use `tools.sessions.visibility` as
+their sole access policy.
+
 The transcript listener is a global OpenClaw event fan-out. Each update is
 routed by its event/path agent identity to that agent's resolved workspace.
 Bootstrap completion is keyed by workspace scope. Live transcript deltas are

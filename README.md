@@ -74,7 +74,9 @@ search come before semantic similarity.
   Postgres transcript index, with AnchorClaw's configured scope intersected
   with OpenClaw's `tools.sessions.visibility` security guard; OpenClaw
   `>=2026.8.1-beta.1` owns session recall through its native `sessions_search`
-  and SQLite index.
+  and SQLite index. On native hosts, `tools.sessions.visibility` is the sole
+  session-access policy; AnchorClaw's legacy `sessions.*` settings are not
+  translated into it.
 
 ## How It Works
 
