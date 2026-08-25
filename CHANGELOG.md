@@ -22,6 +22,14 @@
   startup when it is missing, `memory_status` no longer reports
   `startupPromptEffective: true` in that state, and the memory capability tells
   the agent directly, since capabilities are not subject to that gate.
+- **The pre-compaction flush never ran on newer hosts.** The
+  `after_compaction` hook was registered only through the legacy
+  `api.registerHook`, which newer hosts accept without dispatching: the plugin
+  believed the hook was installed while the handler was never called, so
+  important context was not drained into the database before compaction.
+  Registration now uses the typed `api.on` first and keeps the legacy call as a
+  fallback for older hosts. Unrelated to `allowConversationAccess`:
+  `after_compaction` is not a gated conversation hook.
 - Restored durable-memory projection to the system prompt on every turn instead
   of prepending it to the current user prompt. This preserves the original
   memory-capability semantics while retaining multi-agent workspace routing.
