@@ -54,6 +54,11 @@
   `sessions_history` on OpenClaw `>=2026.8.1-beta.1`; AnchorClaw no longer
   crawls or indexes active transcripts on those hosts.
 
+### Packaging
+
+- Replaced relative README document links with version-pinned GitHub URLs so
+  they resolve correctly when the README is rendered by ClawHub.
+
 ## 0.1.3
 
 ### Packaging

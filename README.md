@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@alexandrgreen/anchorclaw"><img alt="npm version" src="https://img.shields.io/npm/v/@alexandrgreen/anchorclaw" /></a>
-  <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/npm/l/@alexandrgreen/anchorclaw" /></a>
+  <a href="https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/LICENSE"><img alt="MIT license" src="https://img.shields.io/npm/l/@alexandrgreen/anchorclaw" /></a>
   <img alt="OpenClaw 2026.5.28 or newer" src="https://img.shields.io/badge/OpenClaw-%3E%3D2026.5.28-1f6f5c" />
   <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-backed-336791" />
 </p>
@@ -21,8 +21,8 @@ behind one reliable database layer. OpenClaw keeps its familiar memory tools and
 file-shaped paths. Full-text search works without embeddings, while optional
 semantic retrieval improves recall without becoming the source of truth.
 
-[Quick Start](#quick-start) · [Installation Guide](./INSTALL.md) ·
-[Architecture](./ARCHITECTURE.md)
+[Quick Start](#quick-start) · [Installation Guide](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/INSTALL.md) ·
+[Architecture](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/ARCHITECTURE.md)
 
 ## From Memory Files to Memory Infrastructure
 
@@ -112,7 +112,7 @@ compaction, important context can pass through a controlled flush inbox and be
 recovered into PostgreSQL.
 
 For the table model, lifecycle hooks, search corpuses, and failure boundaries,
-see [ARCHITECTURE.md](./ARCHITECTURE.md).
+see [ARCHITECTURE.md](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/ARCHITECTURE.md).
 
 ## Multi-Agent by Design
 
@@ -140,7 +140,7 @@ multiple machines, or long-lived deployments, configure a stable
 OpenClaw workspace paths.
 
 See the full routing contract and workspace matrix in
-[ARCHITECTURE.md#multi-agent-workspace-model](./ARCHITECTURE.md#multi-agent-workspace-model).
+[ARCHITECTURE.md#multi-agent-workspace-model](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/ARCHITECTURE.md#multi-agent-workspace-model).
 
 ## SQL First, Semantic When You Want It
 
@@ -251,20 +251,20 @@ This matters most for OpenClaw `>= 2026.7.2-beta.6`, which refuses AnchorClaw's
 prompt-injection hook unless
 `plugins.entries.anchorclaw.hooks.allowConversationAccess` is `true`. Without
 it, long-term memory stops reaching the prompt and nothing appears to be
-broken. See [Installation and Configuration](./INSTALL.md).
+broken. See [Installation and Configuration](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/INSTALL.md).
 
 For non-interactive setup, Docker identity, semantic providers, SSL, pool
 tuning, import selectors, manual provisioning, and SQL-only-to-semantic
-upgrades, use the [Installation and Configuration Guide](./INSTALL.md).
+upgrades, use the [Installation and Configuration Guide](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/INSTALL.md).
 
 ## Documentation
 
-- [Installation and Configuration](./INSTALL.md) - setup, semantic opt-in,
+- [Installation and Configuration](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/INSTALL.md) - setup, semantic opt-in,
   legacy import, identity, SSL, pool tuning, and manual PostgreSQL provisioning.
-- [Architecture](./ARCHITECTURE.md) - data model, runtime contracts, lifecycle,
+- [Architecture](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/ARCHITECTURE.md) - data model, runtime contracts, lifecycle,
   multi-agent routing, maintenance/extractor, and semantic enrichment.
-- [Changelog](./CHANGELOG.md) - release history and compatibility notes.
-- [TweetClaw source memory workflow](docs/integrations/tweetclaw.md) - community
+- [Changelog](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/CHANGELOG.md) - release history and compatibility notes.
+- [TweetClaw source memory workflow](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/docs/integrations/tweetclaw.md) - community
   integration notes for TweetClaw/Xquik users. Those projects are maintained
   separately from AnchorClaw.
 
@@ -273,7 +273,7 @@ upgrades, use the [Installation and Configuration Guide](./INSTALL.md).
 AnchorClaw is created and maintained by
 [Alexander Green](https://github.com/Alexander-Green).
 
-Licensed under the [MIT License](./LICENSE). See [NOTICE](./NOTICE) for
+Licensed under the [MIT License](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/LICENSE). See [NOTICE](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/NOTICE) for
 additional attribution.
 
 If AnchorClaw makes your agents more reliable, consider starring the
