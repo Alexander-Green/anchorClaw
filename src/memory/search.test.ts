@@ -74,7 +74,7 @@ describe("memorySearchDb ranking contract", () => {
     expect(capturedSql[0]).toContain("WHEN lower(coalesce(title, '')) = lower($3) THEN 3.0");
     expect(capturedSql[0]).toContain("WHEN lower(content) = lower($3) THEN 2.5");
     expect(capturedSql[0]).toContain("WHEN lower(coalesce(canonical_key, '')) = lower($3) THEN 2.25");
-    expect(capturedSql[0]).toContain("to_tsvector('simple', search_text) @@ q.ts_query");
+    expect(capturedSql[0]).toContain("search_tsv @@ plainto_tsquery(search_config::regconfig, $3)");
     expect(capturedSql[0]).toContain("ORDER BY score DESC, importance DESC, updated_at DESC, id ASC");
     expect(capturedSql[1]).toContain("FROM memory_daily_entries");
     expect(capturedParams[1]).toEqual([
@@ -104,8 +104,8 @@ describe("memorySearchDb ranking contract", () => {
       maxResults: 10,
     });
 
-    expect(capturedSql[0]).toContain("plainto_tsquery('simple', $3)");
-    expect(capturedSql[0]).toContain("ts_rank_cd(to_tsvector('simple', search_text), q.ts_query)");
+    expect(capturedSql[0]).toContain("plainto_tsquery(search_config::regconfig, $3)");
+    expect(capturedSql[0]).toContain("ts_rank_cd(search_tsv, plainto_tsquery(search_config::regconfig, $3))");
     expect(capturedSql[2]).toContain("word_similarity(lower($3), lower(search_text))");
   });
 

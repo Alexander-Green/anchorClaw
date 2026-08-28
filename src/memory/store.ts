@@ -2,6 +2,7 @@ import type { AnchorClawConfig } from "../config.js";
 import type { PostgresPool } from "../postgres.js";
 import { upsertMemoryItemEmbedding } from "../semantic/indexing.js";
 import { buildSemanticEmbedding } from "../semantic/runtime.js";
+import { primarySearchConfig } from "./language.js";
 
 // Keep item types aligned with the OpenClaw `MEMORY.md` role.
 // Future: add explicit durable types (profile/config/skill/summary/automation) behind a clear policy.
@@ -145,13 +146,14 @@ export async function memoryStoreDb(params: {
         confidence,
         canonical_key,
         created_by,
-        updated_by
+        updated_by,
+        search_config
       )
       VALUES (
         $1, $2, $3, $4, 'active', $5,
         $6, $7, $8::jsonb, $9::text[],
         $10, $11, $12,
-        $13, $13
+        $13, $13, $14
       )
       ON CONFLICT (user_id, workspace_id, namespace, type, canonical_key)
         WHERE status = 'active' AND canonical_key IS NOT NULL
@@ -163,6 +165,7 @@ export async function memoryStoreDb(params: {
         importance = EXCLUDED.importance,
         confidence = EXCLUDED.confidence,
         source = EXCLUDED.source,
+        search_config = EXCLUDED.search_config,
         updated_at = now(),
         updated_by = EXCLUDED.updated_by,
         version = memory_items.version + 1
@@ -182,6 +185,9 @@ export async function memoryStoreDb(params: {
         confidence,
         canonicalKey,
         actor,
+        // Resolved from the same text the search_text trigger builds, so the
+        // stored configuration always matches the text it indexes.
+        primarySearchConfig([title, content, canonicalKey ?? ""].join(" ")),
       ],
     );
     const row = upserted.rows[0];

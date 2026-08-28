@@ -1,7 +1,20 @@
 {
   "name": "@alexandrgreen/anchorclaw",
   "version": "0.1.4",
-  "description": "Production-grade PostgreSQL memory for OpenClaw agents",
+  "description": "Self-hosted memory for OpenClaw agents — lives in your own PostgreSQL, no external APIs",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "openclaw-extension",
+    "memory",
+    "long-term-memory",
+    "agent-memory",
+    "postgresql",
+    "pgvector",
+    "self-hosted",
+    "full-text-search",
+    "ai-agents"
+  ],
   "author": "Alexander Green",
   "license": "MIT",
   "homepage": "https://github.com/Alexander-Green/anchorClaw#readme",
@@ -32,6 +45,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "franc": "^6.2.0",
     "pg": "^8.16.0"
   },
   "peerDependencies": {

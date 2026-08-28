@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.1.5
+
+### Changed
+
+- **Full-text search is now language aware.** Memory was previously indexed with
+  the `simple` PostgreSQL configuration, which neither reduces words to a stem
+  nor drops stopwords. `graduate` did not match `graduated`, and because
+  `plainto_tsquery` joins terms with AND, a natural question kept every function
+  word as a required term — a one-word fact could not be found by asking about
+  it in a sentence.
+
+  Each record now stores the configuration it was indexed with, chosen when the
+  record is written. The script decides it wherever that is unambiguous, which
+  covers Cyrillic, Greek, Arabic, Devanagari, Armenian, Tamil and Hebrew at any
+  length. Latin text is the one case a script cannot resolve — two thirds of the
+  configurations PostgreSQL ships use it — so language detection runs there, and
+  falls back to `english` on text too short to identify reliably.
+
+  Measured on LongMemEval-S, 500 questions, session granularity:
+
+  | | Recall@5 | Recall@10 | NDCG@5 | NDCG@10 |
+  |---|---|---|---|---|
+  | before | 0.515 | 0.675 | 0.440 | 0.502 |
+  | after | **0.670** | **0.786** | **0.607** | **0.651** |
+
+  For reference, the benchmark paper reports 0.634 / 0.710 for BM25 and
+  0.723 / 0.823 for Contriever, a dense retriever. See `docs/benchmarks.md` for
+  the method and how to reproduce it.
+
+  No new configuration key: language handling is internal, and `anchorclaw
+  setup` and `anchorclaw update` are unaffected.
+
+- Queries no longer build a `tsvector` on every call. It is materialised at
+  write time and indexed, so retrieval does less work per query.
+
+### Migrations
+
+- `0011_search_language.sql` adds `search_config` and `search_tsv` to
+  `memory_items`, keeps the vector in sync with a trigger, and backfills
+  existing rows.
+
+  The backfill classifies stored records by script directly in SQL, so memory
+  written before this release benefits immediately rather than waiting to be
+  rewritten. Latin-script rows are assigned `english`; distinguishing Latin
+  languages needs the detection library and is not available to the migration.
+  Search results for existing content will therefore shift after upgrading —
+  by measurement, for the better or not at all.
+
 ## 0.1.4
 
 ### Added

@@ -21,8 +21,37 @@ behind one reliable database layer. OpenClaw keeps its familiar memory tools and
 file-shaped paths. Full-text search works without embeddings, while optional
 semantic retrieval improves recall without becoming the source of truth.
 
+**Nothing leaves your infrastructure.** No cloud vault, no third-party API, no
+embedding provider required — retrieval is PostgreSQL full-text search, running
+against the database you already operate. Use AnchorClaw if your stack is
+already PostgreSQL, or if your agent's context simply cannot be sent to someone
+else's cloud.
+
 [Quick Start](#quick-start) · [Installation Guide](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/INSTALL.md) ·
 [Architecture](https://github.com/Alexander-Green/anchorClaw/blob/v0.1.4/ARCHITECTURE.md)
+
+## Search Quality
+
+Measured on [LongMemEval-S](https://github.com/xiaowu0162/longmemeval) — 500
+questions against long chat histories — using PostgreSQL full-text search with
+no embeddings and no outbound traffic:
+
+| | Recall@5 | Recall@10 | NDCG@5 | NDCG@10 |
+|---|---|---|---|---|
+| **AnchorClaw 0.1.5** | **0.670** | **0.786** | **0.607** | **0.651** |
+| BM25, lexical baseline | 0.634 | 0.710 | 0.516 | 0.540 |
+| Stella V5 1.5B, dense retriever | 0.720 | 0.794 | 0.594 | 0.615 |
+| Contriever, dense retriever | 0.723 | 0.823 | 0.634 | 0.663 |
+
+Lexical search ahead of the BM25 baseline on every metric, ahead of Stella on
+ranking quality, and behind Contriever mainly on recall — with no embedding
+provider in the loop.
+
+Note that percentages published for hosted memory products measure end-to-end
+question answering with an LLM judge, which is a different quantity on a
+different scale and not comparable to these figures.
+
+[Method, baselines and how to reproduce →](./docs/benchmarks.md)
 
 ## From Memory Files to Memory Infrastructure
 

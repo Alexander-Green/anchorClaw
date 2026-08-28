@@ -141,9 +141,10 @@ async function queryMemoryItems(params: {
 }): Promise<MemorySearchHit[]> {
   const { rows } = await params.pool.query<MemorySearchRow>(
     `
-    WITH q AS (
-      SELECT plainto_tsquery('simple', $3) AS ts_query
-    )
+    -- Each row is matched against the query parsed in that row's own
+    -- configuration, so a workspace holding several languages behaves correctly
+    -- rather than forcing one stemmer onto all of them. Rows written before
+    -- 0011 carry 'simple' and therefore keep their previous behaviour exactly.
     SELECT
       id,
       title,
@@ -153,7 +154,7 @@ async function queryMemoryItems(params: {
       importance,
       updated_at,
       (
-        ts_rank_cd(to_tsvector('simple', search_text), q.ts_query)
+        ts_rank_cd(search_tsv, plainto_tsquery(search_config::regconfig, $3))
         + CASE
             WHEN lower(coalesce(title, '')) = lower($3) THEN 3.0
             WHEN lower(content) = lower($3) THEN 2.5
@@ -161,11 +162,11 @@ async function queryMemoryItems(params: {
             ELSE 0
           END
       ) AS score
-    FROM memory_items, q
+    FROM memory_items
     WHERE user_id = $1
       AND workspace_id = $2
       AND status = 'active'
-      AND to_tsvector('simple', search_text) @@ q.ts_query
+      AND search_tsv @@ plainto_tsquery(search_config::regconfig, $3)
     ORDER BY score DESC, importance DESC, updated_at DESC, id ASC
     LIMIT $4
   `,
